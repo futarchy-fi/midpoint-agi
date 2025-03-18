@@ -1,23 +1,18 @@
 """
 Configuration management for the Midpoint system.
 
-This module handles loading and managing configuration from various sources:
-1. Local config file (~/.midpoint/config.json)
-2. Environment variables
-3. Default values
+This module handles loading and managing configuration from:
+1. Environment variables (loaded from .env file if present)
+2. Default values
 """
 
 import os
-import json
-from pathlib import Path
+import re
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if it exists
 load_dotenv()
-
-CONFIG_DIR = Path.home() / ".midpoint"
-CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     "points_budget": {
@@ -28,18 +23,83 @@ DEFAULT_CONFIG = {
     }
 }
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from all sources."""
-    config = DEFAULT_CONFIG.copy()
+def validate_api_key(api_key: str) -> bool:
+    """Validate API key format."""
+    # OpenAI API keys start with 'sk-' and are 51 characters long
+    return bool(re.match(r'^sk-[A-Za-z0-9]{48}$', api_key))
+
+def get_openai_api_key() -> str:
+    """Get the OpenAI API key from environment.
     
-    # Load from config file
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE) as f:
-                file_config = json.load(f)
-                config.update(file_config)
-        except Exception as e:
-            print(f"Warning: Error loading config file: {e}")
+    Returns:
+        str: The OpenAI API key.
+        
+    Raises:
+        ValueError: If API key is not found or invalid.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "\nOpenAI API key not found!\n\n"
+            "To configure your API key:\n"
+            "1. Copy .env.example to .env:\n"
+            "   cp .env.example .env\n\n"
+            "2. Edit .env and add your API key:\n"
+            "   OPENAI_API_KEY=your-api-key\n\n"
+            "Or set it directly in your environment:\n"
+            "   export OPENAI_API_KEY=your-api-key"
+        )
+    
+    if not validate_api_key(api_key):
+        raise ValueError(
+            "\nInvalid OpenAI API key format!\n\n"
+            "API key should:\n"
+            "- Start with 'sk-'\n"
+            "- Be 51 characters long\n"
+            "- Contain only letters and numbers after 'sk-'\n\n"
+            "Please check your API key in .env or environment variables."
+        )
+    
+    return api_key
+
+def get_anthropic_api_key() -> Optional[str]:
+    """Get the Anthropic API key from environment."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print(
+            "\nNote: Anthropic API key not found.\n"
+            "If you plan to use Claude, set ANTHROPIC_API_KEY in your .env file."
+        )
+    return api_key
+
+def validate_org_id(org_id: str) -> bool:
+    """Validate OpenAI organization ID format."""
+    # OpenAI org IDs are 20 characters long and contain only letters and numbers
+    return bool(re.match(r'^[A-Za-z0-9]{20}$', org_id))
+
+def get_openai_org_id() -> Optional[str]:
+    """Get the OpenAI organization ID from environment.
+    
+    Returns:
+        Optional[str]: The OpenAI organization ID if configured.
+        
+    Raises:
+        ValueError: If organization ID is invalid.
+    """
+    org_id = os.environ.get("OPENAI_ORG_ID")
+    if org_id and not validate_org_id(org_id):
+        raise ValueError(
+            "\nInvalid OpenAI organization ID format!\n\n"
+            "Organization ID should:\n"
+            "- Be 20 characters long\n"
+            "- Contain only letters and numbers\n\n"
+            "Please check your organization ID in .env or environment variables."
+        )
+    return org_id
+
+def load_config() -> Dict[str, Any]:
+    """Load configuration from environment variables and defaults."""
+    config = DEFAULT_CONFIG.copy()
     
     # Load from environment variables
     env_mapping = {
@@ -66,48 +126,6 @@ def load_config() -> Dict[str, Any]:
                 print(f"Warning: Invalid value for {env_var}: {value}")
     
     return config
-
-def save_config(config: Dict[str, Any]) -> None:
-    """Save configuration to the config file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
-def get_openai_api_key() -> Optional[str]:
-    """Get the OpenAI API key from config or environment."""
-    config = load_config()
-    # First try environment variable
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # Then try config file
-        api_key = config.get("openai", {}).get("api_key")
-    if not api_key:
-        print("Warning: OpenAI API key not found. Please set it in your .env file or ~/.midpoint/config.json")
-    return api_key
-
-def get_anthropic_api_key() -> Optional[str]:
-    """Get the Anthropic API key from config or environment."""
-    config = load_config()
-    api_key = config.get("anthropic", {}).get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Warning: Anthropic API key not found. Please set it in your .env file or ~/.midpoint/config.json")
-    return api_key
-
-def set_api_key(provider: str, api_key: str, org_id: Optional[str] = None, project_id: Optional[str] = None) -> None:
-    """Set the API key and optional organization/project IDs for a specific provider in the config file."""
-    if provider not in ["openai", "anthropic"]:
-        raise ValueError(f"Unsupported provider: {provider}")
-    
-    config = load_config()
-    if provider not in config:
-        config[provider] = {}
-    config[provider]["api_key"] = api_key
-    if org_id:
-        config[provider]["org_id"] = org_id
-    if project_id:
-        config[provider]["project_id"] = project_id
-    save_config(config)
 
 def get_points_budget() -> Dict[str, int]:
     """Get the points budget configuration."""

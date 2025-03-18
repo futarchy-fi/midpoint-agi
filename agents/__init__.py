@@ -1,57 +1,58 @@
 """
-Midpoints AGI agent orchestration system.
-
-This package contains the core components of the Midpoints AGI system,
-including agent models, orchestration logic, and specialized agents for
-complex problem solving.
+Midpoint - An advanced AGI system for recursive goal decomposition.
 """
 
 from .models import (
-    State, 
-    Goal, 
+    State,
+    Goal,
     StrategyPlan,
-    FailureAnalysis,
-    ValidationResult,
-    ExecutionTrace,
-    ExecutionSummary,
-    BudgetAllocation,
-    TaskContext
+    TaskContext,
+    ExecutionResult,
+    ValidationResult
 )
 
-from .core_agents import (
-    goal_decomposer,
-    task_executor,
-    goal_validator,
-    failure_analyzer,
-    progress_summarizer,
-    decompose_goal,
-    execute_strategy,
-    validate_goal,
-    analyze_failure,
-    summarize_progress
+from .config import (
+    get_openai_api_key,
+    get_openai_org_id,
+    get_anthropic_api_key,
+    get_points_budget
 )
 
+from .goal_decomposer import GoalDecomposer
+from .task_executor import TaskExecutor
+from .validator import Validator
 from .tools import (
-    git_commit,
-    git_checkout,
-    read_file,
-    write_file,
-    run_command,
-    list_directory,
+    check_repo_state,
+    create_branch,
+    create_commit,
+    get_current_hash,
     track_points
 )
 
-from .orchestrator import solve_problem
-
 __all__ = [
+    # Models
     'State',
     'Goal',
     'StrategyPlan',
-    'FailureAnalysis',
-    'ValidationResult',
-    'ExecutionTrace',
-    'ExecutionSummary',
-    'BudgetAllocation',
     'TaskContext',
-    'solve_problem',
+    'ExecutionResult',
+    'ValidationResult',
+    
+    # Configuration
+    'get_openai_api_key',
+    'get_openai_org_id',
+    'get_anthropic_api_key',
+    'get_points_budget',
+    
+    # Agents
+    'GoalDecomposer',
+    'TaskExecutor',
+    'Validator',
+    
+    # Tools
+    'check_repo_state',
+    'create_branch',
+    'create_commit',
+    'get_current_hash',
+    'track_points'
 ] 
