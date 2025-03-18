@@ -30,6 +30,7 @@ ENV/
 config.json
 *.config
 .env*
+!.env.example
 credentials/
 secrets/
 
@@ -44,24 +45,9 @@ secrets/
 htmlcov/
 .pytest_cache/
 .tox/
-
-# Misc
-.DS_Store
-*.log
-
-# Virtual Environment
-.env
-.venv
-env/
-venv/
-ENV/
-
-# Project specific
 test-repo/
-*.log
-.env.*
-!.env.example
 
 # OS specific
 .DS_Store
 Thumbs.db
+*.log
