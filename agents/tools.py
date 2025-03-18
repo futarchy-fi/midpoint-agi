@@ -1,3 +1,10 @@
+"""
+Git operations for the Midpoint system.
+
+This module provides safe git operations using the RepoContext for state management
+and safety checks.
+"""
+
 from typing import Optional, Dict, Any, Callable
 import subprocess
 import os
@@ -6,6 +13,9 @@ from pathlib import Path
 from datetime import datetime
 import asyncio
 import functools
+import random
+import string
+from .repo_context import RepoContext, GitError
 
 def function_tool(func: Callable) -> Callable:
     """Decorator to mark a function as a tool.
@@ -22,6 +32,100 @@ def function_tool(func: Callable) -> Callable:
     wrapper.__doc__ = func.__doc__
     
     return wrapper
+
+def _generate_random_suffix(length: int = 6) -> str:
+    """Generate a random suffix for branch names."""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+@function_tool
+async def check_repo_state(repo_path: str) -> Dict[str, bool]:
+    """Check repository state for uncommitted changes and untracked files."""
+    async with RepoContext(repo_path) as repo:
+        # Check for uncommitted changes
+        status = await repo._run_git("status", "--porcelain")
+        has_uncommitted = bool(status)
+        
+        # Check for untracked files
+        has_untracked = any(line.startswith("??") for line in status.splitlines())
+        
+        # Check for other git problems
+        has_merge_conflicts = "UU" in status
+        has_rebase_conflicts = (repo.repo_path / ".git" / "rebase-apply").exists()
+        
+        return {
+            "has_uncommitted": has_uncommitted,
+            "has_untracked": has_untracked,
+            "has_merge_conflicts": has_merge_conflicts,
+            "has_rebase_conflicts": has_rebase_conflicts,
+            "is_clean": not any([
+                has_uncommitted,
+                has_untracked,
+                has_merge_conflicts,
+                has_rebase_conflicts
+            ])
+        }
+
+@function_tool
+async def create_branch(repo_path: str, base_name: str) -> str:
+    """Create a new branch with random suffix."""
+    async with RepoContext(repo_path) as repo:
+        # Generate branch name with random suffix
+        branch_name = f"{base_name}-{_generate_random_suffix()}"
+        
+        # Create and checkout new branch
+        await repo._run_git("checkout", "-b", branch_name)
+        
+        return branch_name
+
+@function_tool
+async def revert_to_hash(repo_path: str, hash: str) -> None:
+    """Revert repository to specific hash."""
+    async with RepoContext(repo_path) as repo:
+        # Check if hash exists
+        try:
+            await repo._run_git("rev-parse", "--verify", hash)
+        except GitError:
+            raise GitError(f"Hash {hash} does not exist in repository")
+            
+        # Hard reset to hash
+        await repo._run_git("reset", "--hard", hash)
+
+@function_tool
+async def create_commit(repo_path: str, message: str) -> str:
+    """Create a commit and return its hash."""
+    async with RepoContext(repo_path) as repo:
+        # Stage all changes
+        await repo._run_git("add", ".")
+        
+        # Create commit
+        await repo._run_git("commit", "-m", message)
+        
+        # Get commit hash
+        return (await repo._run_git("rev-parse", "HEAD")).strip()
+
+@function_tool
+async def get_current_hash(repo_path: str) -> str:
+    """Get current commit hash."""
+    async with RepoContext(repo_path) as repo:
+        return (await repo._run_git("rev-parse", "HEAD")).strip()
+
+@function_tool
+async def get_current_branch(repo_path: str) -> str:
+    """Get current branch name."""
+    async with RepoContext(repo_path) as repo:
+        return (await repo._run_git("rev-parse", "--abbrev-ref", "HEAD")).strip()
+
+@function_tool
+async def checkout_branch(repo_path: str, branch_name: str) -> None:
+    """Checkout a specific branch."""
+    async with RepoContext(repo_path) as repo:
+        # Check if branch exists
+        try:
+            await repo._run_git("rev-parse", "--verify", branch_name)
+        except GitError:
+            raise GitError(f"Branch {branch_name} does not exist")
+            
+        await repo._run_git("checkout", branch_name)
 
 @function_tool
 async def git_commit(message: str) -> str:
