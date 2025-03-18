@@ -1,0 +1,39 @@
+Spans
+
+Span
+
+Bases: ABC, Generic[TSpanData]
+
+Source code in src/agents/tracing/spans.py
+start abstractmethod
+
+
+start(mark_as_current: bool = False)
+Start the span.
+
+Parameters:
+
+Name	Type	Description	Default
+mark_as_current	bool	If true, the span will be marked as the current span.	False
+Source code in src/agents/tracing/spans.py
+finish abstractmethod
+
+
+finish(reset_current: bool = False) -> None
+Finish the span.
+
+Parameters:
+
+Name	Type	Description	Default
+reset_current	bool	If true, the span will be reset as the current span.	False
+Source code in src/agents/tracing/spans.py
+NoOpSpan
+
+Bases: Span[TSpanData]
+
+Source code in src/agents/tracing/spans.py
+SpanImpl
+
+Bases: Span[TSpanData]
+
+Source code in src/agents/tracing/spans.py

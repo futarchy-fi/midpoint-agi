@@ -1,0 +1,36 @@
+OpenAI Chat Completions model
+
+OpenAIChatCompletionsModel
+
+Bases: Model
+
+Source code in src/agents/models/openai_chatcompletions.py
+stream_response async
+
+
+stream_response(
+    system_instructions: str | None,
+    input: str | list[TResponseInputItem],
+    model_settings: ModelSettings,
+    tools: list[Tool],
+    output_schema: AgentOutputSchema | None,
+    handoffs: list[Handoff],
+    tracing: ModelTracing,
+) -> AsyncIterator[TResponseStreamEvent]
+Yields a partial message as it is generated, as well as the usage information.
+
+Source code in src/agents/models/openai_chatcompletions.py
+_Converter
+
+Source code in src/agents/models/openai_chatcompletions.py
+items_to_messages classmethod
+
+
+items_to_messages(
+    items: str | Iterable[TResponseInputItem],
+) -> list[ChatCompletionMessageParam]
+Convert a sequence of 'Item' objects into a list of ChatCompletionMessageParam.
+
+Rules: - EasyInputMessage or InputMessage (role=user) => ChatCompletionUserMessageParam - EasyInputMessage or InputMessage (role=system) => ChatCompletionSystemMessageParam - EasyInputMessage or InputMessage (role=developer) => ChatCompletionDeveloperMessageParam - InputMessage (role=assistant) => Start or flush a ChatCompletionAssistantMessageParam - response_output_message => Also produces/flushes a ChatCompletionAssistantMessageParam - tool calls get attached to the current assistant message, or create one if none. - tool outputs => ChatCompletionToolMessageParam
+
+Source code in src/agents/models/openai_chatcompletions.py

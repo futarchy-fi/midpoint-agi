@@ -1,0 +1,114 @@
+Model interface
+
+ModelTracing
+
+Bases: Enum
+
+Source code in src/agents/models/interface.py
+DISABLED class-attribute instance-attribute
+
+
+DISABLED = 0
+Tracing is disabled entirely.
+
+ENABLED class-attribute instance-attribute
+
+
+ENABLED = 1
+Tracing is enabled, and all data is included.
+
+ENABLED_WITHOUT_DATA class-attribute instance-attribute
+
+
+ENABLED_WITHOUT_DATA = 2
+Tracing is enabled, but inputs/outputs are not included.
+
+Model
+
+Bases: ABC
+
+The base interface for calling an LLM.
+
+Source code in src/agents/models/interface.py
+get_response abstractmethod async
+
+
+get_response(
+    system_instructions: str | None,
+    input: str | list[TResponseInputItem],
+    model_settings: ModelSettings,
+    tools: list[Tool],
+    output_schema: AgentOutputSchema | None,
+    handoffs: list[Handoff],
+    tracing: ModelTracing,
+) -> ModelResponse
+Get a response from the model.
+
+Parameters:
+
+Name	Type	Description	Default
+system_instructions	str | None	The system instructions to use.	required
+input	str | list[TResponseInputItem]	The input items to the model, in OpenAI Responses format.	required
+model_settings	ModelSettings	The model settings to use.	required
+tools	list[Tool]	The tools available to the model.	required
+output_schema	AgentOutputSchema | None	The output schema to use.	required
+handoffs	list[Handoff]	The handoffs available to the model.	required
+tracing	ModelTracing	Tracing configuration.	required
+Returns:
+
+Type	Description
+ModelResponse	The full model response.
+Source code in src/agents/models/interface.py
+stream_response abstractmethod
+
+
+stream_response(
+    system_instructions: str | None,
+    input: str | list[TResponseInputItem],
+    model_settings: ModelSettings,
+    tools: list[Tool],
+    output_schema: AgentOutputSchema | None,
+    handoffs: list[Handoff],
+    tracing: ModelTracing,
+) -> AsyncIterator[TResponseStreamEvent]
+Stream a response from the model.
+
+Parameters:
+
+Name	Type	Description	Default
+system_instructions	str | None	The system instructions to use.	required
+input	str | list[TResponseInputItem]	The input items to the model, in OpenAI Responses format.	required
+model_settings	ModelSettings	The model settings to use.	required
+tools	list[Tool]	The tools available to the model.	required
+output_schema	AgentOutputSchema | None	The output schema to use.	required
+handoffs	list[Handoff]	The handoffs available to the model.	required
+tracing	ModelTracing	Tracing configuration.	required
+Returns:
+
+Type	Description
+AsyncIterator[TResponseStreamEvent]	An iterator of response stream events, in OpenAI Responses format.
+Source code in src/agents/models/interface.py
+ModelProvider
+
+Bases: ABC
+
+The base interface for a model provider.
+
+Model provider is responsible for looking up Models by name.
+
+Source code in src/agents/models/interface.py
+get_model abstractmethod
+
+
+get_model(model_name: str | None) -> Model
+Get a model by name.
+
+Parameters:
+
+Name	Type	Description	Default
+model_name	str | None	The name of the model to get.	required
+Returns:
+
+Type	Description
+Model	The model.
+Source code in src/agents/models/interface.py

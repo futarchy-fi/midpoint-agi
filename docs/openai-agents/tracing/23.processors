@@ -1,0 +1,116 @@
+Processors
+
+ConsoleSpanExporter
+
+Bases: TracingExporter
+
+Prints the traces and spans to the console.
+
+Source code in src/agents/tracing/processors.py
+BackendSpanExporter
+
+Bases: TracingExporter
+
+Source code in src/agents/tracing/processors.py
+__init__
+
+
+__init__(
+    api_key: str | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    endpoint: str = "https://api.openai.com/v1/traces/ingest",
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+)
+Parameters:
+
+Name	Type	Description	Default
+api_key	str | None	The API key for the "Authorization" header. Defaults to os.environ["OPENAI_API_KEY"] if not provided.	None
+organization	str | None	The OpenAI organization to use. Defaults to os.environ["OPENAI_ORG_ID"] if not provided.	None
+project	str | None	The OpenAI project to use. Defaults to os.environ["OPENAI_PROJECT_ID"] if not provided.	None
+endpoint	str	The HTTP endpoint to which traces/spans are posted.	'https://api.openai.com/v1/traces/ingest'
+max_retries	int	Maximum number of retries upon failures.	3
+base_delay	float	Base delay (in seconds) for the first backoff.	1.0
+max_delay	float	Maximum delay (in seconds) for backoff growth.	30.0
+Source code in src/agents/tracing/processors.py
+set_api_key
+
+
+set_api_key(api_key: str)
+Set the OpenAI API key for the exporter.
+
+Parameters:
+
+Name	Type	Description	Default
+api_key	str	The OpenAI API key to use. This is the same key used by the OpenAI Python client.	required
+Source code in src/agents/tracing/processors.py
+close
+
+
+close()
+Close the underlying HTTP client.
+
+Source code in src/agents/tracing/processors.py
+BatchTraceProcessor
+
+Bases: TracingProcessor
+
+Some implementation notes: 1. Using Queue, which is thread-safe. 2. Using a background thread to export spans, to minimize any performance issues. 3. Spans are stored in memory until they are exported.
+
+Source code in src/agents/tracing/processors.py
+__init__
+
+
+__init__(
+    exporter: TracingExporter,
+    max_queue_size: int = 8192,
+    max_batch_size: int = 128,
+    schedule_delay: float = 5.0,
+    export_trigger_ratio: float = 0.7,
+)
+Parameters:
+
+Name	Type	Description	Default
+exporter	TracingExporter	The exporter to use.	required
+max_queue_size	int	The maximum number of spans to store in the queue. After this, we will start dropping spans.	8192
+max_batch_size	int	The maximum number of spans to export in a single batch.	128
+schedule_delay	float	The delay between checks for new spans to export.	5.0
+export_trigger_ratio	float	The ratio of the queue size at which we will trigger an export.	0.7
+Source code in src/agents/tracing/processors.py
+shutdown
+
+
+shutdown(timeout: float | None = None)
+Called when the application stops. We signal our thread to stop, then join it.
+
+Source code in src/agents/tracing/processors.py
+force_flush
+
+
+force_flush()
+Forces an immediate flush of all queued spans.
+
+Source code in src/agents/tracing/processors.py
+_export_batches
+
+
+_export_batches(force: bool = False)
+Drains the queue and exports in batches. If force=True, export everything. Otherwise, export up to max_batch_size repeatedly until the queue is empty or below a certain threshold.
+
+Source code in src/agents/tracing/processors.py
+default_exporter
+
+
+default_exporter() -> BackendSpanExporter
+The default exporter, which exports traces and spans to the backend in batches.
+
+Source code in src/agents/tracing/processors.py
+default_processor
+
+
+default_processor() -> BatchTraceProcessor
+The default processor, which exports traces and spans to the backend in batches.
+
+Source code in src/agents/tracing/processors.py

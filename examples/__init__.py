@@ -1,0 +1,1 @@
+"""Example scripts for Midpoint AGI system.""" 
