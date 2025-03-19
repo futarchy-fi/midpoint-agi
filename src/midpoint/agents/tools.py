@@ -8,7 +8,7 @@ import random
 import string
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 async def check_repo_state(repo_path: str) -> Dict[str, bool]:
     """Check the current state of the repository."""
@@ -340,4 +340,79 @@ async def search_code(repo_path: str, pattern: str, file_pattern: str = "*", max
         if matches:
             return f"Found {count} matches:\n\n" + "\n".join(matches)
         else:
-            return "No matches found." 
+            return "No matches found."
+
+async def edit_file(repo_path: str, file_path: str, content: str, create_if_missing: bool = False) -> None:
+    """
+    Edit or create a file in the repository.
+    
+    Args:
+        repo_path: Path to the git repository
+        file_path: Path to the file within the repository
+        content: New content for the file
+        create_if_missing: Whether to create the file if it doesn't exist
+    """
+    full_path = Path(repo_path) / file_path
+    
+    # Check if file exists
+    if not full_path.exists() and not create_if_missing:
+        raise ValueError(f"File does not exist: {full_path}")
+    
+    # Create parent directories if they don't exist
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write the content
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+async def run_terminal_cmd(command: str, cwd: str) -> Tuple[str, str]:
+    """
+    Run a terminal command in the specified directory.
+    
+    Args:
+        command: The command to run
+        cwd: The working directory to run the command in
+        
+    Returns:
+        Tuple of (stdout, stderr) as strings
+        
+    Raises:
+        RuntimeError: If the command fails
+    """
+    # Split command into parts
+    if isinstance(command, str):
+        command = command.split()
+        
+    result = await asyncio.create_subprocess_exec(
+        *command,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await result.communicate()
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {stderr.decode()}")
+        
+    return stdout.decode(), stderr.decode()
+
+async def validate_repository_state(repo_path: str, expected_hash: str) -> None:
+    """
+    Validate that the repository is in the expected state.
+    
+    Args:
+        repo_path: Path to the git repository
+        expected_hash: Expected git hash to validate against
+        
+    Raises:
+        ValueError: If repository is not in the expected state
+    """
+    # First check if repository is clean
+    state = await check_repo_state(repo_path)
+    if not state["is_clean"]:
+        raise ValueError("Repository is not in a clean state")
+        
+    # Get current hash
+    current_hash = await get_current_hash(repo_path)
+    if current_hash != expected_hash:
+        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}") 
