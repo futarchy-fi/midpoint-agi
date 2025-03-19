@@ -7,6 +7,7 @@ toward achieving a complex goal.
 
 import os
 import json
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
@@ -14,7 +15,8 @@ from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
-    track_points
+    track_points,
+    get_current_hash
 )
 from midpoint.agents.config import get_openai_api_key
 
@@ -46,6 +48,15 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
 
+As part of your analysis, you MUST determine whether the next step requires further decomposition:
+- If the next step is still complex and would benefit from being broken down further, set 'requires_further_decomposition' to TRUE
+- If the next step is simple enough to be directly implemented by a TaskExecutor agent, set 'requires_further_decomposition' to FALSE
+
+Also identify any relevant context that should be passed to child subgoals:
+- Include ONLY information that will be directly helpful for understanding and implementing the subgoal
+- DO NOT include high-level strategic information that isn't directly relevant to the subgoal
+- Structure this as key-value pairs in the 'relevant_context' field
+
 You have access to these tools:
 - list_directory: List files and directories in the repository
 - read_file: Read the contents of a file
@@ -54,7 +65,9 @@ You have access to these tools:
 You MUST provide a structured response in JSON format with these fields:
 - next_step: A clear description of the single next step to take
 - validation_criteria: List of measurable criteria to validate this step's completion
-- reasoning: Explanation of why this is the most promising next action"""
+- reasoning: Explanation of why this is the most promising next action
+- requires_further_decomposition: Boolean indicating if this step needs further breakdown (true) or can be directly executed (false)
+- relevant_context: Object containing relevant information to pass to child subgoals"""
         
         # Define tool schema for the OpenAI API
         self.tools = [
@@ -260,10 +273,18 @@ You MUST provide a structured response in JSON format with these fields:
                                 
                             # Check if the output has the required fields
                             if all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
+                                # Extract requires_further_decomposition (default to True if not provided)
+                                requires_further_decomposition = output_data.get("requires_further_decomposition", True)
+                                
+                                # Extract relevant_context (default to empty dict if not provided)
+                                relevant_context = output_data.get("relevant_context", {})
+                                
                                 final_output = SubgoalPlan(
                                     next_step=output_data["next_step"],
                                     validation_criteria=output_data["validation_criteria"],
                                     reasoning=output_data["reasoning"],
+                                    requires_further_decomposition=requires_further_decomposition,
+                                    relevant_context=relevant_context,
                                     metadata={
                                         "raw_response": message.content,
                                         "tool_usage": tool_usage
@@ -273,13 +294,13 @@ You MUST provide a structured response in JSON format with these fields:
                                 # Ask for a properly formatted response
                                 messages.append({
                                     "role": "user",
-                                    "content": "Please provide a valid JSON response with the fields: next_step, validation_criteria, and reasoning."
+                                    "content": "Please provide a valid JSON response with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
                                 })
                         except json.JSONDecodeError:
                             # If not valid JSON, ask for a properly formatted response
                             messages.append({
                                 "role": "user",
-                                "content": "Please provide your response in valid JSON format with the fields: next_step, validation_criteria, and reasoning."
+                                "content": "Please provide your response in valid JSON format with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
                             })
             
             # Validate the subgoal plan
@@ -322,3 +343,131 @@ Focus on providing a clear next step with measurable validation criteria.
             raise ValueError("Subgoal has no reasoning")
             
         # Additional validation can be added here 
+
+    async def decompose_recursively(self, context: TaskContext, log_file: str = "goal_hierarchy.log") -> List[SubgoalPlan]:
+        """
+        Recursively decompose a goal until reaching directly executable tasks.
+        
+        Args:
+            context: The current task context containing the goal and state
+            log_file: Path to log file for visualizing the goal hierarchy
+            
+        Returns:
+            List of SubgoalPlan objects representing the decomposition hierarchy
+            
+        Raises:
+            ValueError: If repository validation fails
+            Exception: For other errors during execution
+        """
+        # Validate repository state
+        await validate_repository_state(
+            context.state.repository_path, 
+            context.state.git_hash
+        )
+        
+        # Get the decomposition depth for logging
+        depth = self._get_decomposition_depth(context)
+        
+        # Get the next subgoal
+        subgoal = await self.determine_next_step(context)
+        
+        # Log this decomposition step
+        self._log_decomposition_step(log_file, depth, context.goal.description, subgoal.next_step)
+        
+        # If subgoal doesn't need further decomposition, return it
+        if not subgoal.requires_further_decomposition:
+            self._log_execution_ready(log_file, depth + 1, subgoal.next_step)
+            return [subgoal]
+        
+        # Create a new context with this subgoal as the goal
+        new_context = TaskContext(
+            state=context.state,
+            goal=Goal(
+                description=subgoal.next_step,
+                validation_criteria=subgoal.validation_criteria,
+                success_threshold=context.goal.success_threshold
+            ),
+            iteration=0,  # Reset for the new subgoal
+            points_consumed=context.points_consumed,
+            total_budget=context.total_budget - 10,  # Subtract points for the decomposition
+            execution_history=context.execution_history,
+            # Pass relevant context from parent to child, keeping metadata structure
+            metadata={
+                **context.metadata if hasattr(context, 'metadata') else {},
+                "parent_goal": context.goal.description,
+                "parent_context": subgoal.relevant_context
+            }
+        )
+        
+        # Recursively decompose and collect all resulting subgoals
+        sub_subgoals = await self.decompose_recursively(new_context, log_file)
+        
+        # Return the current subgoal and all its sub-subgoals
+        return [subgoal] + sub_subgoals
+    
+    def _get_decomposition_depth(self, context: TaskContext) -> int:
+        """Determine the current decomposition depth from context metadata."""
+        # If there's no metadata or no parent_goal, we're at the root (depth 0)
+        if not hasattr(context, 'metadata') or not context.metadata:
+            return 0
+            
+        # Count the number of parent_goal references in metadata
+        depth = 0
+        current_metadata = context.metadata
+        while current_metadata and 'parent_goal' in current_metadata:
+            depth += 1
+            current_metadata = current_metadata.get('parent_context', {})
+            
+        return depth
+    
+    def _log_decomposition_step(self, log_file: str, depth: int, parent_goal: str, subgoal: str):
+        """Log decomposition step to file for real-time monitoring."""
+        indent = "  " * depth
+        with open(log_file, "a") as f:
+            f.write(f"{indent}Goal: {parent_goal}\n")
+            f.write(f"{indent}└── Subgoal: {subgoal}\n")
+            f.flush()  # Ensure immediate write for tail -f
+    
+    def _log_execution_ready(self, log_file: str, depth: int, executable_task: str):
+        """Log when a task is ready for execution."""
+        indent = "  " * depth
+        with open(log_file, "a") as f:
+            f.write(f"{indent}✓ READY FOR EXECUTION: {executable_task}\n")
+            f.flush()
+
+async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
+    """
+    Validate repository is in expected state before decomposition.
+    
+    Args:
+        repo_path: Path to the git repository
+        expected_hash: Expected git hash of the repository
+        
+    Returns:
+        True if repository is in expected state
+        
+    Raises:
+        ValueError: If repository is not in expected state
+    """
+    # Check if repo exists
+    if not os.path.exists(os.path.join(repo_path, ".git")):
+        raise ValueError(f"Not a git repository: {repo_path}")
+    
+    # Check current hash
+    current_hash = await get_current_hash(repo_path)
+    if current_hash != expected_hash:
+        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}")
+    
+    # Check for uncommitted changes
+    process = await asyncio.create_subprocess_exec(
+        "git", "status", "--porcelain",
+        cwd=repo_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await process.communicate()
+    
+    if stdout.strip():
+        raise ValueError(f"Repository has uncommitted changes: {stdout.decode()}")
+    
+    return True 

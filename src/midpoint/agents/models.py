@@ -27,6 +27,8 @@ class SubgoalPlan:
     next_step: str
     validation_criteria: List[str]
     reasoning: str
+    requires_further_decomposition: bool = True  # Flag to indicate if more decomposition is needed
+    relevant_context: Dict[str, Any] = field(default_factory=dict)  # Context to pass to child goals
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
