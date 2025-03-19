@@ -95,12 +95,60 @@ Implement and validate the core git repository state management functionality th
    - Clear output formatting ✅
    - Error handling and reporting ✅
 
+## Current Implementation Subgoal: Recursive Goal Decomposition ✅
+
+### Goal ✅
+Implement a recursive goal decomposition system that can break down complex goals into progressively simpler subgoals until reaching directly executable tasks, using a depth-first search approach.
+
+### Success Criteria ✅
+1. Recursive Decomposition: ✅
+   - Hierarchical breakdown of complex goals ✅
+   - Depth-first traversal of the goal tree ✅
+   - Proper tracking of decomposition depth ✅
+   - Termination at executable task level ✅
+
+2. Context Management: ✅
+   - Selective passing of relevant context to child goals ✅
+   - Isolation of high-level strategic information ✅
+   - Metadata tracking through decomposition levels ✅
+
+3. Repository Validation: ✅
+   - Verify repository state before decomposition ✅
+   - Check for clean working directory ✅
+   - Match expected git hash ✅
+
+4. Visualization: ✅
+   - Real-time logging of decomposition progress ✅
+   - Tree-structured output for monitoring ✅
+   - Clear indication of executable tasks ✅
+
+### Implementation Plan ✅
+1. Enhance the GoalDecomposer: ✅
+   - Update SubgoalPlan model with decomposition flag ✅
+   - Implement selective context passing mechanism ✅
+   - Add OODA loop approach for decomposition decisions ✅
+
+2. Repository Interaction: ✅
+   - Implement validation of repository state ✅
+   - Enable tool use for repository exploration ✅
+   - Support decomposition decisions based on repository state ✅
+
+3. Recursive Algorithm: ✅
+   - Implement depth-first recursive decomposition ✅
+   - Add depth tracking and metadata management ✅
+   - Create termination conditions for executable tasks ✅
+
+4. Testing and Documentation: ✅
+   - Create test suite for recursive functionality ✅
+   - Document usage and examples ✅
+   - Provide demonstration script ✅
+
 ### Next Steps After This Subgoal
-Once this subgoal is completed and validated, we will:
-1. Integrate this functionality into the agent system
-2. Implement the human supervision mode
-3. Add detailed logging and interaction capabilities
-4. Build the full agent orchestration system
+Now that we've implemented recursive goal decomposition, the next steps are:
+1. Implement the TaskExecutor to execute the leaf nodes (executable tasks)
+2. Implement the GoalValidator to verify task completion
+3. Add a failure handling mechanism for task execution failures
+4. Integrate the full OODA loop into the system workflow
 
 ## Progress Tracking
 - [x] Git Repository State Management
@@ -111,92 +159,90 @@ Once this subgoal is completed and validated, we will:
   - [x] Test suite
   - [x] CLI demonstration tool
 
-### Completed Features
-1. Safe Git Operations ✅
-   - Repository validation
-   - State tracking
-   - Operation logging
-   - Error handling and recovery
-   - Automatic state restoration
-
-2. Testing Infrastructure ✅
-   - Unit tests
-   - Integration tests
-   - Test repository setup
-   - CLI testing tool
+- [x] Goal Decomposition Agent
+  - [x] OODA loop implementation
+  - [x] Tool-based repository exploration
+  - [x] Single next step determination
+  - [x] Recursive decomposition
+  - [x] Selective context passing
+  - [x] Hierarchy visualization
 
 ### Next Major Features
-1. Agent System Integration
-   - Goal decomposition agent
-   - Task execution agent
-   - Validation agent
-   - Failure analysis agent
-   - Progress summarization agent
+1. Task Execution Agent
+   - Tool utilization for execution
+   - Error handling and recovery
+   - Progress tracking
+   - Git state management
 
-2. Human Supervision System
+2. Goal Validation Agent
+   - Success criteria evaluation
+   - Validation reporting
+   - Failure analysis
+   - Improvement suggestions
+
+3. Orchestration System
+   - Agent coordination
+   - Workflow management
+   - Error recovery
+   - Resource allocation
+
+4. Human Supervision System
    - Interactive mode
    - Command approval
    - Progress monitoring
-   - State inspection 
+   - State inspection
 
-## Current Implementation Subgoal: Agent System Integration
+## Current Implementation Subgoal: Task Execution Agent
 
 ### Goal
-Implement and validate the core agent system that will handle goal decomposition, task execution, and validation using the git repository state management functionality.
+Implement the TaskExecutor agent that will execute the leaf nodes (directly executable tasks) identified by the recursive goal decomposition process.
 
 ### Success Criteria
-1. Goal Decomposition Agent:
-   - Accept high-level goal description
-   - Break down into verifiable subgoals
-   - Generate execution plan with git state checkpoints
-   - Validate plan feasibility
+1. Task Execution:
+   - Execute tasks using the available tools
+   - Track progress and report status
+   - Handle errors gracefully
+   - Implement retry mechanisms
 
-2. Task Execution Agent:
-   - Execute tasks in isolated git branches
-   - Track progress through commits
-   - Handle task failures gracefully
-   - Maintain execution state
+2. State Management:
+   - Create branches for task execution
+   - Commit changes at appropriate checkpoints
+   - Maintain clean repository state
+   - Track git hashes for state references
 
-3. Validation Agent:
-   - Validate task outputs against requirements
-   - Verify git state consistency
-   - Generate validation reports
-   - Handle validation failures
+3. Tool Integration:
+   - File system operations
+   - Code analysis and modification
+   - External API interaction
+   - Environment management
 
-4. Agent Communication:
-   - Define clear interfaces between agents
-   - Implement state passing between agents
-   - Handle error propagation
-   - Maintain execution context
+4. Human Interaction:
+   - Optional approval of actions
+   - Progress reporting
+   - Failure notification
+   - Interactive debugging
 
 ### Implementation Plan
-1. Create Agent Base Classes:
-   - `BaseAgent` with common functionality
-   - `GoalDecomposer` for goal breakdown
-   - `TaskExecutor` for task execution
-   - `Validator` for output validation
+1. Create TaskExecutor Agent:
+   - Define core execution logic
+   - Implement tool selection mechanism
+   - Add error handling and recovery
+   - Enable progress tracking
 
-2. Implement Agent Interfaces:
-   - Input/output specifications
-   - State management protocols
-   - Error handling patterns
-   - Logging requirements
+2. Integrate with Goal Decomposition:
+   - Define interface for receiving executable tasks
+   - Implement task prioritization
+   - Handle task dependencies
+   - Report execution results
 
 3. Create Test Suite:
-   - Unit tests for each agent
-   - Integration tests for agent interactions
-   - End-to-end workflow tests
-   - Failure scenario tests
+   - Unit tests for core functionality
+   - Integration tests with GoalDecomposer
+   - Simulated failure scenarios
+   - Performance evaluation
 
-4. Build Demonstration CLI:
-   - Simple goal submission interface
-   - Progress monitoring
-   - Result visualization
-   - Error reporting
-
-### Next Steps After This Subgoal
-Once this subgoal is completed and validated, we will:
-1. Implement the human supervision system
-2. Add interactive command approval
-3. Enhance logging and monitoring
-4. Build the full orchestration system 
+4. Build CLI Interface:
+   - Task submission interface
+   - Real-time monitoring
+   - Result reporting
+   - Error visualization 

@@ -7,12 +7,29 @@ This document outlines the vision and architecture for an advanced AGI system th
 The system is designed to overcome a fundamental limitation of current AI systems: the inability to effectively reason over long chains of thought and manage complex objectives that exceed their context window or reasoning capabilities. By decomposing complex goals into manageable subgoals and using a coordinated multi-agent approach, the system can tackle problems that would be intractable for a single agent.
 
 Key capabilities include:
-- Strategic planning and goal decomposition
+- Strategic planning with OODA loop decision-making
+- Recursive goal decomposition using depth-first search
 - Tactical execution with practical tool use
 - Detailed failure analysis and learning
 - Validation and verification of results
 - Efficient context management
 - Budget-aware execution
+
+## Core Principles
+
+1. **Focus on the Next Step**: Rather than planning all steps at once, the system prioritizes determining the most promising single next step. After each step is executed and validated, the system reassesses from the new state.
+
+2. **OODA Loop Decision Making**: The system follows the Observe-Orient-Decide-Act loop:
+   - **Observe**: Explore the current repository state
+   - **Orient**: Analyze how the current state relates to the goal
+   - **Decide**: Determine the most promising next step
+   - **Act**: Execute that step or further decompose it
+
+3. **Recursive Decomposition**: Complex goals are recursively broken down into progressively simpler subgoals until reaching directly executable tasks, using a depth-first search approach.
+
+4. **Selective Context Passing**: Only relevant information is passed to child subgoals, avoiding overwhelming the model with unnecessary high-level details.
+
+5. **Repository as State**: The git repository serves as the concrete state representation, with commits providing verifiable checkpoints.
 
 ## System Architecture
 
@@ -20,34 +37,37 @@ The system consists of five specialized agents, each with a distinct role in the
 
 ### 1. GoalDecomposer (Strategic Planning)
 
-**Purpose**: Breaks complex goals into manageable subgoals and develops strategies to achieve them.
+**Purpose**: Breaks complex goals into manageable subgoals, focusing on the single most important next step.
 
 **Inputs**:
 - Initial state (typically a git repository at a specific commit)
 - Final goal with validation criteria
-- Previous strategy attempts and analyses (if any)
+- Previous execution attempts and analyses (if any)
 - Available budget allocation
 
 **Outputs**:
-- StrategyPlan containing:
-  - Strategy description
-  - Immediate next subgoal
-  - Success criteria for the subgoal
-  - Estimated points needed
+- SubgoalPlan containing:
+  - Next step description
+  - Validation criteria for the step
+  - Reasoning for this choice
+  - Whether further decomposition is needed
+  - Relevant context for child goals
 
 **Responsibilities**:
-- Analyze the current state and goal
-- Learn from past strategy failures
-- Create realistic, achievable next steps
-- Allocate resources (points) effectively
+- Analyze the current state using available tools
+- Follow OODA loop to determine next steps
+- Recursively decompose complex tasks
+- Identify when a task is directly executable
+- Selectively pass relevant context to child goals
 
 ### 2. TaskExecutor (Implementation)
 
-**Purpose**: Implements strategies by taking concrete actions using available tools.
+**Purpose**: Implements directly executable tasks identified by the GoalDecomposer.
 
 **Inputs**:
 - Current state
-- Strategy and subgoal to implement
+- Executable task specifications
+- Validation criteria
 - Points budget for this execution
 
 **Outputs**:
@@ -86,10 +106,10 @@ The system consists of five specialized agents, each with a distinct role in the
 
 ### 4. FailureAnalyzer (Diagnostics)
 
-**Purpose**: Analyzes failed strategies to understand why they didn't succeed.
+**Purpose**: Analyzes failed executions to understand why they didn't succeed.
 
 **Inputs**:
-- Strategy that failed
+- Task that failed
 - Execution trace
 - Validation result
 
@@ -102,7 +122,7 @@ The system consists of five specialized agents, each with a distinct role in the
 
 **Responsibilities**:
 - Identify root causes of failures
-- Provide actionable feedback for future strategies
+- Provide actionable feedback for future attempts
 - Distinguish between strategic and tactical failures
 
 ### 5. ProgressSummarizer (Context Management)
@@ -110,7 +130,7 @@ The system consists of five specialized agents, each with a distinct role in the
 **Purpose**: Creates concise summaries of successful executions to preserve critical context.
 
 **Inputs**:
-- Initial state (before strategy execution)
+- Initial state (before execution)
 - Final state (after successful execution)
 - Execution trace
 
@@ -131,14 +151,16 @@ The system consists of five specialized agents, each with a distinct role in the
 The system follows this general workflow:
 
 1. **Planning Phase**:
-   - GoalDecomposer analyzes the problem and creates a strategy with an immediate next subgoal
+   - GoalDecomposer analyzes the problem using the OODA loop
+   - Determines the single most promising next step
+   - Recursively decomposes until reaching an executable task
 
 2. **Execution Phase**:
-   - TaskExecutor implements the strategy
+   - TaskExecutor implements the executable task
    - Creates a detailed trace of its actions
 
 3. **Validation Phase**:
-   - GoalValidator assesses if the subgoal was achieved
+   - GoalValidator assesses if the task was achieved
    - If successful:
      - ProgressSummarizer condenses the execution trace
      - System returns to Planning Phase with the new state
@@ -148,6 +170,24 @@ The system follows this general workflow:
 
 4. **Recursion**:
    - This process continues until the final goal is achieved or the budget is exhausted
+
+## Recursive Decomposition Approach
+
+The system employs a depth-first search approach to goal decomposition:
+
+1. Start with a high-level goal
+2. Determine the most promising next step
+3. Check if this step requires further decomposition
+   - If yes: Create a new subgoal and recursively decompose it
+   - If no: Mark it as ready for execution
+4. Execute the task and validate its completion
+5. Continue with the next step based on the new state
+
+This approach ensures that:
+- The system always works on the most promising path first
+- Each step is broken down to an appropriate level of detail
+- Execution always occurs on directly implementable tasks
+- The system can adapt to changing circumstances after each step
 
 ## Points Budget System
 
@@ -161,8 +201,8 @@ To constrain and prioritize agent activities, the system uses a points budget:
 
 - Budget allocation:
   - Overall budget for the entire goal (e.g., 50,000 points)
-  - GoalDecomposer allocates points to strategies
-  - TaskExecutor is limited to 500 points per execution
+  - GoalDecomposer consumes points for exploration and planning
+  - TaskExecutor is limited to specific points per execution
 
 - Points tracking:
   - Each agent reports points consumed
@@ -191,7 +231,7 @@ For transparency and debugging, the system includes:
 ## Implementation Considerations
 
 Current implementation uses:
-- OpenAI Agents SDK for agent definitions and orchestration
+- OpenAI API for agent intelligence
 - Pydantic models for structured data exchange
 - Async I/O for efficient execution
 - Function tools for repository interactions
