@@ -30,11 +30,14 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["midpoint", "midpoint.agents"]
+packages = ["midpoint", "midpoint.agents", "midpoint.testing"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+addopts = "-v"
+# Register our custom plugin for environment checks
+confcutdir = "src/midpoint/testing"
 
 [tool.black]
 line-length = 88
