@@ -15,7 +15,6 @@ from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
-    track_points,
     get_current_hash
 )
 from midpoint.agents.config import get_openai_api_key
@@ -186,9 +185,6 @@ You MUST provide a structured response in JSON format with these fields:
             {"role": "user", "content": user_prompt}
         ]
         
-        # Track an API call for determining the next step
-        await track_points("goal_decomposition", 10)
-        
         # Track tool usage for metadata
         tool_usage = []
         
@@ -243,9 +239,6 @@ You MUST provide a structured response in JSON format with these fields:
                             "name": function_name,
                             "content": result_str
                         })
-                        
-                        # Track points for tool use
-                        await track_points("tool_use", 5)
                 else:
                     # If no tool calls, check if we have a final output
                     if message.content:
@@ -388,8 +381,6 @@ Focus on providing a clear next step with measurable validation criteria.
                 success_threshold=context.goal.success_threshold
             ),
             iteration=0,  # Reset for the new subgoal
-            points_consumed=context.points_consumed,
-            total_budget=context.total_budget - 10,  # Subtract points for the decomposition
             execution_history=context.execution_history,
             # Pass relevant context from parent to child, keeping metadata structure
             metadata={

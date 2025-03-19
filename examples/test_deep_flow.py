@@ -15,26 +15,6 @@ from midpoint.agents.goal_validator import GoalValidator
 from midpoint.agents.tools import get_current_hash
 from typing import List
 
-class DeepGoalDecomposer(GoalDecomposer):
-    """Extended GoalDecomposer that forces deeper decomposition."""
-    
-    async def determine_next_step(self, context: TaskContext) -> SubgoalPlan:
-        """Override to force deeper decomposition."""
-        subgoal = await super().determine_next_step(context)
-        
-        # Force deeper decomposition based on complexity indicators
-        complex_keywords = ["platform", "system", "framework", "architecture", "infrastructure", "database"]
-        
-        # Check if this is a complex task
-        is_complex = any(keyword in subgoal.next_step.lower() for keyword in complex_keywords)
-        
-        # If it's complex and not already marked for decomposition, override it
-        if is_complex and not subgoal.requires_further_decomposition:
-            print(f"Forcing deeper decomposition for: {subgoal.next_step}")
-            subgoal.requires_further_decomposition = True
-            
-        return subgoal
-
 async def main():
     """Run the full flow with deep decomposition."""
     # Check arguments
@@ -80,8 +60,6 @@ async def main():
         ),
         goal=goal,
         iteration=0,
-        points_consumed=0,
-        total_budget=1000,
         execution_history=[]
     )
     
@@ -92,9 +70,9 @@ async def main():
     
     try:
         # Step 1: Deep Decomposition
-        print("\nStep 1: Deep Goal Decomposition")
-        decomposer = DeepGoalDecomposer()
-        subgoals = await decomposer.decompose_recursively(context, "deep_goal_hierarchy.log")
+        print("\nStep 1: Goal Decomposition")
+        decomposer = GoalDecomposer()
+        subgoals = await decomposer.decompose_recursively(context, "goal_hierarchy.log")
         
         # Find the final executable subgoal
         executable_subgoals = [s for s in subgoals if not s.requires_further_decomposition]

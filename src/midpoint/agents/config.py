@@ -3,19 +3,34 @@ Configuration management for the Midpoint system.
 """
 
 import os
+import json
+from pathlib import Path
 from typing import Optional
 
 def get_openai_api_key() -> Optional[str]:
-    """Get the OpenAI API key from environment variables."""
+    """Get the OpenAI API key from environment variables or config file."""
+    # First check environment variable
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
+    if api_key:
+        if not api_key.startswith("sk-"):
+            raise ValueError("Invalid OpenAI API key format")
+        return api_key
         
-    # Basic validation of API key format
-    if not api_key.startswith("sk-"):
-        raise ValueError("Invalid OpenAI API key format")
-        
-    return api_key
+    # Then check config file
+    config_path = Path.home() / ".midpoint" / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            api_key = config.get('openai', {}).get('api_key')
+            if api_key:
+                if not api_key.startswith("sk-"):
+                    raise ValueError("Invalid OpenAI API key format")
+                return api_key
+        except (json.JSONDecodeError, FileNotFoundError, KeyError):
+            pass
+            
+    return None
 
 def get_model_name() -> str:
     """Get the OpenAI model name to use."""
