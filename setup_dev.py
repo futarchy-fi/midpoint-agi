@@ -48,10 +48,15 @@ def main():
     print("\nSetup complete! To activate the environment:")
     print(f"source {activate_script}" if sys.platform != "win32" else activate_script)
     
-    # Ask about creating test repo
-    setup_test_repo = input("\nCreate test repository now? (y/n): ")
-    if setup_test_repo.lower() == "y":
-        subprocess.run([python_exe, "examples/setup_test_repo.py"])
+    # Check for existing test repository
+    test_repo_path = Path("test-repo")
+    if test_repo_path.exists() and (test_repo_path / ".git").exists():
+        print("\nTest repository already exists at test-repo/. No need to create it again.")
+    else:
+        # Ask about creating test repo
+        setup_test_repo = input("\nCreate test repository now? (y/n): ")
+        if setup_test_repo.lower() == "y":
+            subprocess.run([python_exe, "examples/setup_test_repo.py"])
         
     # Check for existing API key
     existing_key = get_existing_api_key()
