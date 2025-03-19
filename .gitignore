@@ -50,3 +50,6 @@ coverage.xml
 **/midpoint-test-repo/
 *.log
 test-repo/ 
+
+# Local config file with API keys
+config.json
