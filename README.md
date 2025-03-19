@@ -1,6 +1,71 @@
 # Midpoint
 
-A tool for decomposing complex goals into manageable steps.
+A recursive goal decomposition and execution system for complex repository management tasks.
+
+## Project Overview
+
+Midpoint is an advanced AI system designed to overcome the fundamental limitation of current AI systems: the inability to effectively reason over long chains of thought and manage complex objectives. By decomposing complex goals into manageable subgoals and using a coordinated multi-agent approach, the system can tackle problems that would be intractable for a single agent.
+
+The system follows these key principles:
+- **Recursive Goal Decomposition**: Complex goals are broken down into progressively simpler subgoals until reaching directly executable tasks.
+- **OODA Loop Decision Making**: Each step follows Observe-Orient-Decide-Act to determine the best next action.
+- **Repository-based State Management**: The system uses git repositories as its state representation, with commits providing verifiable checkpoints.
+- **Intelligent Agent Execution**: Tasks are executed by specialized agents capable of making multiple tool calls and adapting to the repository state.
+- **Smart Validation**: The system intelligently validates work against success criteria by exploring the repository and running tests.
+
+## Current Implementation Status
+
+### ✅ Fully Implemented Features
+
+1. **Git Repository State Management**:
+   - Branch creation and management
+   - State checking for uncommitted changes
+   - Hash-based state tracking
+   - Commit management
+   
+2. **Goal Decomposition Agent**:
+   - Recursive decomposition of complex goals
+   - OODA loop implementation
+   - Repository state exploration
+   - Selective context passing
+   - Executable task identification
+
+3. **Task Execution Agent**:
+   - Smart agent that can understand and execute tasks
+   - Multiple tool support (file editing, searching, command execution)
+   - Git branch and commit management
+   - Error handling and recovery
+   
+4. **Goal Validation Agent**:
+   - Intelligent validation of task results
+   - Evidence collection using repository tools
+   - File existence and content verification
+   - Test execution verification
+   - Detailed validation reporting
+
+### 🔄 In Progress Features
+
+1. **Orchestration System**:
+   - Full integration of all agent components
+   - End-to-end workflow management
+   - Complex multi-step task handling
+   
+2. **Human Supervision System**:
+   - Interactive mode with approval steps
+   - Progress visualization
+   - Command inspection and modification
+
+### 📋 Planned Features
+
+1. **Failure Analysis Agent**:
+   - Advanced diagnostics for failed executions
+   - Root cause identification
+   - Improvement suggestions
+
+2. **Progress Summarization**:
+   - Concise summaries of execution steps
+   - Context management across multiple steps
+   - Key decision tracking
 
 ## Quick Start
 
@@ -29,6 +94,51 @@ python check_env.py
 python -m pytest tests/
 ```
 
+## Using the System
+
+### Running the Full Flow Test
+
+The full flow test demonstrates the end-to-end process from goal decomposition to execution and validation:
+
+```bash
+python examples/test_deep_flow.py <repository_path> "<goal_description>"
+```
+
+Example:
+```bash
+python examples/test_deep_flow.py test-repo "Create a task management system with basic functionality for adding, listing, and completing tasks"
+```
+
+This will:
+1. Recursively decompose the goal into manageable subgoals
+2. Execute the most concrete subgoal using the TaskExecutor
+3. Validate the execution using the GoalValidator
+
+### Running Only the Recursive Decomposition
+
+If you only want to see the goal decomposition without execution:
+
+```bash
+python run_recursive_decomposition.py <repository_path> "<goal_description>"
+```
+
+This will show the recursive decomposition process and output a hierarchical log of the decomposed goals.
+
+### Creating a Test Repository
+
+For testing, you can use the provided test repository or create a new one:
+
+```bash
+# Create a new test repository
+mkdir test-repo
+cd test-repo
+git init
+echo "# Test Repository" > README.md
+git add README.md
+git commit -m "Initial commit"
+cd ..
+```
+
 ## Development Setup
 
 The project requires a Python virtual environment and certain environment variables to be set up. The setup script (`setup.sh`) handles most of this automatically, but here's what it does:
@@ -38,36 +148,20 @@ The project requires a Python virtual environment and certain environment variab
 3. Installs the package in development mode
 4. Creates an environment check script
 
-### Environment Checks
+### Environment Variables
 
-The project includes strict environment checks to ensure proper setup. These checks verify:
-- Virtual environment is active
-- Package is installed correctly
-- Required environment variables are set
-- Project structure is correct
-- Git repository is initialized
+Create a `.env` file in the project root with the following variables:
 
-Run the environment check:
-```bash
-python check_env.py
+```
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4-1106-preview
 ```
 
-#### Force Running (Not Recommended)
-
-If you need to run tests or scripts outside the intended environment, you can use force flags:
-
+You can copy the example file and modify it:
 ```bash
-# Force run despite environment issues
-python check_env.py --force
-
-# Skip specific checks
-python check_env.py --skip venv,package,api_key
-
-# Run demo with validation skipped
-python simple_test.py --no-validation
+cp .env.example .env
+# Edit .env with your API keys
 ```
-
-⚠️ **Warning**: Using force flags or skipping checks is not recommended and may lead to unexpected behavior.
 
 ### Manual Setup
 
@@ -84,12 +178,6 @@ source .venv/bin/activate  # On Unix/macOS
 2. Install the package in development mode:
 ```bash
 python setup_dev.py
-```
-
-3. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your API keys
 ```
 
 ## Running Tests
@@ -111,73 +199,42 @@ python check_env.py
 python -m pytest tests/
 ```
 
-## Troubleshooting
+## System Architecture
 
-If you encounter import errors or other issues:
+The system consists of specialized agents, each with a distinct role:
 
-1. Make sure you're in the virtual environment:
-```bash
-source .venv/bin/activate
-```
+### 1. GoalDecomposer (Strategic Planning)
+- Breaks complex goals into manageable subgoals
+- Focuses on the single most important next step
+- Recursively decomposes until reaching executable tasks
 
-2. Verify the package is installed:
-```bash
-python check_env.py
-```
+### 2. TaskExecutor (Implementation)
+- Implements directly executable tasks 
+- Uses multiple tools (file editing, search, commands)
+- Creates git checkpoints with appropriate commits
 
-3. If issues persist, try reinstalling:
-```bash
-python setup_dev.py
-```
+### 3. GoalValidator (Verification)
+- Evaluates whether a subgoal has been successfully achieved
+- Tests against specific success criteria
+- Provides detailed validation reports
 
-## Features
+## Workflow
 
-- Goal decomposition and planning
-- Git-based state management
-- Task execution with validation
-- Human-in-the-loop supervision
-- Detailed operation logging
+The typical workflow is:
 
-## Development Workflow
+1. **Planning Phase**:
+   - GoalDecomposer analyzes the problem using the OODA loop
+   - Determines the single most promising next step
+   - Recursively decomposes until reaching an executable task
 
-1. Create a new branch for your feature:
-```bash
-git checkout -b feature/your-feature
-```
+2. **Execution Phase**:
+   - TaskExecutor implements the executable task
+   - Creates a detailed trace of its actions
 
-2. Make your changes and run tests:
-```bash
-pytest
-```
-
-3. Commit your changes:
-```bash
-git add .
-git commit -m "Your commit message"
-```
-
-4. Push to your fork and create a pull request
-
-## Test Repository Management
-
-The system uses git repositories for testing. You can:
-
-1. Create a new test repository:
-```bash
-python examples/setup_test_repo.py --path ~/my-test-repo
-```
-
-2. Test git operations:
-```bash
-python examples/test_repo_operations.py ~/my-test-repo --state
-python examples/test_repo_operations.py ~/my-test-repo --branch feature/new-feature
-```
-
-3. Clean up test repositories:
-```bash
-# Remove the test repository
-rm -rf ~/my-test-repo
-```
+3. **Validation Phase**:
+   - GoalValidator assesses if the task was achieved
+   - If successful, system returns to Planning Phase with the new state
+   - If unsuccessful, system retries or provides error information
 
 ## Project Structure
 
@@ -189,18 +246,22 @@ midpoint/
 │       └── agents/       # Agent implementations
 │           ├── __init__.py
 │           ├── goal_decomposer.py  # Goal decomposition agent
+│           ├── task_executor.py    # Task execution agent
+│           ├── goal_validator.py   # Result validation agent
 │           ├── models.py          # Shared data models
 │           ├── tools.py           # Git and utility functions
 │           └── config.py          # Configuration management
 ├── examples/              # Example scripts and tests
+│   ├── test_deep_flow.py  # End-to-end test
 │   ├── setup_test_repo.py # Test repository setup
 │   └── verify_setup.py    # Setup verification
 ├── tests/                 # Test suite
 │   ├── test_goal_decomposer.py
+│   ├── test_task_executor.py
 │   └── test_repo_context.py
 └── docs/                  # Documentation
-    ├── FEATURES.md
-    └── VISION.md
+    ├── FEATURES.md        # Feature implementation status
+    └── VISION.md          # System vision and architecture
 ```
 
 ## Contributing
