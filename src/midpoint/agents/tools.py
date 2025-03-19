@@ -6,8 +6,9 @@ import os
 import asyncio
 import random
 import string
+import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 async def check_repo_state(repo_path: str) -> Dict[str, bool]:
     """Check the current state of the repository."""
@@ -194,6 +195,149 @@ async def checkout_branch(repo_path: str, branch_name: str) -> None:
 
 async def track_points(operation: str, points: int) -> None:
     """Track points consumed by an operation."""
-    # In a real implementation, this would store points in a database
-    # or other persistent storage. For now, we just print it.
-    print(f"Points consumed by {operation}: {points}") 
+    # In the future, this will be connected to a tracking system
+    # For now, just print the points consumption
+    print(f"Points consumed: {points} for operation: {operation}")
+
+# Repository exploration tools
+async def list_directory(repo_path: str, directory: str = ".") -> Dict[str, List[str]]:
+    """
+    List the contents of a directory in the repository.
+    
+    Args:
+        repo_path: Path to the git repository
+        directory: Directory to list within the repository
+        
+    Returns:
+        Dictionary with 'files' and 'directories' keys
+    """
+    full_path = Path(repo_path) / directory
+    
+    if not full_path.exists():
+        raise ValueError(f"Directory does not exist: {full_path}")
+        
+    result = {
+        "files": [],
+        "directories": []
+    }
+    
+    for item in full_path.iterdir():
+        if item.is_file():
+            result["files"].append(item.name)
+        elif item.is_dir() and item.name != ".git":
+            result["directories"].append(item.name)
+            
+    return result
+
+async def read_file(repo_path: str, file_path: str, start_line: int = 0, max_lines: int = 100) -> str:
+    """
+    Read the contents of a file in the repository.
+    
+    Args:
+        repo_path: Path to the git repository
+        file_path: Path to the file within the repository
+        start_line: First line to read (0-indexed)
+        max_lines: Maximum number of lines to read
+        
+    Returns:
+        Contents of the file as a string
+    """
+    full_path = Path(repo_path) / file_path
+    
+    if not full_path.exists():
+        raise ValueError(f"File does not exist: {full_path}")
+        
+    with open(full_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        
+    # Calculate end line, ensuring we don't go past the end of the file
+    end_line = min(start_line + max_lines, len(lines))
+    
+    # Get the requested lines
+    content = "".join(lines[start_line:end_line])
+    
+    # Add line count information
+    total_lines = len(lines)
+    result = f"File: {file_path} (Lines {start_line+1}-{end_line} of {total_lines})\n\n{content}"
+    
+    if end_line < total_lines:
+        result += f"\n\n[...{total_lines - end_line} more lines...]"
+        
+    return result
+
+async def search_code(repo_path: str, pattern: str, file_pattern: str = "*", max_results: int = 20) -> str:
+    """
+    Search the codebase for a pattern.
+    
+    Args:
+        repo_path: Path to the git repository
+        pattern: Regular expression pattern to search for
+        file_pattern: Pattern for files to include (e.g., "*.py")
+        max_results: Maximum number of results to return
+        
+    Returns:
+        Search results as a string
+    """
+    repo_path = Path(repo_path)
+    
+    # Use grep-like command for efficiency
+    try:
+        # Use different commands based on platform
+        if os.name == "nt":  # Windows
+            cmd = ["findstr", "/s", "/n", pattern]
+            if file_pattern != "*":
+                # Windows findstr doesn't support file patterns directly
+                # This is a simplification; in practice you might need more complex handling
+                pass
+        else:  # Unix-like
+            cmd = ["grep", "-r", "-n", pattern, "--include=" + file_pattern]
+            
+        result = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(repo_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await result.communicate()
+        
+        if result.returncode > 1:  # grep returns 1 if no matches, 0 if matches, >1 if error
+            raise RuntimeError(f"Search failed: {stderr.decode()}")
+            
+        output = stdout.decode()
+        lines = output.splitlines()
+        
+        # Truncate if too many results
+        if len(lines) > max_results:
+            return f"Found {len(lines)} matches. Showing first {max_results}:\n\n" + "\n".join(lines[:max_results])
+        elif len(lines) > 0:
+            return f"Found {len(lines)} matches:\n\n" + output
+        else:
+            return "No matches found."
+            
+    except Exception as e:
+        # Fallback to Python-based search if command-line tools fail
+        matches = []
+        count = 0
+        
+        for path in repo_path.rglob(file_pattern):
+            if path.is_file() and ".git" not in str(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for i, line in enumerate(f, 1):
+                            if re.search(pattern, line):
+                                rel_path = path.relative_to(repo_path)
+                                matches.append(f"{rel_path}:{i}: {line.strip()}")
+                                count += 1
+                                if count >= max_results:
+                                    break
+                except Exception:
+                    # Skip files that can't be read
+                    pass
+                    
+                if count >= max_results:
+                    break
+                    
+        if matches:
+            return f"Found {count} matches:\n\n" + "\n".join(matches)
+        else:
+            return "No matches found." 

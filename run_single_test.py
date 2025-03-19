@@ -1,9 +1,11 @@
 import pytest
-import asyncio
 import os
+import json
 
-# Set dummy OpenAI API key
-os.environ["OPENAI_API_KEY"] = "sk-" + "a" * 48
+# Load API key from config.json
+with open('config.json', 'r') as f:
+    config = json.load(f)
+    os.environ["OPENAI_API_KEY"] = config['openai']['api_key']
 
 if __name__ == "__main__":
-    asyncio.run(pytest.main(["-v", "tests/test_goal_decomposer.py::test_goal_decomposition_basic"])) 
+    pytest.main(["-v", "tests/test_goal_decomposer.py::test_goal_decomposition_basic"]) 

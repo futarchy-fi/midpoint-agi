@@ -4,7 +4,7 @@ Data models for the Midpoint system.
 This module defines the core data structures used throughout the system.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 @dataclass
@@ -12,6 +12,7 @@ class State:
     """Represents a specific state of the repository."""
     git_hash: str
     description: str
+    repository_path: Optional[str] = None
 
 @dataclass
 class Goal:
@@ -19,6 +20,14 @@ class Goal:
     description: str
     validation_criteria: List[str]
     success_threshold: float = 0.8
+
+@dataclass
+class SubgoalPlan:
+    """Represents the next step toward achieving a goal."""
+    next_step: str
+    validation_criteria: List[str]
+    reasoning: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class StrategyPlan:

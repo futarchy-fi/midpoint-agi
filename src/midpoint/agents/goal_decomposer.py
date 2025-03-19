@@ -1,19 +1,25 @@
 """
 Goal Decomposition agent implementation.
 
-This module implements the GoalDecomposer agent that breaks down complex goals
-into manageable subgoals and execution steps.
+This module implements the GoalDecomposer agent that determines the next step
+toward achieving a complex goal.
 """
 
 import os
-from typing import List, Dict, Any, Optional
+import json
+from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
-from midpoint.agents.models import State, Goal, StrategyPlan, TaskContext
-from midpoint.agents.tools import track_points
+from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
+from midpoint.agents.tools import (
+    list_directory,
+    read_file,
+    search_code,
+    track_points
+)
 from midpoint.agents.config import get_openai_api_key
 
 class GoalDecomposer:
-    """Agent responsible for decomposing complex goals into manageable steps."""
+    """Agent responsible for determining the next step toward a complex goal."""
     
     def __init__(self):
         """Initialize the GoalDecomposer agent."""
@@ -27,167 +33,292 @@ class GoalDecomposer:
         # Initialize OpenAI client
         self.client = AsyncOpenAI(api_key=api_key)
         
-        # Define the system prompt for goal decomposition
+        # Define the system prompt focusing on determining the next step
         self.system_prompt = """You are an expert software architect and project planner.
-Your task is to break down complex software development goals into clear, actionable steps.
-For each goal, you should:
-1. Analyze the requirements and validation criteria
-2. Break down the goal into logical subgoals
-3. Create a detailed execution plan with concrete steps
-4. Estimate the points needed for each step
-5. Ensure the plan is feasible within the given budget
+Your task is to determine the SINGLE NEXT STEP toward a complex software development goal.
+Follow the OODA loop: Observe, Orient, Decide, Act.
 
-Your output should be structured and include:
-- A clear strategy description
-- A list of concrete execution steps
-- Reasoning for the chosen approach
-- Point estimates for each step
-- Total points needed"""
+1. OBSERVE: Explore the repository to understand its current state. Use the available tools.
+2. ORIENT: Analyze how the current state relates to the final goal.
+3. DECIDE: Determine the most promising SINGLE NEXT STEP.
+4. OUTPUT: Provide a structured response with the next step and validation criteria.
 
-    async def decompose_goal(self, context: TaskContext) -> StrategyPlan:
+For complex goals, consider if the best next step is exploration, research, or a "study session" 
+rather than immediately jumping to implementation.
+
+You have access to these tools:
+- list_directory: List files and directories in the repository
+- read_file: Read the contents of a file
+- search_code: Search the codebase for patterns
+
+You MUST provide a structured response in JSON format with these fields:
+- next_step: A clear description of the single next step to take
+- validation_criteria: List of measurable criteria to validate this step's completion
+- reasoning: Explanation of why this is the most promising next action"""
+        
+        # Define tool schema for the OpenAI API
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List the contents of a directory in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "directory": {
+                                "type": "string",
+                                "description": "Directory to list within the repository",
+                                "default": "."
+                            }
+                        },
+                        "required": ["repo_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file within the repository"
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "First line to read (0-indexed)",
+                                "default": 0
+                            },
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to read",
+                                "default": 100
+                            }
+                        },
+                        "required": ["repo_path", "file_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code",
+                    "description": "Search the codebase for a pattern",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "pattern": {
+                                "type": "string",
+                                "description": "Regular expression pattern to search for"
+                            },
+                            "file_pattern": {
+                                "type": "string",
+                                "description": "Pattern for files to include (e.g., '*.py')",
+                                "default": "*"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 20
+                            }
+                        },
+                        "required": ["repo_path", "pattern"]
+                    }
+                }
+            }
+        ]
+
+    async def determine_next_step(self, context: TaskContext) -> SubgoalPlan:
         """
-        Decompose a goal into a strategy plan.
+        Determine the next step toward achieving the goal.
         
         Args:
             context: The current task context containing the goal and state
             
         Returns:
-            A StrategyPlan containing the decomposed steps and estimates
+            A SubgoalPlan containing the next step and validation criteria
             
         Raises:
             ValueError: If the goal or context is invalid
-            Exception: For other errors during decomposition
+            Exception: For other errors during execution
         """
         # Validate inputs
         if not context.goal:
             raise ValueError("No goal provided in context")
-        if context.total_budget <= 0:
-            raise ValueError("Invalid points budget")
+        if not context.state.repository_path:
+            raise ValueError("Repository path not provided in state")
             
-        # Track points for this operation
-        await track_points("goal_decomposition", 10)
-        
         # Prepare the user prompt
         user_prompt = self._create_user_prompt(context)
         
-        # Call OpenAI API
+        # Initialize messages
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        # Track an API call for determining the next step
+        await track_points("goal_decomposition", 10)
+        
+        # Track tool usage for metadata
+        tool_usage = []
+        
+        # Chat completion with tool use
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.7,
-                max_tokens=2000
-            )
+            final_output = None
             
-            # Parse the response
-            strategy = self._parse_response(response.choices[0].message.content)
+            # Loop until we get a final output
+            while final_output is None:
+                # Call OpenAI API
+                response = await self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    tools=self.tools,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    max_tokens=4000
+                )
+                
+                # Get the model's message
+                message = response.choices[0].message
+                
+                # Add the message to our conversation
+                messages.append({"role": "assistant", "content": message.content, "tool_calls": message.tool_calls})
+                
+                # Check if the model wants to use tools
+                if message.tool_calls:
+                    # Process each tool call
+                    for tool_call in message.tool_calls:
+                        # Get function details
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        
+                        # Track the tool usage
+                        tool_usage.append(f"{function_name}: {json.dumps(function_args)}")
+                        
+                        # Execute the appropriate function
+                        if function_name == "list_directory":
+                            result = await list_directory(**function_args)
+                            result_str = json.dumps(result, indent=2)
+                        elif function_name == "read_file":
+                            result_str = await read_file(**function_args)
+                        elif function_name == "search_code":
+                            result_str = await search_code(**function_args)
+                        else:
+                            result_str = f"Error: Unknown function {function_name}"
+                            
+                        # Add the function result to our messages
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": function_name,
+                            "content": result_str
+                        })
+                        
+                        # Track points for tool use
+                        await track_points("tool_use", 5)
+                else:
+                    # If no tool calls, check if we have a final output
+                    if message.content:
+                        try:
+                            # Attempt to parse the response as JSON
+                            content = message.content.strip()
+                            
+                            # Handle the case where the JSON is embedded in a code block
+                            if "```json" in content:
+                                parts = content.split("```json")
+                                if len(parts) > 1:
+                                    json_part = parts[1].split("```")[0].strip()
+                                    output_data = json.loads(json_part)
+                                else:
+                                    output_data = json.loads(content)
+                            elif "```" in content:
+                                parts = content.split("```")
+                                if len(parts) > 1:
+                                    json_part = parts[1].strip()
+                                    output_data = json.loads(json_part)
+                                else:
+                                    output_data = json.loads(content)
+                            else:
+                                output_data = json.loads(content)
+                                
+                            # Check if the output has the required fields
+                            if all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
+                                final_output = SubgoalPlan(
+                                    next_step=output_data["next_step"],
+                                    validation_criteria=output_data["validation_criteria"],
+                                    reasoning=output_data["reasoning"],
+                                    metadata={
+                                        "raw_response": message.content,
+                                        "tool_usage": tool_usage
+                                    }
+                                )
+                            else:
+                                # Ask for a properly formatted response
+                                messages.append({
+                                    "role": "user",
+                                    "content": "Please provide a valid JSON response with the fields: next_step, validation_criteria, and reasoning."
+                                })
+                        except json.JSONDecodeError:
+                            # If not valid JSON, ask for a properly formatted response
+                            messages.append({
+                                "role": "user",
+                                "content": "Please provide your response in valid JSON format with the fields: next_step, validation_criteria, and reasoning."
+                            })
             
-            # Validate the strategy
-            self._validate_strategy(strategy, context)
+            # Validate the subgoal plan
+            self._validate_subgoal(final_output, context)
             
-            return strategy
+            return final_output
             
         except Exception as e:
-            raise Exception(f"Error during goal decomposition: {str(e)}")
+            raise Exception(f"Error during next step determination: {str(e)}")
     
     def _create_user_prompt(self, context: TaskContext) -> str:
-        """Create the user prompt for the OpenAI API."""
+        """Create the user prompt for the agent."""
         return f"""Goal: {context.goal.description}
 
-Validation Criteria:
+Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
 
 Current State:
 - Git Hash: {context.state.git_hash}
 - Description: {context.state.description}
+- Repository Path: {context.state.repository_path}
 
 Context:
 - Iteration: {context.iteration}
-- Points Consumed: {context.points_consumed}
-- Total Budget: {context.total_budget}
+- Previous Steps: {len(context.execution_history) if context.execution_history else 0}
 
-Please provide a detailed strategy plan for achieving this goal."""
+Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
+Focus on providing a clear next step with measurable validation criteria.
+"""
     
-    def _parse_response(self, response: str) -> StrategyPlan:
-        """Parse the OpenAI API response into a StrategyPlan."""
-        # Split response into sections
-        sections = response.split("\n")
-        
-        # Initialize variables
-        strategy_desc = ""
-        steps = []
-        reasoning = ""
-        points = 0
-        
-        # Process each line
-        current_section = None
-        for line in sections:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Check for section headers
-            if line.lower().startswith("strategy:"):
-                current_section = "strategy"
-                strategy_desc = line  # Keep the full line including "Strategy:"
-            elif line.lower().startswith("steps:"):
-                current_section = "steps"
-            elif line.lower().startswith("reasoning:"):
-                current_section = "reasoning"
-                reasoning = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("points:"):
-                try:
-                    points = int(line.split(":", 1)[1].strip())
-                except ValueError:
-                    pass
-            # Process content based on current section
-            elif current_section == "steps" and line.startswith("-"):
-                steps.append(line.strip("- ").strip())
-            elif current_section == "reasoning" and not line.lower().startswith("points:"):
-                reasoning += " " + line
-                
-        return StrategyPlan(
-            steps=steps,
-            reasoning=reasoning.strip(),
-            estimated_points=points,
-            metadata={
-                "strategy_description": strategy_desc,
-                "raw_response": response
-            }
-        )
-    
-    def _validate_strategy(self, strategy: StrategyPlan, context: TaskContext) -> None:
-        """Validate the generated strategy."""
-        if not strategy.steps:
-            raise ValueError("Strategy has no steps")
+    def _validate_subgoal(self, subgoal: SubgoalPlan, context: TaskContext) -> None:
+        """Validate the generated subgoal plan."""
+        if not subgoal.next_step:
+            raise ValueError("Subgoal has no next step defined")
             
-        if not strategy.reasoning:
-            raise ValueError("Strategy has no reasoning")
+        if not subgoal.validation_criteria:
+            raise ValueError("Subgoal has no validation criteria")
             
-        if strategy.estimated_points <= 0:
-            raise ValueError("Invalid point estimate")
+        if not subgoal.reasoning:
+            raise ValueError("Subgoal has no reasoning")
             
-        if strategy.estimated_points > context.total_budget:
-            raise ValueError("Strategy exceeds available budget")
-            
-        # Skip validation criteria check for test contexts
-        if not context.goal or not context.goal.validation_criteria:
-            return
-            
-        # Verify all validation criteria are addressed
-        criteria_covered = set()
-        for step in strategy.steps:
-            step_lower = step.lower()
-            for criterion in context.goal.validation_criteria:
-                # Split criterion into words and check if any word matches
-                criterion_words = criterion.lower().split()
-                for word in criterion_words:
-                    if len(word) > 3 and word in step_lower:  # Only check words longer than 3 characters
-                        criteria_covered.add(criterion)
-                        break
-        
-        if len(criteria_covered) < len(context.goal.validation_criteria) * context.goal.success_threshold:
-            raise ValueError("Strategy does not cover enough validation criteria") 
+        # Additional validation can be added here 
