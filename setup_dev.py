@@ -3,6 +3,20 @@
 import os
 import subprocess
 import sys
+import json
+from pathlib import Path
+
+def get_existing_api_key():
+    """Check for existing API key in config file."""
+    config_path = Path.home() / ".midpoint" / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            return config.get('openai', {}).get('api_key')
+        except (json.JSONDecodeError, FileNotFoundError, KeyError):
+            pass
+    return None
 
 def main():
     """Set up the development environment."""
@@ -39,30 +53,36 @@ def main():
     if setup_test_repo.lower() == "y":
         subprocess.run([python_exe, "examples/setup_test_repo.py"])
         
-    # Ask about setting up OpenAI API key
-    setup_api_key = input("\nSet up OpenAI API key now? (y/n): ")
-    if setup_api_key.lower() == "y":
-        api_key = input("Enter your OpenAI API key: ")
-        
-        env_path = ".env"
-        if os.path.exists(env_path):
-            with open(env_path, "r") as f:
-                content = f.read()
+    # Check for existing API key
+    existing_key = get_existing_api_key()
+    if existing_key:
+        print("\nFound existing API key in config file. No need to set it up again.")
+    else:
+        # Ask about setting up OpenAI API key
+        setup_api_key = input("\nSet up OpenAI API key now? (y/n): ")
+        if setup_api_key.lower() == "y":
+            api_key = input("Enter your OpenAI API key: ")
             
-            if "OPENAI_API_KEY=" in content:
-                content = "\n".join([
-                    line if not line.startswith("OPENAI_API_KEY=") else f"OPENAI_API_KEY={api_key}"
-                    for line in content.split("\n")
-                ])
-            else:
-                content += f"\nOPENAI_API_KEY={api_key}\n"
-        else:
-            content = f"OPENAI_API_KEY={api_key}\n"
+            # Create config directory if it doesn't exist
+            config_dir = Path.home() / ".midpoint"
+            config_dir.mkdir(parents=True, exist_ok=True)
             
-        with open(env_path, "w") as f:
-            f.write(content)
+            # Create or update config file
+            config_path = config_dir / "config.json"
+            config = {}
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
             
-        print("API key saved to .env file.")
+            # Update API key
+            if 'openai' not in config:
+                config['openai'] = {}
+            config['openai']['api_key'] = api_key
+            
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            print("API key saved to config file.")
     
     print("\nDevelopment environment setup complete!")
     print("\nNext steps:")

@@ -9,22 +9,24 @@ import os
 from pathlib import Path
 import asyncio
 from unittest.mock import patch, MagicMock
-from agents.models import State, Goal, StrategyPlan, TaskContext
-from agents.goal_decomposer import GoalDecomposer
-from agents.tools import (
+from midpoint.agents.models import State, Goal, StrategyPlan, TaskContext
+from midpoint.agents.goal_decomposer import GoalDecomposer
+from midpoint.agents.tools import (
     check_repo_state, 
     create_branch, 
     create_commit,
     get_current_hash,
     track_points
 )
+from midpoint.agents.config import get_openai_api_key
 
 @pytest.fixture(autouse=True)
 def setup_test_env():
     """Set up test environment variables."""
     old_env = dict(os.environ)
-    # Use a valid-format test key
-    os.environ["OPENAI_API_KEY"] = "sk-" + "a" * 48
+    # Get API key from config if available, otherwise use test key
+    api_key = get_openai_api_key() or "sk-" + "a" * 48
+    os.environ["OPENAI_API_KEY"] = api_key
     yield
     os.environ.clear()
     os.environ.update(old_env)
@@ -403,7 +405,7 @@ async def test_points_tracking(goal_decomposer, sample_context):
     async def mock_track_points(operation: str, points: int):
         points_tracked.append((operation, points))
     
-    with patch("agents.tools.track_points", mock_track_points), \
+    with patch("midpoint.agents.tools.track_points", mock_track_points), \
          patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
