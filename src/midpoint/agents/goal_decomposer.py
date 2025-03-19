@@ -393,7 +393,7 @@ Focus on providing a clear next step with measurable validation criteria.
             execution_history=context.execution_history,
             # Pass relevant context from parent to child, keeping metadata structure
             metadata={
-                **context.metadata if hasattr(context, 'metadata') else {},
+                **(context.metadata if hasattr(context, 'metadata') else {}),
                 "parent_goal": context.goal.description,
                 "parent_context": subgoal.relevant_context
             }
