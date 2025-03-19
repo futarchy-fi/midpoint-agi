@@ -8,7 +8,7 @@ import shutil
 import os
 from pathlib import Path
 import asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from midpoint.agents.models import State, Goal, StrategyPlan, TaskContext
 from midpoint.agents.goal_decomposer import GoalDecomposer
 from midpoint.agents.tools import (
@@ -32,36 +32,39 @@ def setup_test_env():
     os.environ.update(old_env)
 
 @pytest.fixture
-def temp_repo():
+async def temp_repo():
     """Create a temporary git repository for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_path = Path(tmpdir)
         
         # Initialize git repo
-        asyncio.run(asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             "git", "init",
             cwd=repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
-        ))
+        )
+        await process.communicate()
         
         # Create a test file
         (repo_path / "test.txt").write_text("test")
         
         # Add and commit
-        asyncio.run(asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             "git", "add", "test.txt",
             cwd=repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
-        ))
+        )
+        await process.communicate()
         
-        asyncio.run(asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             "git", "commit", "-m", "Initial commit",
             cwd=repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
-        ))
+        )
+        await process.communicate()
         
         yield repo_path
         
@@ -91,11 +94,12 @@ def sample_goal():
     )
 
 @pytest.fixture
-def sample_context(temp_repo, sample_goal):
+async def sample_context(temp_repo, sample_goal):
     """Create a sample task context for testing."""
+    git_hash = await get_current_hash(str(temp_repo))
     return TaskContext(
         state=State(
-            git_hash=asyncio.run(get_current_hash(str(temp_repo))),
+            git_hash=git_hash,
             description="Initial state with test file"
         ),
         goal=sample_goal,
@@ -108,7 +112,7 @@ def sample_context(temp_repo, sample_goal):
 @pytest.mark.asyncio
 async def test_goal_decomposition_basic(goal_decomposer, sample_context):
     """Test basic goal decomposition functionality."""
-    with patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
 Steps:
@@ -139,7 +143,7 @@ async def test_goal_decomposition_with_state(goal_decomposer, temp_repo, sample_
     # Update context with new state
     sample_context.state.git_hash = await get_current_hash(str(temp_repo))
     
-    with patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
 Steps:
@@ -183,7 +187,7 @@ async def test_goal_decomposition_complex(goal_decomposer):
         execution_history=[]
     )
     
-    with patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
 Steps:
@@ -204,7 +208,7 @@ Points: 1000"""))]
 @pytest.mark.asyncio
 async def test_goal_decomposition_points_budget(goal_decomposer, sample_context):
     """Test points budget handling in goal decomposition."""
-    with patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         # Test with very low budget
         sample_context.total_budget = 100
         mock_create.return_value = MagicMock(
@@ -232,7 +236,7 @@ Points: 5000"""))]
 @pytest.mark.asyncio
 async def test_goal_decomposition_iteration_handling(goal_decomposer, sample_context):
     """Test handling of multiple iterations in goal decomposition."""
-    with patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         # First iteration
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
@@ -375,7 +379,7 @@ async def test_user_prompt_creation(goal_decomposer, sample_context):
 @pytest.mark.asyncio
 async def test_api_error_handling(goal_decomposer, sample_context):
     """Test handling of API errors."""
-    with patch.object(goal_decomposer.client.chat.completions, "create", side_effect=Exception("API Error")):
+    with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock, side_effect=Exception("API Error")):
         with pytest.raises(Exception, match="Error during goal decomposition: API Error"):
             await goal_decomposer.decompose_goal(sample_context)
 
@@ -406,7 +410,7 @@ async def test_points_tracking(goal_decomposer, sample_context):
         points_tracked.append((operation, points))
     
     with patch("midpoint.agents.tools.track_points", mock_track_points), \
-         patch.object(goal_decomposer.client.chat.completions, "create") as mock_create:
+         patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="""Strategy: Test
 Steps:
