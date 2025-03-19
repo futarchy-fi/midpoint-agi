@@ -18,7 +18,9 @@ from .tools import (
     search_code,
     edit_file,
     run_terminal_cmd,
-    validate_repository_state
+    validate_repository_state,
+    web_search,
+    web_scrape
 )
 
 class TaskExecutor:
@@ -40,6 +42,8 @@ Available tools:
 - create_commit: Create a git commit
 - run_terminal_cmd: Run a terminal command
 - edit_file: Edit the contents of a file
+- web_search: Search the web using DuckDuckGo's API
+- web_scrape: Scrape content from a webpage
 
 Always ensure the repository is in a clean state before and after execution.
 Create meaningful git commits for each successful execution step."""

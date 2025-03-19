@@ -12,7 +12,9 @@ from .tools import (
     read_file,
     search_code,
     run_terminal_cmd,
-    get_current_branch
+    get_current_branch,
+    web_search,
+    web_scrape
 )
 
 class GoalValidator:
@@ -31,6 +33,8 @@ Available tools:
 - read_file: Read contents of a file
 - search_code: Search for code patterns
 - run_terminal_cmd: Run a terminal command
+- web_search: Search the web using DuckDuckGo's API
+- web_scrape: Scrape content from a webpage
 
 Always validate against the specific criteria provided in the goal.
 Provide clear reasoning for your validation decisions."""
