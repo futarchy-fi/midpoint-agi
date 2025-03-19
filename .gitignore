@@ -48,4 +48,5 @@ coverage.xml
 
 # Project specific
 **/midpoint-test-repo/
-*.log 
+*.log
+test-repo/ 
