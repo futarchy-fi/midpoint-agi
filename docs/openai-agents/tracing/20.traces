@@ -1,0 +1,62 @@
+Traces
+
+Trace
+
+A trace is the root level object that tracing creates. It represents a logical "workflow".
+
+Source code in src/agents/tracing/traces.py
+trace_id abstractmethod property
+
+
+trace_id: str
+The trace ID.
+
+name abstractmethod property
+
+
+name: str
+The name of the workflow being traced.
+
+start abstractmethod
+
+
+start(mark_as_current: bool = False)
+Start the trace.
+
+Parameters:
+
+Name	Type	Description	Default
+mark_as_current	bool	If true, the trace will be marked as the current trace.	False
+Source code in src/agents/tracing/traces.py
+finish abstractmethod
+
+
+finish(reset_current: bool = False)
+Finish the trace.
+
+Parameters:
+
+Name	Type	Description	Default
+reset_current	bool	If true, the trace will be reset as the current trace.	False
+Source code in src/agents/tracing/traces.py
+export abstractmethod
+
+
+export() -> dict[str, Any] | None
+Export the trace as a dictionary.
+
+Source code in src/agents/tracing/traces.py
+NoOpTrace
+
+Bases: Trace
+
+A no-op trace that will not be recorded.
+
+Source code in src/agents/tracing/traces.py
+TraceImpl
+
+Bases: Trace
+
+A trace that will be recorded by the tracing library.
+
+Source code in src/agents/tracing/traces.py

@@ -1,0 +1,85 @@
+Processor interface
+
+TracingProcessor
+
+Bases: ABC
+
+Interface for processing spans.
+
+Source code in src/agents/tracing/processor_interface.py
+on_trace_start abstractmethod
+
+
+on_trace_start(trace: Trace) -> None
+Called when a trace is started.
+
+Parameters:
+
+Name	Type	Description	Default
+trace	Trace	The trace that started.	required
+Source code in src/agents/tracing/processor_interface.py
+on_trace_end abstractmethod
+
+
+on_trace_end(trace: Trace) -> None
+Called when a trace is finished.
+
+Parameters:
+
+Name	Type	Description	Default
+trace	Trace	The trace that started.	required
+Source code in src/agents/tracing/processor_interface.py
+on_span_start abstractmethod
+
+
+on_span_start(span: Span[Any]) -> None
+Called when a span is started.
+
+Parameters:
+
+Name	Type	Description	Default
+span	Span[Any]	The span that started.	required
+Source code in src/agents/tracing/processor_interface.py
+on_span_end abstractmethod
+
+
+on_span_end(span: Span[Any]) -> None
+Called when a span is finished. Should not block or raise exceptions.
+
+Parameters:
+
+Name	Type	Description	Default
+span	Span[Any]	The span that finished.	required
+Source code in src/agents/tracing/processor_interface.py
+shutdown abstractmethod
+
+
+shutdown() -> None
+Called when the application stops.
+
+Source code in src/agents/tracing/processor_interface.py
+force_flush abstractmethod
+
+
+force_flush() -> None
+Forces an immediate flush of all queued spans/traces.
+
+Source code in src/agents/tracing/processor_interface.py
+TracingExporter
+
+Bases: ABC
+
+Exports traces and spans. For example, could log them or send them to a backend.
+
+Source code in src/agents/tracing/processor_interface.py
+export abstractmethod
+
+
+export(items: list[Trace | Span[Any]]) -> None
+Exports a list of traces and spans.
+
+Parameters:
+
+Name	Type	Description	Default
+items	list[Trace | Span[Any]]	The items to export.	required
+Source code in src/agents/tracing/processor_interface.py

@@ -1,0 +1,129 @@
+Function schema
+
+FuncSchema dataclass
+
+Captures the schema for a python function, in preparation for sending it to an LLM as a tool.
+
+Source code in src/agents/function_schema.py
+name instance-attribute
+
+
+name: str
+The name of the function.
+
+description instance-attribute
+
+
+description: str | None
+The description of the function.
+
+params_pydantic_model instance-attribute
+
+
+params_pydantic_model: type[BaseModel]
+A Pydantic model that represents the function's parameters.
+
+params_json_schema instance-attribute
+
+
+params_json_schema: dict[str, Any]
+The JSON schema for the function's parameters, derived from the Pydantic model.
+
+signature instance-attribute
+
+
+signature: Signature
+The signature of the function.
+
+takes_context class-attribute instance-attribute
+
+
+takes_context: bool = False
+Whether the function takes a RunContextWrapper argument (must be the first argument).
+
+strict_json_schema class-attribute instance-attribute
+
+
+strict_json_schema: bool = True
+Whether the JSON schema is in strict mode. We strongly recommend setting this to True, as it increases the likelihood of correct JSON input.
+
+to_call_args
+
+
+to_call_args(
+    data: BaseModel,
+) -> tuple[list[Any], dict[str, Any]]
+Converts validated data from the Pydantic model into (args, kwargs), suitable for calling the original function.
+
+Source code in src/agents/function_schema.py
+FuncDocumentation dataclass
+
+Contains metadata about a python function, extracted from its docstring.
+
+Source code in src/agents/function_schema.py
+name instance-attribute
+
+
+name: str
+The name of the function, via __name__.
+
+description instance-attribute
+
+
+description: str | None
+The description of the function, derived from the docstring.
+
+param_descriptions instance-attribute
+
+
+param_descriptions: dict[str, str] | None
+The parameter descriptions of the function, derived from the docstring.
+
+generate_func_documentation
+
+
+generate_func_documentation(
+    func: Callable[..., Any],
+    style: DocstringStyle | None = None,
+) -> FuncDocumentation
+Extracts metadata from a function docstring, in preparation for sending it to an LLM as a tool.
+
+Parameters:
+
+Name	Type	Description	Default
+func	Callable[..., Any]	The function to extract documentation from.	required
+style	DocstringStyle | None	The style of the docstring to use for parsing. If not provided, we will attempt to auto-detect the style.	None
+Returns:
+
+Type	Description
+FuncDocumentation	A FuncDocumentation object containing the function's name, description, and parameter
+FuncDocumentation	descriptions.
+Source code in src/agents/function_schema.py
+function_schema
+
+
+function_schema(
+    func: Callable[..., Any],
+    docstring_style: DocstringStyle | None = None,
+    name_override: str | None = None,
+    description_override: str | None = None,
+    use_docstring_info: bool = True,
+    strict_json_schema: bool = True,
+) -> FuncSchema
+Given a python function, extracts a FuncSchema from it, capturing the name, description, parameter descriptions, and other metadata.
+
+Parameters:
+
+Name	Type	Description	Default
+func	Callable[..., Any]	The function to extract the schema from.	required
+docstring_style	DocstringStyle | None	The style of the docstring to use for parsing. If not provided, we will attempt to auto-detect the style.	None
+name_override	str | None	If provided, use this name instead of the function's __name__.	None
+description_override	str | None	If provided, use this description instead of the one derived from the docstring.	None
+use_docstring_info	bool	If True, uses the docstring to generate the description and parameter descriptions.	True
+strict_json_schema	bool	Whether the JSON schema is in strict mode. If True, we'll ensure that the schema adheres to the "strict" standard the OpenAI API expects. We strongly recommend setting this to True, as it increases the likelihood of the LLM providing correct JSON input.	True
+Returns:
+
+Type	Description
+FuncSchema	A FuncSchema object containing the function's name, description, parameter descriptions,
+FuncSchema	and other metadata.
+Source code in src/agents/function_schema.py
