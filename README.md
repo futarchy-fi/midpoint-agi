@@ -1,6 +1,134 @@
-# Midpoint AGI
+# Midpoint
 
-An advanced AI orchestration system for solving complex problems through iterative planning, execution, and validation.
+A tool for decomposing complex goals into manageable steps.
+
+## Quick Start
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd midpoint
+```
+
+2. Set up the development environment:
+```bash
+# Make the setup script executable
+chmod +x setup.sh
+
+# Run the setup script
+./setup.sh
+```
+
+3. Verify your environment:
+```bash
+python check_env.py
+```
+
+4. Run tests:
+```bash
+python -m pytest tests/
+```
+
+## Development Setup
+
+The project requires a Python virtual environment and certain environment variables to be set up. The setup script (`setup.sh`) handles most of this automatically, but here's what it does:
+
+1. Creates a virtual environment (`.venv`)
+2. Activates the virtual environment
+3. Installs the package in development mode
+4. Creates an environment check script
+
+### Environment Checks
+
+The project includes strict environment checks to ensure proper setup. These checks verify:
+- Virtual environment is active
+- Package is installed correctly
+- Required environment variables are set
+- Project structure is correct
+- Git repository is initialized
+
+Run the environment check:
+```bash
+python check_env.py
+```
+
+#### Force Running (Not Recommended)
+
+If you need to run tests or scripts outside the intended environment, you can use force flags:
+
+```bash
+# Force run despite environment issues
+python check_env.py --force
+
+# Skip specific checks
+python check_env.py --skip venv,package,api_key
+
+# Run demo with validation skipped
+python simple_test.py --no-validation
+```
+
+⚠️ **Warning**: Using force flags or skipping checks is not recommended and may lead to unexpected behavior.
+
+### Manual Setup
+
+If you prefer to set up manually:
+
+1. Create and activate virtual environment:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Unix/macOS
+# or
+.venv\Scripts\activate  # On Windows
+```
+
+2. Install the package in development mode:
+```bash
+python setup_dev.py
+```
+
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+## Running Tests
+
+Before running tests, ensure your environment is set up correctly:
+
+1. Activate the virtual environment:
+```bash
+source .venv/bin/activate
+```
+
+2. Run the environment check:
+```bash
+python check_env.py
+```
+
+3. Run the tests:
+```bash
+python -m pytest tests/
+```
+
+## Troubleshooting
+
+If you encounter import errors or other issues:
+
+1. Make sure you're in the virtual environment:
+```bash
+source .venv/bin/activate
+```
+
+2. Verify the package is installed:
+```bash
+python check_env.py
+```
+
+3. If issues persist, try reinstalling:
+```bash
+python setup_dev.py
+```
 
 ## Features
 
@@ -9,93 +137,6 @@ An advanced AI orchestration system for solving complex problems through iterati
 - Task execution with validation
 - Human-in-the-loop supervision
 - Detailed operation logging
-
-## Development Setup
-
-### Quick Setup
-
-For a guided setup experience, run:
-
-```bash
-python setup_dev.py
-```
-
-This script will:
-1. Create a virtual environment
-2. Install development dependencies
-3. Offer to set up a test repository
-4. Offer to configure your OpenAI API key
-
-### Manual Setup
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/midpoint.git
-cd midpoint
-```
-
-2. Create and activate a virtual environment:
-```bash
-python -m venv .venv
-# On macOS/Linux:
-source .venv/bin/activate
-# On Windows:
-.venv\Scripts\activate
-```
-
-3. Install development dependencies:
-```bash
-pip install -e ".[dev]"
-```
-
-4. Set up your environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your API keys and configuration
-```
-
-5. Create a test repository:
-```bash
-# Create in a custom location (recommended)
-python examples/setup_test_repo.py --path ~/my-test-repo
-
-# Or use the default location (~/midpoint-test-repo)
-python examples/setup_test_repo.py
-```
-
-6. Verify your setup:
-```bash
-python examples/verify_setup.py
-```
-
-## Testing the Goal Decomposer
-
-To test the GoalDecomposer agent:
-
-```bash
-# If using custom repository location
-MIDPOINT_TEST_REPO=~/my-test-repo python examples/test_goal_decomposer.py
-
-# Or with default location
-python examples/test_goal_decomposer.py
-```
-
-## Testing
-
-1. Run the test suite:
-```bash
-pytest
-```
-
-2. Run specific test files:
-```bash
-pytest tests/test_goal_decomposer.py
-```
-
-3. Run with coverage:
-```bash
-pytest --cov=src/midpoint
-```
 
 ## Development Workflow
 
@@ -161,19 +202,6 @@ midpoint/
     ├── FEATURES.md
     └── VISION.md
 ```
-
-## Troubleshooting
-
-If you encounter issues, run the verification script to diagnose problems:
-
-```bash
-python examples/verify_setup.py
-```
-
-Common issues:
-1. **Import errors**: Make sure you've installed the package with `pip install -e ".[dev]"`
-2. **OpenAI API key**: Ensure your API key is set in your `.env` file and loaded in the environment
-3. **Conflicting packages**: Check for any conflicting `agents` packages in your Python environment
 
 ## Contributing
 
