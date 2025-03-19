@@ -13,9 +13,9 @@ from pathlib import Path
 from midpoint.agents.models import State, Goal, TaskContext
 from midpoint.agents.tools import get_current_hash
 from custom_goal_decomposer import CustomGoalDecomposer
-from local_config import load_api_key_from_local_config, get_points_budget
+from local_config import load_api_key_from_local_config
 
-async def run_decomposer(goal_description, validation_criteria, budget=1000, quiet=False):
+async def run_decomposer(goal_description, validation_criteria, quiet=False):
     """Run the goal decomposer with custom parameters."""
     if not quiet:
         print("Midpoint GoalDecomposer\n")
@@ -66,8 +66,6 @@ async def run_decomposer(goal_description, validation_criteria, budget=1000, qui
         state=state,
         goal=goal,
         iteration=0,
-        points_consumed=0,
-        total_budget=budget,
         execution_history=[]
     )
     
@@ -79,7 +77,6 @@ async def run_decomposer(goal_description, validation_criteria, budget=1000, qui
             print(f"- {criterion}")
         print(f"Current State: {state.description}")
         print(f"Git Hash: {state.git_hash}")
-        print(f"Total Budget: {context.total_budget} points")
         print("\nDecomposing goal (this may take a moment)...")
     
     # Initialize the custom GoalDecomposer
@@ -98,7 +95,6 @@ async def run_decomposer(goal_description, validation_criteria, budget=1000, qui
                 print(f"{i}. {step}")
             
             print(f"\nReasoning: {strategy.reasoning}")
-            print(f"\nEstimated Points: {strategy.estimated_points}")
         
         return strategy
         
@@ -119,19 +115,12 @@ async def main():
                                  "API supports pagination and filtering of posts",
                                  "All endpoints are properly documented"],
                         help="Validation criteria (multiple values)")
-    parser.add_argument("--budget", "-b", type=int, default=None,
-                        help="Points budget (default: from config.json or 1000)")
     parser.add_argument("--quiet", "-q", action="store_true",
                         help="Suppress detailed output")
     
     args = parser.parse_args()
     
-    # If budget not specified, try to get from config
-    if args.budget is None:
-        points_budget = get_points_budget()
-        args.budget = points_budget.get("planning", 1000)
-    
-    await run_decomposer(args.goal, args.criteria, args.budget, args.quiet)
+    await run_decomposer(args.goal, args.criteria, args.quiet)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

@@ -21,7 +21,7 @@ class CustomGoalDecomposer(GoalDecomposer):
         Parse the OpenAI API response into a StrategyPlan.
         
         This enhanced version handles different response formats:
-        1. The simple format with "Strategy:", "Steps:", "Reasoning:", "Points:"
+        1. The simple format with "Strategy:", "Steps:", "Reasoning:"
         2. The detailed format with structured sections and numbered steps
         """
         # Check if response is in the simple format
@@ -39,7 +39,6 @@ class CustomGoalDecomposer(GoalDecomposer):
         strategy_desc = ""
         steps = []
         reasoning = ""
-        points = 0
         
         # Process each line
         current_section = None
@@ -57,21 +56,15 @@ class CustomGoalDecomposer(GoalDecomposer):
             elif line.lower().startswith("reasoning:"):
                 current_section = "reasoning"
                 reasoning = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("points:"):
-                try:
-                    points = int(line.split(":", 1)[1].strip())
-                except ValueError:
-                    pass
             # Process content based on current section
             elif current_section == "steps" and line.startswith("-"):
                 steps.append(line.strip("- ").strip())
-            elif current_section == "reasoning" and not line.lower().startswith("points:"):
+            elif current_section == "reasoning":
                 reasoning += " " + line
                 
         return StrategyPlan(
             steps=steps,
             reasoning=reasoning.strip(),
-            estimated_points=points,
             metadata={
                 "strategy_description": strategy_desc,
                 "raw_response": response
@@ -109,13 +102,6 @@ class CustomGoalDecomposer(GoalDecomposer):
                 # Use the longest paragraph that seems meaningful
                 if last_paragraphs:
                     reasoning = max(last_paragraphs, key=len)
-                    
-        # If we still have nothing, and there's a "Total Points Needed" section, use the text after that
-        if reasoning == "Not specified":
-            total_points_section = re.search(r"Total\s+Points.*?\n(.*?)(?=\n#+|\Z)", 
-                                          response, re.DOTALL | re.IGNORECASE)
-            if total_points_section:
-                reasoning = total_points_section.group(1).strip()
         
         # Extract steps - look for Step X: patterns
         steps = []
@@ -175,26 +161,9 @@ class CustomGoalDecomposer(GoalDecomposer):
         if not steps and strategy_match:
             steps = ["Implement " + strategy_match.group(1).strip()]
         
-        # Extract total points
-        total_points_match = re.search(r"(?:Total Points.*?|Grand Total.*?)(?:\s*:?\s*)(\d+)", 
-                                     response, re.IGNORECASE)
-        if total_points_match:
-            points = int(total_points_match.group(1))
-        else:
-            # Look for subtotals and sum them
-            subtotal_matches = list(re.finditer(r"Subtotal.*?:\s*(\d+)", response, re.IGNORECASE))
-            if subtotal_matches:
-                points = sum(int(match.group(1)) for match in subtotal_matches)
-            else:
-                # Try to find any point numbers in the text
-                point_numbers = re.finditer(r"Points:\s*(\d+)", response, re.IGNORECASE)
-                points_list = [int(match.group(1)) for match in point_numbers]
-                points = sum(points_list) if points_list else 500  # Default to 500 if nothing found
-        
         return StrategyPlan(
             steps=steps,
             reasoning=reasoning,
-            estimated_points=points,
             metadata={
                 "strategy_description": strategy_desc,
                 "raw_response": response
@@ -212,11 +181,4 @@ class CustomGoalDecomposer(GoalDecomposer):
             raise ValueError("Strategy has no steps")
             
         if not strategy.reasoning:
-            raise ValueError("Strategy has no reasoning")
-            
-        if strategy.estimated_points <= 0:
-            strategy.estimated_points = 500  # Default to a reasonable value
-            
-        if strategy.estimated_points > context.total_budget:
-            # Cap at the budget instead of failing
-            strategy.estimated_points = context.total_budget 
+            raise ValueError("Strategy has no reasoning") 

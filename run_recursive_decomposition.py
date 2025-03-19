@@ -60,8 +60,6 @@ async def main():
         ),
         goal=goal,
         iteration=0,
-        points_consumed=0,
-        total_budget=1000,
         execution_history=[]
     )
     

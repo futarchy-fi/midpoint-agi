@@ -7,15 +7,18 @@ import re
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
 from .goal_decomposer import validate_repository_state
 from .tools import (
+    check_repo_state,
+    create_branch,
+    create_commit,
     get_current_hash,
-    track_points,
+    get_current_branch,
+    checkout_branch,
     list_directory,
     read_file,
     search_code,
-    create_branch,
-    create_commit,
+    edit_file,
     run_terminal_cmd,
-    edit_file
+    validate_repository_state
 )
 
 class TaskExecutor:
@@ -64,13 +67,11 @@ Create meaningful git commits for each successful execution step."""
         
         # Initialize execution
         start_time = time.time()
-        points_consumed = 0
         branch_name = f"task-{context.iteration}"
         
         try:
             # Create a new branch for this execution
             await create_branch(context.state.repository_path, branch_name)
-            points_consumed += 5  # Points for branch creation
             
             # Execute the task using available tools
             task_lower = task.lower()
@@ -89,7 +90,6 @@ Create meaningful git commits for each successful execution step."""
                     task.split("search for ")[-1].split("find ")[-1].split()[0],
                     max_results=10
                 )
-                points_consumed += 10  # Points for code search
             
             # If we need to read files
             for file_path in files_to_check:
@@ -99,7 +99,6 @@ Create meaningful git commits for each successful execution step."""
                         file_path,
                         max_lines=100
                     )
-                    points_consumed += 5  # Points for reading file
                 except ValueError:
                     # File doesn't exist, might need to create it
                     pass
@@ -115,7 +114,6 @@ Create meaningful git commits for each successful execution step."""
                     command=f"mkdir -p {folder_name}",
                     cwd=context.state.repository_path
                 )
-                points_consumed += 5  # Points for folder creation
                 
             elif "create" in task_lower and "file" in task_lower:
                 # Extract file name and content
@@ -133,7 +131,6 @@ Create meaningful git commits for each successful execution step."""
                     content,
                     create_if_missing=True
                 )
-                points_consumed += 10  # Points for file creation
                 
             elif "edit" in task_lower or "modify" in task_lower:
                 file_name = files_to_check[0] if files_to_check else None
@@ -147,7 +144,6 @@ Create meaningful git commits for each successful execution step."""
                         file_name,
                         max_lines=1000
                     )
-                    points_consumed += 5  # Points for reading file
                 except ValueError as e:
                     raise ValueError(f"Cannot edit non-existent file: {file_name}")
                 
@@ -161,7 +157,6 @@ Create meaningful git commits for each successful execution step."""
                     new_content,
                     create_if_missing=False
                 )
-                points_consumed += 15  # Points for file modification
                 
             else:
                 # For more complex tasks, we might need to:
@@ -178,7 +173,6 @@ Create meaningful git commits for each successful execution step."""
                 context.state.repository_path,
                 f"Task execution completed: {task}"
             )
-            points_consumed += 5  # Points for commit
             
             # Calculate execution time
             execution_time = time.time() - start_time
@@ -188,8 +182,7 @@ Create meaningful git commits for each successful execution step."""
                 success=True,
                 branch_name=branch_name,
                 git_hash=final_hash,
-                execution_time=execution_time,
-                points_consumed=points_consumed
+                execution_time=execution_time
             )
             
             return result
@@ -211,6 +204,5 @@ Create meaningful git commits for each successful execution step."""
                 branch_name=branch_name,
                 git_hash=context.state.git_hash,  # Keep original hash on failure
                 error_message=str(e),
-                execution_time=execution_time,
-                points_consumed=points_consumed
+                execution_time=execution_time
             ) 
