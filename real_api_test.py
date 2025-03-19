@@ -12,15 +12,17 @@ import tempfile
 from pathlib import Path
 from midpoint.agents.models import State, Goal, TaskContext
 from midpoint.agents.goal_decomposer import GoalDecomposer
+from midpoint.agents.config import get_openai_api_key
+import pytest
+
+# Get API key from environment
+api_key = get_openai_api_key()
+if not api_key:
+    pytest.skip("OPENAI_API_KEY not set in environment")
 
 async def test_real_api():
     """Test the GoalDecomposer with the real OpenAI API."""
     print("Running real API test for GoalDecomposer\n")
-    
-    # Load API key from config.json
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-        os.environ["OPENAI_API_KEY"] = config['openai']['api_key']
     
     # Create a temporary repository for testing
     with tempfile.TemporaryDirectory() as tmpdir:

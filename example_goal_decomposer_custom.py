@@ -14,6 +14,7 @@ from pathlib import Path
 from midpoint.agents.models import State, Goal, TaskContext, StrategyPlan
 from midpoint.agents.goal_decomposer import GoalDecomposer
 from openai import AsyncOpenAI
+from midpoint.agents.config import get_openai_api_key
 
 # Override the API key with the one from config.json
 def load_api_key_from_config():
@@ -217,76 +218,51 @@ Points: Total estimated points (e.g., 500)"""
 
 async def main():
     """Run the example."""
-    print("GoalDecomposer Example with Custom Parser\n")
-    
-    # Load API key from config.json
-    success, api_key = load_api_key_from_config()
-    if not success:
-        print("Error: Could not find a valid API key in ~/.midpoint/config.json")
-        print("Please make sure your API key is set up correctly.")
+    # Get API key from environment
+    api_key = get_openai_api_key()
+    if not api_key:
+        print("Error: OPENAI_API_KEY not set in environment")
         return
-    
-    print(f"Found API key in config.json! Using it for the GoalDecomposer.")
-    print(f"API Key starts with: {api_key[:7]}...\n")
-    
-    # Create a simpler, more focused goal
-    goal = Goal(
-        description="Create a user authentication system for a web application",
-        validation_criteria=[
-            "Users can register with email and password",
-            "Users can login and logout",
-            "Password recovery functionality works",
-            "Authentication is secure and follows best practices"
-        ],
-        success_threshold=0.8
-    )
-    
-    # Create a sample state
+
+    # Create a test repository state
     state = State(
-        git_hash="abc123",  # Placeholder hash
-        description="Initial repository state with empty project"
+        repository_path=".",
+        current_branch="main",
+        current_hash="abc123"
     )
-    
-    # Create the task context
+
+    # Create a test goal
+    goal = Goal(
+        description="Add a new feature to calculate Fibonacci numbers",
+        validation_criteria=[
+            "New file fibonacci.py exists",
+            "File contains a function to calculate Fibonacci numbers",
+            "Function has proper documentation",
+            "Tests exist and pass"
+        ]
+    )
+
+    # Create task context
     context = TaskContext(
         state=state,
         goal=goal,
-        iteration=0,
-        points_consumed=0,
-        total_budget=500,
         execution_history=[]
     )
-    
-    # Print input information
-    print("Input:")
-    print(f"Goal: {goal.description}")
-    print("Validation Criteria:")
-    for criterion in goal.validation_criteria:
+
+    # Create and run the decomposer
+    decomposer = GoalDecomposer()
+    result = await decomposer.determine_next_step(context)
+
+    # Print the result
+    print("\nNext step plan:")
+    print(f"Description: {result.next_step}")
+    print("\nValidation criteria:")
+    for criterion in result.validation_criteria:
         print(f"- {criterion}")
-    print(f"Current State: {state.description}")
-    print(f"Total Budget: {context.total_budget} points")
-    
-    # Initialize the custom GoalDecomposer
-    decomposer = CustomGoalDecomposer()
-    
-    # Decompose the goal
-    try:
-        strategy = await decomposer.decompose_goal(context)
-        
-        # Print the results
-        print("\nParsed Output:")
-        print(f"Strategy: {strategy.metadata.get('strategy_description', 'Not specified')}")
-        print("\nSteps:")
-        for i, step in enumerate(strategy.steps, 1):
-            print(f"{i}. {step}")
-        
-        print(f"\nReasoning: {strategy.reasoning}")
-        print(f"\nEstimated Points: {strategy.estimated_points}")
-        
-        print("\nThis is an actual response from the OpenAI API!")
-        
-    except Exception as e:
-        print(f"Error: {str(e)}")
+    print(f"\nRequires further decomposition: {result.requires_further_decomposition}")
+    print("\nRelevant context:")
+    for key, value in result.relevant_context.items():
+        print(f"- {key}: {value}")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

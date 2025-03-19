@@ -389,4 +389,174 @@ async def validate_repository_state(repo_path: str, expected_hash: str) -> None:
     # Get current hash
     current_hash = await get_current_hash(repo_path)
     if current_hash != expected_hash:
-        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}") 
+        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}")
+
+async def tavily_search(query: str, max_results: int = 5) -> str:
+    """
+    Search the web using Tavily's API, which is optimized for AI agents.
+    
+    Args:
+        query: The search query
+        max_results: Maximum number of results to return
+        
+    Returns:
+        Search results as a formatted string
+    """
+    from tavily import TavilyClient
+    import os
+    
+    # Get API key from environment
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return "Error: TAVILY_API_KEY environment variable not set"
+        
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(query=query, max_results=max_results)
+        
+        # Format the results
+        results = []
+        
+        # Add results
+        for result in response.get("results", []):
+            title = result.get("title", "")
+            content = result.get("content", "")
+            url = result.get("url", "")
+            
+            if title and content:
+                results.append(f"Title: {title}\nContent: {content}\nURL: {url}\n")
+        
+        if results:
+            return "\n".join(results)
+        else:
+            return "No results found."
+            
+    except Exception as e:
+        return f"Error performing Tavily search: {str(e)}"
+
+async def web_search(query: str, max_results: int = 5) -> str:
+    """
+    Search the web using both DuckDuckGo and Tavily APIs for comprehensive results.
+    Falls back to DuckDuckGo if Tavily is not available or API key is not set.
+    
+    Args:
+        query: The search query
+        max_results: Maximum number of results to return
+        
+    Returns:
+        Combined search results as a formatted string
+    """
+    # Get results from DuckDuckGo first
+    duck_results = await duckduckgo_search(query, max_results)
+    
+    # Try to get Tavily results if available
+    try:
+        tavily_results = await tavily_search(query, max_results)
+    except Exception:
+        tavily_results = None
+    
+    # Combine results
+    combined_results = []
+    
+    if duck_results and duck_results != "No results found.":
+        combined_results.append("=== DuckDuckGo Results ===\n" + duck_results)
+    
+    if tavily_results and tavily_results != "No results found." and "Error:" not in tavily_results:
+        combined_results.append("\n=== Tavily Results ===\n" + tavily_results)
+    
+    if combined_results:
+        return "\n".join(combined_results)
+    else:
+        return "No results found from either source."
+
+async def duckduckgo_search(query: str, max_results: int = 5) -> str:
+    """
+    Search the web using DuckDuckGo's API.
+    
+    Args:
+        query: The search query
+        max_results: Maximum number of results to return
+        
+    Returns:
+        Search results as a formatted string
+    """
+    import aiohttp
+    import json
+    
+    # DuckDuckGo API endpoint
+    url = "https://api.duckduckgo.com/"
+    
+    params = {
+        "q": query,
+        "format": "json",
+        "no_html": 1,
+        "skip_disambig": 1
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as response:
+                if response.status != 200:
+                    return f"Error: Search failed with status {response.status}"
+                    
+                data = await response.json()
+                
+                # Format the results
+                results = []
+                
+                # Add abstract if available
+                if data.get("Abstract"):
+                    results.append(f"Abstract: {data['Abstract']}")
+                
+                # Add related topics
+                if data.get("RelatedTopics"):
+                    for topic in data["RelatedTopics"][:max_results]:
+                        if "Text" in topic:
+                            results.append(f"- {topic['Text']}")
+                
+                if results:
+                    return "\n\n".join(results)
+                else:
+                    return "No results found."
+                    
+    except Exception as e:
+        return f"Error performing DuckDuckGo search: {str(e)}"
+
+async def web_scrape(url: str) -> str:
+    """
+    Scrape content from a webpage.
+    
+    Args:
+        url: The URL to scrape
+        
+    Returns:
+        Scraped content as a string
+    """
+    import aiohttp
+    from bs4 import BeautifulSoup
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return f"Error: Failed to fetch URL with status {response.status}"
+                    
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Remove script and style elements
+                for script in soup(["script", "style"]):
+                    script.decompose()
+                
+                # Get text content
+                text = soup.get_text()
+                
+                # Clean up whitespace
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                text = '\n'.join(chunk for chunk in chunks if chunk)
+                
+                return text
+                
+    except Exception as e:
+        return f"Error scraping webpage: {str(e)}" 

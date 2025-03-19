@@ -1,11 +1,19 @@
-import pytest
-import os
-import json
+#!/usr/bin/env python3
+"""Run a single test with the current configuration."""
 
-# Load API key from config.json
-with open('config.json', 'r') as f:
-    config = json.load(f)
-    os.environ["OPENAI_API_KEY"] = config['openai']['api_key']
+import os
+import sys
+from midpoint.agents.config import get_openai_api_key
+
+def main():
+    """Main function."""
+    api_key = get_openai_api_key()
+    if not api_key:
+        print("Error: OPENAI_API_KEY not set in environment")
+        sys.exit(1)
+        
+    # Run the test
+    os.system("python -m pytest " + " ".join(sys.argv[1:]))
 
 if __name__ == "__main__":
-    pytest.main(["-v", "tests/test_goal_decomposer.py::test_goal_decomposition_basic"]) 
+    main() 

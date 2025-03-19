@@ -127,7 +127,7 @@ You MUST provide a structured response in JSON format with these fields:
                 "type": "function",
                 "function": {
                     "name": "search_code",
-                    "description": "Search the codebase for a pattern",
+                    "description": "Search the codebase for patterns",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -151,6 +151,45 @@ You MUST provide a structured response in JSON format with these fields:
                             }
                         },
                         "required": ["repo_path", "pattern"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search the web using DuckDuckGo's API",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 5
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_scrape",
+                    "description": "Scrape content from a webpage",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "The URL to scrape"
+                            }
+                        },
+                        "required": ["url"]
                     }
                 }
             }
@@ -229,6 +268,10 @@ You MUST provide a structured response in JSON format with these fields:
                             result_str = await read_file(**function_args)
                         elif function_name == "search_code":
                             result_str = await search_code(**function_args)
+                        elif function_name == "web_search":
+                            result_str = await web_search(**function_args)
+                        elif function_name == "web_scrape":
+                            result_str = await web_scrape(**function_args)
                         else:
                             result_str = f"Error: Unknown function {function_name}"
                             

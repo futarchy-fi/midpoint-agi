@@ -8,29 +8,18 @@ from pathlib import Path
 from typing import Optional
 
 def get_openai_api_key() -> Optional[str]:
-    """Get the OpenAI API key from environment variables or config file."""
-    # First check environment variable
+    """Get the OpenAI API key from environment variables."""
+    # Check environment variable
     api_key = os.getenv("OPENAI_API_KEY")
     if api_key:
         if not api_key.startswith("sk-"):
             raise ValueError("Invalid OpenAI API key format")
         return api_key
-        
-    # Then check config file
-    config_path = Path.home() / ".midpoint" / "config.json"
-    if config_path.exists():
-        try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            api_key = config.get('openai', {}).get('api_key')
-            if api_key:
-                if not api_key.startswith("sk-"):
-                    raise ValueError("Invalid OpenAI API key format")
-                return api_key
-        except (json.JSONDecodeError, FileNotFoundError, KeyError):
-            pass
-            
     return None
+
+def get_tavily_api_key() -> Optional[str]:
+    """Get the Tavily API key from environment variables."""
+    return os.getenv("TAVILY_API_KEY")
 
 def get_model_name() -> str:
     """Get the OpenAI model name to use."""
