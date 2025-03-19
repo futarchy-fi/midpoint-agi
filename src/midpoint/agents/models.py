@@ -36,7 +36,6 @@ class StrategyPlan:
     """Represents a plan for achieving a goal."""
     steps: List[str]
     reasoning: str
-    estimated_points: int
     metadata: Dict[str, Any]
 
 @dataclass
@@ -45,9 +44,8 @@ class TaskContext:
     state: State
     goal: Goal
     iteration: int
-    points_consumed: int
-    total_budget: int
     execution_history: List[Dict[str, Any]]
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Metadata for tracking decomposition context
 
 @dataclass
 class ExecutionTrace:
@@ -55,7 +53,6 @@ class ExecutionTrace:
     task_description: str
     actions_performed: List[Dict[str, Any]]  # List of actions with their details
     tool_calls: List[Dict[str, Any]]  # List of tool calls with their details
-    points_consumed: int
     resulting_state: State  # The state after execution
     execution_time: float  # Time taken to execute the task
     success: bool  # Whether the execution was successful
@@ -70,7 +67,7 @@ class ExecutionResult:
     git_hash: str  # The git hash after execution
     error_message: Optional[str] = None  # Error message if execution failed
     execution_time: float = 0.0  # Time taken to execute the task
-    points_consumed: int = 0  # Points consumed during execution
+    repository_path: Optional[str] = None  # Path to the repository
 
 @dataclass
 class ValidationResult:

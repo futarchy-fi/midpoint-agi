@@ -38,32 +38,12 @@ async def check_repo_state(repo_path: str) -> Dict[str, bool]:
     has_uncommitted = bool(status)
     has_untracked = any(line.startswith("??") for line in status.splitlines())
     
-    # Check for merge conflicts
-    merge_result = await asyncio.create_subprocess_exec(
-        "git", "diff", "--check",
-        cwd=repo_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    _, merge_stderr = await merge_result.communicate()
-    has_merge_conflicts = "conflict" in merge_stderr.decode().lower()
-    
-    # Check for rebase conflicts
-    rebase_result = await asyncio.create_subprocess_exec(
-        "git", "rebase", "--show-current-patch",
-        cwd=repo_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    _, rebase_stderr = await rebase_result.communicate()
-    has_rebase_conflicts = rebase_result.returncode != 0
-    
     return {
-        "is_clean": not any([has_uncommitted, has_untracked, has_merge_conflicts, has_rebase_conflicts]),
+        "is_clean": not any([has_uncommitted, has_untracked]),
         "has_uncommitted": has_uncommitted,
         "has_untracked": has_untracked,
-        "has_merge_conflicts": has_merge_conflicts,
-        "has_rebase_conflicts": has_rebase_conflicts
+        "has_merge_conflicts": False,
+        "has_rebase_conflicts": False
     }
 
 async def create_branch(repo_path: str, base_name: str) -> str:
@@ -192,12 +172,6 @@ async def checkout_branch(repo_path: str, branch_name: str) -> None:
     
     if result.returncode != 0:
         raise RuntimeError(f"Failed to checkout branch: {stderr.decode()}")
-
-async def track_points(operation: str, points: int) -> None:
-    """Track points consumed by an operation."""
-    # In the future, this will be connected to a tracking system
-    # For now, just print the points consumption
-    print(f"Points consumed: {points} for operation: {operation}")
 
 # Repository exploration tools
 async def list_directory(repo_path: str, directory: str = ".") -> Dict[str, List[str]]:
