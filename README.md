@@ -31,24 +31,19 @@ The system follows these key principles:
    - Executable task identification
 
 3. **Task Execution Agent**:
-   - Smart agent that can understand and execute tasks
+   - LLM-driven task execution
    - Multiple tool support (file editing, searching, command execution)
    - Git branch and commit management
+   - Comprehensive logging and debugging
    - Error handling and recovery
-   
-4. **Goal Validation Agent**:
-   - Intelligent validation of task results
-   - Evidence collection using repository tools
-   - File existence and content verification
-   - Test execution verification
-   - Detailed validation reporting
 
 ### 🔄 In Progress Features
 
 1. **Orchestration System**:
-   - Full integration of all agent components
-   - End-to-end workflow management
-   - Complex multi-step task handling
+   - Integration of GoalDecomposer and TaskExecutor
+   - Iterative execution with state feedback
+   - Sequential subgoal implementation
+   - Task dependency management
    
 2. **Human Supervision System**:
    - Interactive mode with approval steps
@@ -210,13 +205,21 @@ The system consists of specialized agents, each with a distinct role:
 
 ### 2. TaskExecutor (Implementation)
 - Implements directly executable tasks 
-- Uses multiple tools (file editing, search, commands)
+- Uses LLM-driven decision making
+- Leverages multiple tools (file editing, search, commands)
 - Creates git checkpoints with appropriate commits
+- Provides detailed logging of all operations
 
 ### 3. GoalValidator (Verification)
 - Evaluates whether a subgoal has been successfully achieved
 - Tests against specific success criteria
 - Provides detailed validation reports
+
+### 4. Orchestrator (Coordination)
+- Coordinates the workflow between agents
+- Manages the state transitions between decomposition and execution
+- Tracks overall progress toward the high-level goal
+- Handles error recovery and retries
 
 ## Workflow
 
@@ -229,12 +232,18 @@ The typical workflow is:
 
 2. **Execution Phase**:
    - TaskExecutor implements the executable task
-   - Creates a detailed trace of its actions
+   - Creates branch for isolated execution
+   - Uses LLM-driven decision making to implement changes
+   - Commits changes when complete
 
 3. **Validation Phase**:
    - GoalValidator assesses if the task was achieved
-   - If successful, system returns to Planning Phase with the new state
-   - If unsuccessful, system retries or provides error information
+   - Provides detailed validation report
+
+4. **Orchestration Loop**:
+   - If task was successful, returns to Planning Phase with the new state
+   - Continues until the high-level goal is achieved
+   - Handles failures through retries or alternative approaches
 
 ## Project Structure
 

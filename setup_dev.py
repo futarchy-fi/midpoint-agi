@@ -50,14 +50,52 @@ def main():
     
     # Check for existing test repository
     test_repo_path = Path("test-repo")
+    
+    # Check if the test repository already exists
     if test_repo_path.exists() and (test_repo_path / ".git").exists():
         print("\nTest repository already exists at test-repo/. No need to create it again.")
-    else:
-        # Ask about creating test repo
-        setup_test_repo = input("\nCreate test repository now? (y/n): ")
-        if setup_test_repo.lower() == "y":
-            subprocess.run([python_exe, "examples/setup_test_repo.py"])
         
+        # Option to recreate the test repo if needed
+        answer = input("Would you like to recreate the test repository? (y/n): ")
+        if answer.lower() == "y":
+            subprocess.run(["rm", "-rf", "test-repo"], check=True)
+            print("Removed existing test repository.")
+            return
+    
+    print("\nCreating test repository for development...")
+    
+    # Create test repository directory
+    test_repo_path.mkdir(exist_ok=True)
+    
+    # Initialize git repository
+    subprocess.run(["git", "init"], cwd=test_repo_path, check=True)
+    
+    # Create README file
+    with open(test_repo_path / "README.md", "w") as f:
+        f.write("# Test Repo\n")
+    
+    # Create hello.py with a simple function
+    with open(test_repo_path / "hello.py", "w") as f:
+        f.write("def hello_world():\n")
+        f.write("    return 'Hello, World!'\n")
+    
+    # Create .gitignore file
+    with open(test_repo_path / ".gitignore", "w") as f:
+        f.write("# Logs\n")
+        f.write("*.log\n")
+        f.write("# Temporary files\n")
+        f.write("*.tmp\n")
+    
+    # Set git config for the test repo
+    subprocess.run(["git", "config", "user.name", "Example User"], cwd=test_repo_path, check=True)
+    subprocess.run(["git", "config", "user.email", "example@example.com"], cwd=test_repo_path, check=True)
+    
+    # Add and commit files
+    subprocess.run(["git", "add", "."], cwd=test_repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit: Add hello world function"], cwd=test_repo_path, check=True)
+    
+    print("Test repository created successfully!")
+    
     # Check for existing API key
     existing_key = get_existing_api_key()
     if existing_key:

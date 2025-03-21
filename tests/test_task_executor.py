@@ -3,7 +3,7 @@ import pytest_asyncio
 from pathlib import Path
 import os
 
-from midpoint.agents.models import State, Goal, TaskContext, ExecutionTrace
+from midpoint.agents.models import State, Goal, TaskContext, ExecutionResult
 from midpoint.agents.task_executor import TaskExecutor
 from midpoint.agents.tools import get_current_hash
 
@@ -41,9 +41,8 @@ async def sample_context(temp_repo):
             success_threshold=0.8
         ),
         iteration=0,
-        points_consumed=0,
-        total_budget=1000,
-        execution_history=[]
+        execution_history=[],
+        metadata={}
     )
 
 @pytest_asyncio.fixture
@@ -58,18 +57,22 @@ async def test_execute_task_success(task_executor, sample_context):
     task = "Update test.txt with new content"
     
     # Execute the task
-    trace = await task_executor.execute_task(sample_context, task)
+    result = await task_executor.execute_task(sample_context, task)
     
-    # Verify the execution trace
-    assert isinstance(trace, ExecutionTrace)
-    assert trace.task_description == task
-    assert trace.success
-    assert trace.execution_time > 0
-    assert trace.points_consumed >= 0
+    # Verify the execution result
+    assert isinstance(result, ExecutionResult)
+    assert result.success
+    assert result.execution_time > 0
+    assert result.branch_name.startswith("task-0-")
+    assert result.repository_path == sample_context.state.repository_path
     
-    # Verify the repository state
-    assert trace.resulting_state.git_hash != sample_context.state.git_hash
-    assert trace.resulting_state.repository_path == sample_context.state.repository_path
+    # Verify the commit hash exists and is different from initial
+    assert result.git_hash != sample_context.state.git_hash
+    assert len(result.git_hash) == 40  # Git hash length
+    
+    # Verify the changes were committed
+    current_hash = await get_current_hash(result.repository_path)
+    assert current_hash == result.git_hash
 
 @pytest.mark.asyncio
 async def test_execute_task_failure(task_executor, sample_context):
@@ -78,17 +81,17 @@ async def test_execute_task_failure(task_executor, sample_context):
     task = "Execute invalid command"
     
     # Execute the task
-    trace = await task_executor.execute_task(sample_context, task)
+    result = await task_executor.execute_task(sample_context, task)
     
-    # Verify the execution trace
-    assert isinstance(trace, ExecutionTrace)
-    assert trace.task_description == task
-    assert not trace.success
-    assert trace.error_message is not None
-    assert trace.execution_time > 0
+    # Verify the execution result
+    assert isinstance(result, ExecutionResult)
+    assert not result.success
+    assert result.error_message is not None
+    assert result.execution_time > 0
+    assert result.branch_name.startswith("task-0-")
     
     # Verify the repository state remains unchanged
-    assert trace.resulting_state.git_hash == sample_context.state.git_hash
+    assert result.git_hash == sample_context.state.git_hash
 
 @pytest.mark.asyncio
 async def test_invalid_repository(task_executor):
@@ -106,11 +109,32 @@ async def test_invalid_repository(task_executor):
             success_threshold=0.8
         ),
         iteration=0,
-        points_consumed=0,
-        total_budget=1000,
-        execution_history=[]
+        execution_history=[],
+        metadata={}
     )
     
     # Attempt to execute task
     with pytest.raises(ValueError):
-        await task_executor.execute_task(invalid_context, "Test task") 
+        await task_executor.execute_task(invalid_context, "Test task")
+
+@pytest.mark.asyncio
+async def test_llm_controlled_commits(task_executor, sample_context):
+    """Test that the LLM controls commit creation."""
+    # Create a task that requires multiple commits
+    task = "Make two changes to test.txt with separate commits"
+    
+    # Execute the task
+    result = await task_executor.execute_task(sample_context, task)
+    
+    # Verify the execution result
+    assert isinstance(result, ExecutionResult)
+    assert result.success
+    assert result.execution_time > 0
+    
+    # Verify the commit hash exists and is different from initial
+    assert result.git_hash != sample_context.state.git_hash
+    assert len(result.git_hash) == 40  # Git hash length
+    
+    # Verify the changes were committed
+    current_hash = await get_current_hash(result.repository_path)
+    assert current_hash == result.git_hash 

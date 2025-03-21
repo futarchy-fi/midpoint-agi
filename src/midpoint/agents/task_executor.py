@@ -1,8 +1,19 @@
+"""
+Task Executor - Generic task execution agent for the Midpoint system.
+
+IMPORTANT: This module implements a generic task execution system that uses LLM to interpret
+and execute tasks. It MUST NOT contain any task-specific logic or hardcoded implementations.
+All task-specific decisions and implementations should be handled by the LLM at runtime.
+"""
+
 import asyncio
 import time
+import json
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import re
+import os
+import logging
 
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
 from .goal_decomposer import validate_repository_state
@@ -22,11 +33,49 @@ from .tools import (
     web_search,
     web_scrape
 )
+from .config import get_openai_api_key
+from openai import AsyncOpenAI
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('TaskExecutor')
 
 class TaskExecutor:
-    """Agent responsible for executing tasks identified by the GoalDecomposer."""
+    """
+    Generic task execution agent that uses LLM to implement changes.
+    
+    This class MUST:
+    - Remain completely task-agnostic
+    - Not contain any hardcoded task implementations
+    - Delegate all task-specific decisions to the LLM
+    - Use the provided tools to implement changes based on LLM decisions
+    
+    The workflow is:
+    1. LLM analyzes the task and current repository state
+    2. LLM decides what changes are needed
+    3. LLM uses the available tools to implement those changes
+    4. LLM validates the changes
+    5. Changes are committed if valid
+    """
     
     def __init__(self):
+        """Initialize the TaskExecutor agent."""
+        logger.info("Initializing TaskExecutor")
+        # Initialize OpenAI client with API key from config
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise ValueError("OpenAI API key not found in config or environment")
+        if not api_key.startswith("sk-"):
+            raise ValueError("Invalid OpenAI API key format")
+            
+        # Initialize OpenAI client
+        self.client = AsyncOpenAI(api_key=api_key)
+        logger.info("TaskExecutor initialized successfully")
+        
+        # System prompt for the LLM that will make all task execution decisions
         self.system_prompt = """You are a task execution agent responsible for implementing code changes.
 Your role is to:
 1. Execute tasks using available tools
@@ -34,30 +83,221 @@ Your role is to:
 3. Handle errors gracefully
 4. Maintain clean git state
 
+IMPORTANT: A new branch has been created for you to work on. You are responsible for:
+1. Making all necessary changes to implement the task
+2. Creating commits with meaningful messages
+3. Ensuring all changes are committed before completing
+4. Returning the final commit hash in your output
+
 Available tools:
 - list_directory: List contents of a directory
 - read_file: Read contents of a file
 - search_code: Search for code patterns
-- create_branch: Create a new git branch
 - create_commit: Create a git commit
 - run_terminal_cmd: Run a terminal command
 - edit_file: Edit the contents of a file
 - web_search: Search the web using DuckDuckGo's API
 - web_scrape: Scrape content from a webpage
 
-Always ensure the repository is in a clean state before and after execution.
-Create meaningful git commits for each successful execution step."""
+IMPORTANT TOOL USAGE NOTES:
+1. When using tools, provide only the name without any prefixes (e.g., use "list_directory" not "functions.list_directory")
+2. The create_commit tool will return the new commit hash - you must save this hash and use it as the final_commit_hash in your response
+3. Always make your changes and verify them before creating a commit
+4. After creating a commit, store the returned hash and use it in your final output
+
+For each task:
+1. Analyze the current repository state
+2. Determine what changes are needed
+3. Use the available tools to implement changes
+4. Validate the changes
+5. Create appropriate commits
+6. Return the final commit hash from the create_commit call
+
+Your response must be in JSON format with these fields:
+{
+    "actions": [
+        {
+            "tool": "string",  # Name of the tool to use (without any prefixes)
+            "args": {},  # Arguments for the tool
+            "purpose": "string"  # Why this action is needed
+        }
+    ],
+    "final_commit_hash": "string",  # Hash returned from the create_commit call
+    "validation_steps": [  # Steps to validate the changes
+        "string"
+    ],
+    "task_completed": boolean,  # Whether the task was successfully completed
+    "completion_reason": "string"  # Explanation if task was not completed
+}"""
+
+        # Define tool schema for the OpenAI API
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List the contents of a directory in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "directory": {
+                                "type": "string",
+                                "description": "Directory to list within the repository",
+                                "default": "."
+                            }
+                        },
+                        "required": ["repo_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file within the repository"
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "First line to read (0-indexed)",
+                                "default": 0
+                            },
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to read",
+                                "default": 100
+                            }
+                        },
+                        "required": ["repo_path", "file_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code",
+                    "description": "Search the codebase for patterns",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "pattern": {
+                                "type": "string",
+                                "description": "Regular expression pattern to search for"
+                            },
+                            "file_pattern": {
+                                "type": "string",
+                                "description": "Pattern for files to include (e.g., '*.py')",
+                                "default": "*"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 20
+                            }
+                        },
+                        "required": ["repo_path", "pattern"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_file",
+                    "description": "Edit the contents of a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file to edit"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "New content for the file"
+                            }
+                        },
+                        "required": ["repo_path", "file_path", "content"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_terminal_cmd",
+                    "description": "Run a terminal command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The command to run"
+                            },
+                            "cwd": {
+                                "type": "string",
+                                "description": "Working directory for the command"
+                            }
+                        },
+                        "required": ["command", "cwd"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_commit",
+                    "description": "Create a git commit with the given message",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "Commit message"
+                            }
+                        },
+                        "required": ["repo_path", "message"]
+                    }
+                }
+            }
+        ]
 
     async def execute_task(self, context: TaskContext, task: str) -> ExecutionResult:
         """
-        Execute a task and return the execution result.
+        Execute a task using LLM-driven decision making.
         
-        This is an intelligent agent that:
-        1. Can understand and break down any task
-        2. Has access to a full set of tools for exploring and modifying the repository
-        3. Can make multiple changes as needed
-        4. Validates its own work
-        5. Commits changes when complete
+        This method MUST NOT contain any task-specific logic.
+        All task-specific decisions and implementations should be made by the LLM.
+        
+        The LLM will:
+        1. Analyze the task and repository state
+        2. Decide what changes are needed
+        3. Use the available tools to implement changes
+        4. Validate the changes
+        5. Create appropriate commits
         
         Args:
             context: The current task context
@@ -66,331 +306,253 @@ Create meaningful git commits for each successful execution step."""
         Returns:
             ExecutionResult containing the execution outcome
         """
+        logger.info(f"Starting task execution: {task}")
+        logger.info(f"Repository: {context.state.repository_path}")
+        logger.info(f"Current Git Hash: {context.state.git_hash}")
+        
         # Initialize execution
         start_time = time.time()
         base_name = f"task-{context.iteration}"
         
         try:
             # Create a new branch for this execution
-            # create_branch adds a random suffix to the base name
+            logger.info(f"Creating new branch: {base_name}")
             branch_name = await create_branch(context.state.repository_path, base_name)
+            logger.info(f"Created branch: {branch_name}")
             
-            # The agent now has full control of this branch and can:
-            # - Explore the repository (list_directory, read_file, search_code)
-            # - Make changes (edit_file)
-            # - Run commands (run_terminal_cmd)
-            # - Create commits when logical units of work are complete
-            
-            # First understand the current state of the repository
-            repo_contents = await list_directory(context.state.repository_path)
-            
-            # Analyze task and determine required actions
-            # For tasks involving tests, we need to handle both the implementation and test files
-            if "test" in task.lower():
-                # Extract file names from the task
-                file_names = re.findall(r'["\']([^"\']+)["\']', task)
-                test_file_name = next((f for f in file_names if "test" in f.lower()), None)
-                
-                # Determine what's being tested
-                implementation_file = None
-                function_name = None
-                
-                # Look for function name patterns
-                function_matches = re.findall(r'function\s+[\'"]?([a-zA-Z0-9_]+)[\'"]?', task)
-                if function_matches:
-                    function_name = function_matches[0]
-                
-                # Try to infer the implementation file name from test file name
-                if test_file_name:
-                    if test_file_name.startswith("test_"):
-                        implementation_file = test_file_name[5:]  # Remove "test_"
-                    elif "_test" in test_file_name:
-                        implementation_file = test_file_name.split("_test")[0] + ".py"
-                
-                # Check if implementation file exists, if we've inferred one
-                if implementation_file:
-                    try:
-                        impl_content = await read_file(
-                            context.state.repository_path,
-                            implementation_file,
-                            max_lines=100
-                        )
-                        # Implementation exists, ensure we have the function name
-                        if not function_name:
-                            # Try to extract function name from implementation
-                            fn_matches = re.findall(r'def\s+([a-zA-Z0-9_]+)', impl_content)
-                            if fn_matches:
-                                function_name = fn_matches[0]
-                    except ValueError:
-                        # Implementation file doesn't exist, we'll need to create it
-                        if function_name:
-                            # Create a simple implementation based on the function name
-                            await edit_file(
-                                context.state.repository_path,
-                                implementation_file,
-                                f"""def {function_name}():
-    \"\"\"
-    Implementation of {function_name} function.
-    \"\"\"
-    return "Hello, World!"  # Placeholder implementation
-""",
-                                create_if_missing=True
-                            )
-                            await create_commit(
-                                context.state.repository_path,
-                                f"Create initial implementation of {function_name} in {implementation_file}"
-                            )
-                
-                # Now handle the test file
-                if test_file_name:
-                    try:
-                        # Check if test file exists
-                        test_content = await read_file(
-                            context.state.repository_path,
-                            test_file_name,
-                            max_lines=100
-                        )
-                        # Test file exists, we may need to update it
-                        if function_name and not re.search(fr'test_{function_name}', test_content):
-                            # Test for function doesn't exist, add it
-                            module_name = implementation_file.replace(".py", "")
-                            test_content = f"""import unittest
-from {module_name} import {function_name}
+            # Create the user prompt for the LLM
+            user_prompt = f"""Task: {task}
 
-class Test{function_name.capitalize()}(unittest.TestCase):
-    \"\"\"Test cases for the {function_name} function.\"\"\"
-    
-    def test_{function_name}(self):
-        \"\"\"Test that {function_name} returns the expected result.\"\"\"
-        self.assertEqual({function_name}(), "Hello, World!")
-        
-if __name__ == '__main__':
-    unittest.main()
-"""
-                            await edit_file(
-                                context.state.repository_path,
-                                test_file_name,
-                                test_content,
-                                create_if_missing=True
-                            )
-                            await create_commit(
-                                context.state.repository_path,
-                                f"Update test file {test_file_name} with test for {function_name}"
-                            )
-                    except ValueError:
-                        # Test file doesn't exist, create it
-                        if function_name and implementation_file:
-                            module_name = implementation_file.replace(".py", "")
-                            test_content = f"""import unittest
-from {module_name} import {function_name}
+Repository Path: {context.state.repository_path}
+Branch: {branch_name} (newly created for this task)
+Git Hash: {context.state.git_hash}
 
-class Test{function_name.capitalize()}(unittest.TestCase):
-    \"\"\"Test cases for the {function_name} function.\"\"\"
-    
-    def test_{function_name}(self):
-        \"\"\"Test that {function_name} returns the expected result.\"\"\"
-        self.assertEqual({function_name}(), "Hello, World!")
-        
-if __name__ == '__main__':
-    unittest.main()
-"""
-                            await edit_file(
-                                context.state.repository_path,
-                                test_file_name,
-                                test_content,
-                                create_if_missing=True
-                            )
-                            await create_commit(
-                                context.state.repository_path,
-                                f"Create test file {test_file_name} for {function_name}"
-                            )
-                
-                # Run the tests to make sure they pass
-                try:
-                    await run_terminal_cmd(
-                        command=["python", "-m", "unittest", test_file_name],
-                        cwd=context.state.repository_path
-                    )
-                    # Tests passed, create a final commit
-                    await create_commit(
-                        context.state.repository_path,
-                        f"Verify tests pass for {function_name}"
-                    )
-                except Exception as e:
-                    # Tests failed, try to fix the implementation
-                    if implementation_file and function_name:
-                        # Update implementation to match expected test output
-                        await edit_file(
-                            context.state.repository_path,
-                            implementation_file,
-                            f"""def {function_name}():
-    \"\"\"
-    Implementation of {function_name} function.
-    \"\"\"
-    return "Hello, World!"  # Updated to match test expectations
-""",
-                            create_if_missing=True
-                        )
-                        await create_commit(
-                            context.state.repository_path,
-                            f"Fix implementation of {function_name} to make tests pass"
-                        )
-                        
-                        # Try running the tests again
-                        await run_terminal_cmd(
-                            command=["python", "-m", "unittest", test_file_name],
-                            cwd=context.state.repository_path
-                        )
+Please analyze the task and determine what changes are needed.
+Use the available tools to implement the changes and validate them.
+Remember to commit your changes and return the final commit hash."""
+
+            logger.debug(f"User prompt: {user_prompt}")
+
+            # Initialize messages
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
             
-            # Generic file creation logic
-            elif any(word in task.lower() for word in ["create", "add", "new"]) and "file" in task.lower():
-                # Extract file name from the task
-                file_names = re.findall(r'["\']([^"\']+)["\']', task)
-                if file_names:
-                    file_name = file_names[0]
+            # Chat completion with tool use
+            try:
+                final_output = None
+                iteration = 0
+                
+                # Loop until we get a final output
+                while final_output is None:
+                    iteration += 1
+                    logger.info(f"Starting LLM iteration {iteration}")
                     
-                    # Extract content between triple quotes if present
-                    content_match = re.search(r'"""(.*?)"""', task, re.DOTALL)
-                    content = content_match.group(1) if content_match else ""
-                    
-                    # If no content specified, infer from file type
-                    if not content:
-                        if file_name.endswith(".py"):
-                            content = f"""#!/usr/bin/env python
-\"\"\"
-{file_name} - Description of file purpose
-\"\"\"
-
-def main():
-    \"\"\"Main function.\"\"\"
-    print("Hello, World!")
-
-if __name__ == "__main__":
-    main()
-"""
-                        elif file_name.endswith((".md", ".txt")):
-                            content = f"# {file_name}\n\nDescription goes here.\n"
-                        elif file_name.endswith(".html"):
-                            content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>{file_name}</title>
-</head>
-<body>
-    <h1>Hello, World!</h1>
-</body>
-</html>
-"""
-                        elif file_name.endswith(".css"):
-                            content = f"""/* {file_name} */
-body {{
-    font-family: Arial, sans-serif;
-    margin: 0;
-    padding: 20px;
-}}
-"""
-                        elif file_name.endswith(".js"):
-                            content = f"""// {file_name}
-function greet() {{
-    console.log("Hello, World!");
-}}
-
-greet();
-"""
-                    
-                    # Create the file
-                    await edit_file(
-                        context.state.repository_path,
-                        file_name,
-                        content,
-                        create_if_missing=True
+                    # Call OpenAI API
+                    response = await self.client.chat.completions.create(
+                        model="gpt-4",
+                        messages=messages,
+                        tools=self.tools,
+                        tool_choice="auto",
+                        temperature=0.1,
+                        max_tokens=4000
                     )
                     
-                    # Commit the change
-                    await create_commit(
-                        context.state.repository_path,
-                        f"Create {file_name}"
-                    )
-            
-            # File modification logic
-            elif any(word in task.lower() for word in ["modify", "update", "edit", "change"]):
-                # Extract file name from the task
-                file_names = re.findall(r'["\']([^"\']+)["\']', task)
-                if file_names:
-                    file_name = file_names[0]
+                    # Get the model's message
+                    message = response.choices[0].message
+                    logger.debug(f"LLM response: {message.content}")
                     
-                    try:
-                        # Read the existing content
-                        current_content = await read_file(
-                            context.state.repository_path,
-                            file_name,
-                            max_lines=1000
-                        )
-                        
-                        # Extract new content between triple quotes if present
-                        content_match = re.search(r'"""(.*?)"""', task, re.DOTALL)
-                        
-                        if content_match:
-                            # Replace content with specified content
-                            new_content = content_match.group(1)
-                            await edit_file(
-                                context.state.repository_path,
-                                file_name,
-                                new_content,
-                                create_if_missing=False
-                            )
-                        else:
-                            # If no specific content, try to infer changes from task description
-                            # This is just a placeholder - a real agent would be more sophisticated
-                            if "add" in task.lower() and "function" in task.lower():
-                                # Extract function name if mentioned
-                                function_matches = re.findall(r'function\s+[\'"]?([a-zA-Z0-9_]+)[\'"]?', task)
-                                if function_matches:
-                                    function_name = function_matches[0]
-                                    new_function = f"""
-def {function_name}():
-    \"\"\"
-    New function added as requested.
-    \"\"\"
-    return "Function implemented"
-"""
-                                    new_content = current_content + "\n" + new_function
-                                    await edit_file(
-                                        context.state.repository_path,
-                                        file_name,
-                                        new_content,
-                                        create_if_missing=False
-                                    )
-                        
-                        # Commit the changes
-                        await create_commit(
-                            context.state.repository_path,
-                            f"Update {file_name} as requested"
-                        )
-                    except ValueError:
-                        raise ValueError(f"Cannot modify non-existent file: {file_name}")
-            
-            # More task types can be handled here in a similar manner
-            # The agent should analyze the task and choose appropriate tools
-            
-            # Get the final git hash after all changes
-            final_hash = await get_current_hash(context.state.repository_path)
-            
-            # Before returning, make sure we're still on the task branch
-            # This is important so the validator can examine the branch
-            current_branch = await get_current_branch(context.state.repository_path)
-            if current_branch != branch_name:
-                await checkout_branch(context.state.repository_path, branch_name)
-            
-            return ExecutionResult(
-                success=True,
-                branch_name=branch_name,
-                git_hash=final_hash,
-                execution_time=time.time() - start_time,
-                repository_path=context.state.repository_path
-            )
+                    # Add the message to our conversation
+                    messages.append({"role": "assistant", "content": message.content, "tool_calls": message.tool_calls})
+                    
+                    # If the model wants to use tools
+                    if message.tool_calls:
+                        logger.info(f"LLM requested {len(message.tool_calls)} tool calls")
+                        # Handle each tool call
+                        for tool_call in message.tool_calls:
+                            # Get the function name and arguments
+                            func_name = tool_call.function.name
+                            func_args = json.loads(tool_call.function.arguments)
+                            
+                            # Handle "functions." prefix in tool names
+                            actual_func_name = func_name
+                            if func_name.startswith("functions."):
+                                actual_func_name = func_name.split(".", 1)[1]
+                                logger.info(f"Handling functions prefix: {func_name} -> {actual_func_name}")
+                            
+                            # Define a mapping of tool names to actual functions
+                            tool_functions = {
+                                "list_directory": list_directory,
+                                "read_file": read_file,
+                                "search_code": search_code,
+                                "edit_file": edit_file,
+                                "run_terminal_cmd": run_terminal_cmd,
+                                "create_commit": create_commit,
+                                "web_search": web_search,
+                                "web_scrape": web_scrape
+                            }
+                            
+                            if actual_func_name in tool_functions:
+                                # Get the function to execute
+                                tool_function = tool_functions[actual_func_name]
+                                logger.info(f"Executing tool: {actual_func_name}")
+                                logger.debug(f"Tool arguments: {json.dumps(func_args, indent=2)}")
+                                
+                                try:
+                                    # Execute the function with appropriate arguments
+                                    logger.info(f"Calling tool function {tool_function.__name__} with arguments")
+                                    
+                                    # Call different functions based on the tool name
+                                    if actual_func_name == "list_directory":
+                                        result = await list_directory(func_args["repo_path"], func_args.get("directory", "."))
+                                    elif actual_func_name == "read_file":
+                                        result = await read_file(
+                                            func_args["repo_path"],
+                                            func_args["file_path"],
+                                            func_args.get("start_line", 0),
+                                            func_args.get("max_lines", 100)
+                                        )
+                                    elif actual_func_name == "search_code":
+                                        result = await search_code(
+                                            func_args["repo_path"],
+                                            func_args["pattern"],
+                                            func_args.get("file_pattern", "*"),
+                                            func_args.get("max_results", 20)
+                                        )
+                                    elif actual_func_name == "edit_file":
+                                        result = await edit_file(
+                                            func_args["repo_path"],
+                                            func_args["file_path"],
+                                            func_args["content"]
+                                        )
+                                    elif actual_func_name == "run_terminal_cmd":
+                                        result = await run_terminal_cmd(
+                                            command=func_args["command"],
+                                            cwd=func_args["cwd"]
+                                        )
+                                    elif actual_func_name == "create_commit":
+                                        result = await create_commit(
+                                            func_args["repo_path"],
+                                            func_args["message"]
+                                        )
+                                    elif actual_func_name == "web_search":
+                                        result = await web_search(func_args["query"])
+                                    elif actual_func_name == "web_scrape":
+                                        result = await web_scrape(func_args["url"])
+                                    
+                                    # Log the result
+                                    logger.info(f"Tool {actual_func_name} executed successfully")
+                                    logger.debug(f"Tool result: {str(result)}")
+                                    
+                                    # For specific tools, add extra logging about repository state
+                                    if actual_func_name in ['create_commit', 'edit_file', 'run_terminal_cmd']:
+                                        try:
+                                            repo_path = func_args.get('repo_path', context.state.repository_path)
+                                            logger.info(f"Checking repository state after {actual_func_name}")
+                                            repo_status = await check_repo_state(repo_path)
+                                            logger.debug(f"Repository state after {actual_func_name}: {repo_status}")
+                                            current_hash = await get_current_hash(repo_path)
+                                            logger.info(f"Current hash after {actual_func_name}: {current_hash}")
+                                        except Exception as state_e:
+                                            logger.warning(f"Failed to check repository state: {str(state_e)}")
+                                
+                                except Exception as e:
+                                    logger.error(f"Error executing tool {actual_func_name}: {str(e)}")
+                                    logger.error(f"Exception type: {type(e).__name__}")
+                                    logger.error(f"Exception args: {e.args}")
+                                    result = f"Error: {str(e)}"
+                            else:
+                                logger.warning(f"Tool {actual_func_name} not found in available tools")
+                                result = f"Error: Tool {actual_func_name} not found in available tools"
+                            
+                            # Add the result to messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": actual_func_name,
+                                "content": str(result)
+                            })
+                    else:
+                        # Try to parse the final output
+                        try:
+                            # Parse the final output
+                            if not isinstance(message.content, str):
+                                logger.error(f"Unexpected message content type: {type(message.content)}")
+                                continue
+                            
+                            try:
+                                final_output = json.loads(message.content)
+                                logger.info("Received final output from LLM")
+                                logger.debug(f"Final output: {json.dumps(final_output, indent=2)}")
+                                
+                                # Validate required fields
+                                required_fields = ["task_completed", "final_commit_hash"]
+                                if not all(field in final_output for field in required_fields):
+                                    logger.warning("Final output missing required fields")
+                                    logger.debug(f"Missing fields: {[field for field in required_fields if field not in final_output]}")
+                                    continue
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Failed to parse LLM output as JSON: {str(e)}")
+                                logger.debug(f"Raw content: {message.content[:500]}...")
+                                iteration += 1
+                                continue
+                            
+                            # Check if final commit hash matches the current hash
+                            current_hash = await get_current_hash(context.state.repository_path)
+                            logger.info(f"Final hash check - Expected: {final_output['final_commit_hash']}, Got: {current_hash}")
+                            
+                            # Validate the output format
+                            if not all(key in final_output for key in ["actions", "final_commit_hash", "validation_steps", "task_completed", "completion_reason"]):
+                                logger.warning("Final output missing required fields")
+                                final_output = None
+                                messages.append({
+                                    "role": "user",
+                                    "content": "Please provide your response in the correct JSON format with all required fields."
+                                })
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse LLM output as JSON: {str(e)}")
+                            messages.append({
+                                "role": "user",
+                                "content": "Please provide your response in valid JSON format."
+                            })
+                
+                # Validate the final commit hash
+                current_hash = await get_current_hash(context.state.repository_path)
+                if final_output["final_commit_hash"] != current_hash:
+                    logger.error(f"Final commit hash mismatch. Expected: {final_output['final_commit_hash']}, Got: {current_hash}")
+                    return ExecutionResult(
+                        success=False,
+                        branch_name=branch_name,
+                        git_hash=current_hash,
+                        error_message="Final commit hash mismatch",
+                        execution_time=time.time() - start_time,
+                        repository_path=context.state.repository_path
+                    )
+                
+                # Return result based on task completion
+                return ExecutionResult(
+                    success=final_output["task_completed"],
+                    branch_name=branch_name,
+                    git_hash=final_output["final_commit_hash"],
+                    error_message=None if final_output["task_completed"] else final_output["completion_reason"],
+                    execution_time=time.time() - start_time,
+                    repository_path=context.state.repository_path
+                )
+                
+            except Exception as e:
+                logger.error(f"Error during execution: {str(e)}")
+                return ExecutionResult(
+                    success=False,
+                    branch_name=branch_name,
+                    git_hash=context.state.git_hash,
+                    error_message=f"Error during execution: {str(e)}",
+                    execution_time=time.time() - start_time,
+                    repository_path=context.state.repository_path
+                )
             
         except Exception as e:
+            logger.error(f"Fatal error during task execution: {str(e)}")
             # If execution fails, clean up the branch and go back to main
             try:
                 await run_terminal_cmd(
@@ -403,8 +565,8 @@ def {function_name}():
                         command=["git", "branch", "-D", branch_name],
                         cwd=context.state.repository_path
                     )
-            except:
-                pass  # Ignore cleanup errors
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {str(cleanup_error)}")
                 
             return ExecutionResult(
                 success=False,
