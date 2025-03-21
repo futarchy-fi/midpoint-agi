@@ -1,8 +1,17 @@
+"""
+Goal Validation agent implementation.
+
+IMPORTANT: This module implements a generic goal validation system that uses LLM to validate
+task execution results. It MUST NOT contain any task-specific logic or hardcoded validation rules.
+All validation decisions should be made by the LLM at runtime.
+"""
+
 import asyncio
 from typing import List, Dict, Any
 import re
 import os
 import random
+import json
 
 from .models import Goal, ExecutionResult, ValidationResult
 from .tools import (
@@ -16,11 +25,33 @@ from .tools import (
     web_search,
     web_scrape
 )
+from .config import get_openai_api_key
+from openai import AsyncOpenAI
 
 class GoalValidator:
-    """Agent responsible for validating execution results against goals."""
+    """
+    Generic goal validation agent that uses LLM to validate execution results.
+    
+    This class MUST:
+    - Remain completely task-agnostic
+    - Not contain any hardcoded validation rules
+    - Delegate all validation decisions to the LLM
+    - Use the provided tools to gather evidence for validation
+    """
     
     def __init__(self):
+        """Initialize the GoalValidator agent."""
+        # Initialize OpenAI client with API key from config
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise ValueError("OpenAI API key not found in config or environment")
+        if not api_key.startswith("sk-"):
+            raise ValueError("Invalid OpenAI API key format")
+            
+        # Initialize OpenAI client
+        self.client = AsyncOpenAI(api_key=api_key)
+        
+        # System prompt for the LLM that will make all validation decisions
         self.system_prompt = """You are a goal validation agent responsible for evaluating execution results.
 Your role is to:
 1. Check if execution was successful
@@ -36,18 +67,141 @@ Available tools:
 - web_search: Search the web using DuckDuckGo's API
 - web_scrape: Scrape content from a webpage
 
-Always validate against the specific criteria provided in the goal.
-Provide clear reasoning for your validation decisions."""
+For each validation criterion:
+1. Use the available tools to gather evidence
+2. Analyze the evidence against the criterion
+3. Make a judgment about whether the criterion is satisfied
+4. Provide clear reasoning for your decision
+
+Your response must be in JSON format with these fields:
+{
+    "criteria_results": [
+        {
+            "criterion": "string",
+            "passed": boolean,
+            "reasoning": "string",
+            "evidence": ["string"]
+        }
+    ],
+    "overall_score": float,  # Between 0 and 1
+    "overall_reasoning": "string"
+}"""
+
+        # Define tool schema for the OpenAI API
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List the contents of a directory in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "directory": {
+                                "type": "string",
+                                "description": "Directory to list within the repository",
+                                "default": "."
+                            }
+                        },
+                        "required": ["repo_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file in the repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file within the repository"
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "First line to read (0-indexed)",
+                                "default": 0
+                            },
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to read",
+                                "default": 100
+                            }
+                        },
+                        "required": ["repo_path", "file_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code",
+                    "description": "Search the codebase for patterns",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "repo_path": {
+                                "type": "string",
+                                "description": "Path to the git repository"
+                            },
+                            "pattern": {
+                                "type": "string",
+                                "description": "Regular expression pattern to search for"
+                            },
+                            "file_pattern": {
+                                "type": "string",
+                                "description": "Pattern for files to include (e.g., '*.py')",
+                                "default": "*"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 20
+                            }
+                        },
+                        "required": ["repo_path", "pattern"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_terminal_cmd",
+                    "description": "Run a terminal command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The command to run"
+                            },
+                            "cwd": {
+                                "type": "string",
+                                "description": "Working directory for the command"
+                            }
+                        },
+                        "required": ["command", "cwd"]
+                    }
+                }
+            }
+        ]
 
     async def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
         """
-        Validate an execution result against a goal.
+        Validate an execution result against a goal using LLM.
         
-        This is an intelligent agent that:
-        1. Understands validation criteria
-        2. Uses repository exploration tools to collect evidence
-        3. Makes judgments about whether criteria are satisfied
-        4. Provides detailed reasoning for its decisions
+        This method MUST NOT contain any task-specific validation logic.
+        All validation decisions should be made by the LLM.
         
         Args:
             goal: The goal to validate against
@@ -99,181 +253,121 @@ Provide clear reasoning for your validation decisions."""
                 )
         
         try:
-            # Explore repository state after execution
-            repo_contents = await list_directory(execution_result.repository_path)
+            # Create the user prompt for the LLM
+            user_prompt = f"""Goal: {goal.description}
+
+Validation Criteria:
+{chr(10).join(f"- {criterion}" for criterion in goal.validation_criteria)}
+
+Repository Path: {execution_result.repository_path}
+Branch: {execution_result.branch_name}
+Git Hash: {execution_result.git_hash}
+
+Please validate the execution result against each criterion.
+Use the available tools to gather evidence and make validation decisions."""
+
+            # Initialize messages
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
             
-            # Evaluate each criterion
-            criteria_results = []
-            total_score = 0.0
-            
-            for criterion in goal.validation_criteria:
-                # Initialize validation for this criterion
-                criterion_result = {
-                    "criterion": criterion,
-                    "passed": False,
-                    "reasoning": "",
-                    "evidence": []
-                }
+            # Chat completion with tool use
+            try:
+                final_output = None
                 
-                # Analyze criterion to determine validation approach
-                if "file" in criterion.lower():
-                    # Extract file names mentioned in criterion
-                    file_names = re.findall(r'["\']([^"\']+)["\']', criterion)
-                    if not file_names:
-                        # Try to extract file names without quotes
-                        file_names = re.findall(r'\b(\w+\.\w+)\b', criterion)
+                # Loop until we get a final output
+                while final_output is None:
+                    # Call OpenAI API
+                    response = await self.client.chat.completions.create(
+                        model="gpt-4",
+                        messages=messages,
+                        tools=self.tools,
+                        tool_choice="auto",
+                        temperature=0.1,
+                        max_tokens=4000
+                    )
                     
-                    # Check if files exist
-                    for file_name in file_names:
-                        try:
-                            # Read the file to verify it exists and check its content
-                            file_content = await read_file(
-                                execution_result.repository_path,
-                                file_name,
-                                max_lines=100
-                            )
-                            criterion_result["evidence"].append(f"File {file_name} exists.")
+                    # Get the model's message
+                    message = response.choices[0].message
+                    
+                    # Add the message to our conversation
+                    messages.append({"role": "assistant", "content": message.content, "tool_calls": message.tool_calls})
+                    
+                    # If the model wants to use tools
+                    if message.tool_calls:
+                        # Handle each tool call
+                        for tool_call in message.tool_calls:
+                            # Get the function call details
+                            func_name = tool_call.function.name
+                            func_args = json.loads(tool_call.function.arguments)
                             
-                            # If critertion mentions file content or specific elements
-                            if "content" in criterion.lower() or "contains" in criterion.lower():
-                                # Look for keywords in content
-                                content_keywords = ["function", "class", "test", "import", "def"]
-                                for keyword in content_keywords:
-                                    if keyword in criterion.lower() and keyword in file_content.lower():
-                                        criterion_result["evidence"].append(
-                                            f"File {file_name} contains {keyword} as required."
-                                        )
-                            
-                            # Success for this file
-                            criterion_result["passed"] = True
-                        except ValueError:
-                            criterion_result["evidence"].append(f"File {file_name} does not exist.")
-                            criterion_result["passed"] = False
-                            break
-                
-                # Check for test-related criteria
-                elif any(word in criterion.lower() for word in ["test", "unittest", "pytest"]):
-                    # Find test files in the repository
-                    all_files = []
-                    for root, dirs, files in os.walk(execution_result.repository_path):
-                        for file in files:
-                            if file.startswith("test_") or file.endswith("_test.py"):
-                                all_files.append(os.path.join(root, file))
-                    
-                    if all_files:
-                        criterion_result["evidence"].append(f"Found {len(all_files)} test files.")
-                        
-                        # Try to run the tests
-                        try:
-                            test_output, _ = await run_terminal_cmd(
-                                command=["python", "-m", "unittest", "discover"],
-                                cwd=execution_result.repository_path
-                            )
-                            criterion_result["evidence"].append(f"Tests ran successfully: {test_output}")
-                            criterion_result["passed"] = True
-                        except Exception as e:
-                            criterion_result["evidence"].append(f"Tests failed: {str(e)}")
-                            criterion_result["passed"] = False
-                    else:
-                        criterion_result["evidence"].append("No test files found.")
-                        criterion_result["passed"] = False
-                
-                # Generic code quality criteria
-                elif any(word in criterion.lower() for word in ["documenta", "comment", "docstring"]):
-                    # Look for Python files with good documentation
-                    py_files = []
-                    for root, dirs, files in os.walk(execution_result.repository_path):
-                        for file in files:
-                            if file.endswith(".py"):
-                                py_files.append(os.path.join(root, file))
-                    
-                    if py_files:
-                        # Sample some files to check for documentation
-                        well_documented_count = 0
-                        sample_size = min(5, len(py_files))
-                        sampled_files = random.sample(py_files, sample_size)
-                        
-                        for py_file in sampled_files:
-                            try:
-                                rel_path = os.path.relpath(py_file, execution_result.repository_path)
-                                content = await read_file(
-                                    execution_result.repository_path, 
-                                    rel_path,
-                                    max_lines=200
+                            # Execute the appropriate tool
+                            if func_name == "list_directory":
+                                result = await list_directory(func_args["repo_path"], func_args.get("directory", "."))
+                            elif func_name == "read_file":
+                                result = await read_file(
+                                    func_args["repo_path"],
+                                    func_args["file_path"],
+                                    func_args.get("start_line", 0),
+                                    func_args.get("max_lines", 100)
                                 )
-                                
-                                # Check for docstrings and comments
-                                if '"""' in content or "'''" in content:
-                                    well_documented_count += 1
-                                    criterion_result["evidence"].append(
-                                        f"File {rel_path} contains docstrings."
-                                    )
-                            except Exception:
-                                pass
-                        
-                        # Consider criterion passed if majority of files have documentation
-                        if well_documented_count >= sample_size / 2:
-                            criterion_result["passed"] = True
-                            criterion_result["evidence"].append(
-                                f"{well_documented_count}/{sample_size} sampled files are well-documented."
-                            )
-                        else:
-                            criterion_result["passed"] = False
-                            criterion_result["evidence"].append(
-                                f"Only {well_documented_count}/{sample_size} sampled files are well-documented."
-                            )
+                            elif func_name == "search_code":
+                                result = await search_code(
+                                    func_args["repo_path"],
+                                    func_args["pattern"],
+                                    func_args.get("file_pattern", "*"),
+                                    func_args.get("max_results", 20)
+                                )
+                            elif func_name == "run_terminal_cmd":
+                                result = await run_terminal_cmd(
+                                    command=func_args["command"],
+                                    cwd=func_args["cwd"]
+                                )
+                            
+                            # Add the result to messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": func_name,
+                                "content": str(result)
+                            })
                     else:
-                        criterion_result["evidence"].append("No Python files found to evaluate documentation.")
-                        criterion_result["passed"] = False
+                        # Try to parse the final output
+                        try:
+                            final_output = json.loads(message.content)
+                            
+                            # Validate the output format
+                            if not all(key in final_output for key in ["criteria_results", "overall_score", "overall_reasoning"]):
+                                final_output = None
+                                messages.append({
+                                    "role": "user",
+                                    "content": "Please provide your response in the correct JSON format with all required fields."
+                                })
+                        except json.JSONDecodeError:
+                            messages.append({
+                                "role": "user",
+                                "content": "Please provide your response in valid JSON format."
+                            })
                 
-                # Default fallback for other criteria types
-                else:
-                    # Check for the presence of any changed files
-                    changed_files = []
-                    try:
-                        output, _ = await run_terminal_cmd(
-                            command=["git", "diff", "--name-only", "main"],
-                            cwd=execution_result.repository_path
-                        )
-                        changed_files = output.strip().split("\n") if output.strip() else []
-                    except Exception:
-                        pass
-                    
-                    if changed_files:
-                        criterion_result["evidence"].append(f"Changes made to {len(changed_files)} files.")
-                        criterion_result["passed"] = True
-                    else:
-                        criterion_result["evidence"].append("No changes detected in the repository.")
-                        criterion_result["passed"] = False
-                
-                # Generate reasoning for this criterion
-                criterion_result["reasoning"] = self._generate_criterion_reasoning(
-                    criterion, 
-                    criterion_result["passed"],
-                    criterion_result["evidence"]
+                # Create the validation result
+                return ValidationResult(
+                    success=final_output["overall_score"] >= goal.success_threshold,
+                    score=final_output["overall_score"],
+                    reasoning=final_output["overall_reasoning"],
+                    criteria_results=final_output["criteria_results"],
+                    git_hash=execution_result.git_hash,
+                    branch_name=execution_result.branch_name
                 )
-                
-                # Add to overall results
-                criteria_results.append(criterion_result)
-                if criterion_result["passed"]:
-                    total_score += 1.0
-            
-            # Calculate final score
-            score = total_score / len(goal.validation_criteria) if goal.validation_criteria else 0.0
-            success = score >= goal.success_threshold
-            
-            # Generate overall reasoning
-            reasoning = self._generate_reasoning(criteria_results, score, goal.success_threshold)
-            
-            return ValidationResult(
-                success=success,
-                score=score,
-                reasoning=reasoning,
-                criteria_results=criteria_results,
-                git_hash=execution_result.git_hash,
-                branch_name=execution_result.branch_name
-            )
-            
+            except Exception as e:
+                return ValidationResult(
+                    success=False,
+                    score=0.0,
+                    reasoning=f"Validation failed due to error: {str(e)}",
+                    criteria_results=[],
+                    git_hash=execution_result.git_hash,
+                    branch_name=execution_result.branch_name
+                )
         finally:
             # Always switch back to main branch
             try:
