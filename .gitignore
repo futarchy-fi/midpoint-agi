@@ -53,3 +53,4 @@ test-repo/
 
 # Local config file with API keys
 config.json
+backup/
