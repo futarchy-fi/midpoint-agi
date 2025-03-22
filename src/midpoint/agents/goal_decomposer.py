@@ -18,6 +18,7 @@ from midpoint.agents.tools import (
     get_current_hash
 )
 from midpoint.agents.config import get_openai_api_key
+from ..utils.logging import log_manager
 
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
@@ -386,14 +387,10 @@ Focus on providing a clear next step with measurable validation criteria.
         
         Args:
             context: The current task context containing the goal and state
-            log_file: Path to log file for visualizing the goal hierarchy
+            log_file: Path to log file for visualizing the goal hierarchy (deprecated)
             
         Returns:
             List of SubgoalPlan objects representing the decomposition hierarchy
-            
-        Raises:
-            ValueError: If repository validation fails
-            Exception: For other errors during execution
         """
         # Validate repository state
         await validate_repository_state(
@@ -407,12 +404,23 @@ Focus on providing a clear next step with measurable validation criteria.
         # Get the next subgoal
         subgoal = await self.determine_next_step(context)
         
-        # Log this decomposition step
-        self._log_decomposition_step(log_file, depth, context.goal.description, subgoal.next_step)
+        # Log this decomposition step with branch and git info
+        log_manager.log_goal_decomposition(
+            depth=depth,
+            parent_goal=context.goal.description,
+            subgoal=subgoal.next_step,
+            branch_name=context.state.branch_name if hasattr(context.state, 'branch_name') else None,
+            git_hash=context.state.git_hash
+        )
         
         # If subgoal doesn't need further decomposition, return it
         if not subgoal.requires_further_decomposition:
-            self._log_execution_ready(log_file, depth + 1, subgoal.next_step)
+            log_manager.log_execution_ready(
+                depth=depth + 1,
+                task=subgoal.next_step,
+                branch_name=context.state.branch_name if hasattr(context.state, 'branch_name') else None,
+                git_hash=context.state.git_hash
+            )
             return [subgoal]
         
         # Create a new context with this subgoal as the goal
@@ -425,7 +433,6 @@ Focus on providing a clear next step with measurable validation criteria.
             ),
             iteration=0,  # Reset for the new subgoal
             execution_history=context.execution_history,
-            # Pass relevant context from parent to child, keeping metadata structure
             metadata={
                 **(context.metadata if hasattr(context, 'metadata') else {}),
                 "parent_goal": context.goal.description,
@@ -434,7 +441,7 @@ Focus on providing a clear next step with measurable validation criteria.
         )
         
         # Recursively decompose and collect all resulting subgoals
-        sub_subgoals = await self.decompose_recursively(new_context, log_file)
+        sub_subgoals = await self.decompose_recursively(new_context)
         
         # Return the current subgoal and all its sub-subgoals
         return [subgoal] + sub_subgoals
@@ -453,21 +460,6 @@ Focus on providing a clear next step with measurable validation criteria.
             current_metadata = current_metadata.get('parent_context', {})
             
         return depth
-    
-    def _log_decomposition_step(self, log_file: str, depth: int, parent_goal: str, subgoal: str):
-        """Log decomposition step to file for real-time monitoring."""
-        indent = "  " * depth
-        with open(log_file, "a") as f:
-            f.write(f"{indent}Goal: {parent_goal}\n")
-            f.write(f"{indent}└── Subgoal: {subgoal}\n")
-            f.flush()  # Ensure immediate write for tail -f
-    
-    def _log_execution_ready(self, log_file: str, depth: int, executable_task: str):
-        """Log when a task is ready for execution."""
-        indent = "  " * depth
-        with open(log_file, "a") as f:
-            f.write(f"{indent}✓ READY FOR EXECUTION: {executable_task}\n")
-            f.flush()
 
 async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
     """

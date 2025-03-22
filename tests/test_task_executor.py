@@ -2,6 +2,7 @@ import pytest
 import pytest_asyncio
 from pathlib import Path
 import os
+import asyncio
 
 from midpoint.agents.models import State, Goal, TaskContext, ExecutionResult
 from midpoint.agents.task_executor import TaskExecutor
@@ -56,8 +57,14 @@ async def test_execute_task_success(task_executor, sample_context):
     # Create a simple task that modifies the test file
     task = "Update test.txt with new content"
     
-    # Execute the task
-    result = await task_executor.execute_task(sample_context, task)
+    try:
+        # Execute the task with a timeout
+        async with asyncio.timeout(30):  # 30 second timeout
+            result = await task_executor.execute_task(sample_context, task)
+    except asyncio.TimeoutError:
+        pytest.fail("Task execution timed out after 30 seconds")
+    except Exception as e:
+        pytest.fail(f"Task execution failed with error: {str(e)}")
     
     # Verify the execution result
     assert isinstance(result, ExecutionResult)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Setup script for midpoint package."""
 import sys
-from setuptools import setup
+from setuptools import setup, find_packages
 
 def check_venv():
     """Check if we're in a virtual environment."""
@@ -20,4 +20,22 @@ def check_venv():
 
 if __name__ == "__main__":
     check_venv()
-    setup() 
+    setup(
+        name="midpoint",
+        version="0.1.0",
+        packages=find_packages(where="src"),
+        package_dir={"": "src"},
+        install_requires=[
+            "openai",
+            "gitpython",
+            "pytest",
+            "pytest-asyncio",
+            "pytest-cov",
+        ],
+        entry_points={
+            "console_scripts": [
+                "midpoint=midpoint.cli:main",
+            ],
+        },
+        python_requires=">=3.9",
+    ) 

@@ -9,10 +9,11 @@ from typing import List, Dict, Any, Optional
 
 @dataclass
 class State:
-    """Represents a specific state of the repository."""
+    """Represents the current state of the repository."""
     git_hash: str
+    repository_path: str
     description: str
-    repository_path: Optional[str] = None
+    branch_name: Optional[str] = None  # Current branch name
 
 @dataclass
 class Goal:
