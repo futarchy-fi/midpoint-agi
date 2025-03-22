@@ -8,6 +8,7 @@ toward achieving a complex goal.
 import os
 import json
 import asyncio
+import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
@@ -15,7 +16,9 @@ from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
-    get_current_hash
+    get_current_hash,
+    web_search,
+    web_scrape
 )
 from midpoint.agents.config import get_openai_api_key
 from ..utils.logging import log_manager
@@ -496,4 +499,34 @@ async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
     if stdout.strip():
         raise ValueError(f"Repository has uncommitted changes: {stdout.decode()}")
     
-    return True 
+    return True
+
+def main():
+    parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
+    parser.add_argument('--repo-path', required=True, help='Path to the git repository')
+    parser.add_argument('--goal-description', required=True, help='Description of the goal')
+    parser.add_argument('--git-hash', required=True, help='Expected git hash of the repository')
+    parser.add_argument('--iteration', type=int, default=0, help='Iteration number')
+    parser.add_argument('--execution-history', type=str, default='[]', help='Execution history as JSON string')
+
+    args = parser.parse_args()
+
+    # Create the TaskContext
+    state = State(repository_path=args.repo_path, git_hash=args.git_hash, description="Current state description")
+    goal = Goal(description=args.goal_description)
+    context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+
+    # Validate repository state
+    asyncio.run(validate_repository_state(args.repo_path, args.git_hash))
+
+    # Initialize GoalDecomposer and determine the next step
+    decomposer = GoalDecomposer()
+    next_step = asyncio.run(decomposer.determine_next_step(context))
+
+    # Output the result
+    print("Next Step:", next_step.next_step)
+    print("Validation Criteria:", next_step.validation_criteria)
+    print("Reasoning:", next_step.reasoning)
+
+if __name__ == "__main__":
+    main() 

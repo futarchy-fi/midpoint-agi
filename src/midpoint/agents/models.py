@@ -19,7 +19,7 @@ class State:
 class Goal:
     """Represents a goal to be achieved."""
     description: str
-    validation_criteria: List[str]
+    validation_criteria: List[str] = field(default_factory=list)  # Make optional with default empty list
     success_threshold: float = 0.8
 
 @dataclass
