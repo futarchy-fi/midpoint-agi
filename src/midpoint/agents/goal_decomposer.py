@@ -22,6 +22,9 @@ from midpoint.agents.tools import (
 )
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
