@@ -6,12 +6,37 @@ A recursive goal decomposition and execution system for complex repository manag
 
 Midpoint is an advanced AI system designed to overcome the fundamental limitation of current AI systems: the inability to effectively reason over long chains of thought and manage complex objectives. By decomposing complex goals into manageable subgoals and using a coordinated multi-agent approach, the system can tackle problems that would be intractable for a single agent.
 
-The system follows these key principles:
-- **Recursive Goal Decomposition**: Complex goals are broken down into progressively simpler subgoals until reaching directly executable tasks.
-- **OODA Loop Decision Making**: Each step follows Observe-Orient-Decide-Act to determine the best next action.
-- **Repository-based State Management**: The system uses git repositories as its state representation, with commits providing verifiable checkpoints.
-- **Intelligent Agent Execution**: Tasks are executed by specialized agents capable of making multiple tool calls and adapting to the repository state.
-- **Smart Validation**: The system intelligently validates work against success criteria by exploring the repository and running tests.
+## Current Development Status
+
+⚠️ **Important**: The main orchestrator and CLI interface are currently under development. The system is not yet ready for production use.
+
+### Working Components
+- Goal Decomposition System
+- Task Execution System
+- Goal Validation System
+- Repository State Management
+
+### In Development
+- Main Orchestrator (coordination between components)
+- CLI Interface
+- End-to-end workflow
+
+### Testing and Development
+Development and testing tools are available in the `tests/` directory. These tools can be used to test individual components while the main system is being developed.
+
+## Project Structure
+
+```
+midpoint/
+├── src/                    # Main source code
+│   └── midpoint/          # Core package
+│       ├── agents/        # Specialized AI agents
+│       ├── utils/         # Utility functions
+│       └── orchestrator.py # Main orchestrator (in development)
+├── tests/                 # Test suite and development tools
+├── docs/                  # Documentation
+└── logs/                  # Log files
+```
 
 ## Current Implementation Status
 
@@ -244,34 +269,6 @@ The typical workflow is:
    - If task was successful, returns to Planning Phase with the new state
    - Continues until the high-level goal is achieved
    - Handles failures through retries or alternative approaches
-
-## Project Structure
-
-```
-midpoint/
-├── src/
-│   └── midpoint/         # Main package
-│       ├── __init__.py
-│       └── agents/       # Agent implementations
-│           ├── __init__.py
-│           ├── goal_decomposer.py  # Goal decomposition agent
-│           ├── task_executor.py    # Task execution agent
-│           ├── goal_validator.py   # Result validation agent
-│           ├── models.py          # Shared data models
-│           ├── tools.py           # Git and utility functions
-│           └── config.py          # Configuration management
-├── examples/              # Example scripts and tests
-│   ├── test_deep_flow.py  # End-to-end test
-│   ├── setup_test_repo.py # Test repository setup
-│   └── verify_setup.py    # Setup verification
-├── tests/                 # Test suite
-│   ├── test_goal_decomposer.py
-│   ├── test_task_executor.py
-│   └── test_repo_context.py
-└── docs/                  # Documentation
-    ├── FEATURES.md        # Feature implementation status
-    └── VISION.md          # System vision and architecture
-```
 
 ## Contributing
 
