@@ -328,12 +328,7 @@ Your response must be in JSON format with these fields:
 
 Repository Path: {context.state.repository_path}
 Branch: {branch_name} (newly created for this task)
-Git Hash: {context.state.git_hash}
-
-IMPORTANT: Commits are not allowed in this system. All changes must be reviewed and committed manually.
-Please analyze the task and determine what changes are needed.
-Use the available tools to implement the changes and validate them.
-Do not attempt to create commits - just make the necessary changes to the files."""
+Git Hash: {context.state.git_hash}"""
 
             logger.debug(f"User prompt: {user_prompt}")
 
