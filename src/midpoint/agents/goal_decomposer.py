@@ -21,7 +21,7 @@ from midpoint.agents.tools import (
     web_scrape
 )
 from midpoint.agents.config import get_openai_api_key
-from ..utils.logging import log_manager
+from midpoint.utils.logging import log_manager
 
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
@@ -505,19 +505,54 @@ def main():
     parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
     parser.add_argument('--repo-path', required=True, help='Path to the git repository')
     parser.add_argument('--goal-description', required=True, help='Description of the goal')
-    parser.add_argument('--git-hash', required=True, help='Expected git hash of the repository')
     parser.add_argument('--iteration', type=int, default=0, help='Iteration number')
     parser.add_argument('--execution-history', type=str, default='[]', help='Execution history as JSON string')
 
     args = parser.parse_args()
 
+    try:
+        # Create the TaskContext
+        state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
+        goal = Goal(description=args.goal_description)
+        context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+
+        # Validate repository state and get current hash
+        current_hash = asyncio.run(get_current_hash(args.repo_path))
+        state.git_hash = current_hash
+        asyncio.run(validate_repository_state(args.repo_path, current_hash))
+
+        # Initialize GoalDecomposer and determine the next step
+        decomposer = GoalDecomposer()
+        next_step = asyncio.run(decomposer.determine_next_step(context))
+
+        # Output the result
+        print("Next Step:", next_step.next_step)
+        print("Validation Criteria:", next_step.validation_criteria)
+        print("Reasoning:", next_step.reasoning)
+    except TypeError as e:
+        print("Error: Missing required argument. Please ensure all required fields are provided.")
+        print("Details:", str(e))
+    except ValueError as e:
+        if "uncommitted changes" in str(e):
+            print("Error: The repository has uncommitted changes.")
+            print("Please commit or stash your changes before proceeding.")
+            print("Details:", str(e).split(':', 1)[1].strip())
+            return
+        else:
+            print("Error:", str(e))
+    except Exception as e:
+        print("An unexpected error occurred:", str(e))
+        return
+
     # Create the TaskContext
-    state = State(repository_path=args.repo_path, git_hash=args.git_hash, description="Current state description")
+    state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
     goal = Goal(description=args.goal_description)
     context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
 
-    # Validate repository state
-    asyncio.run(validate_repository_state(args.repo_path, args.git_hash))
+    # Validate repository state and get current hash
+    current_hash = asyncio.run(get_current_hash(args.repo_path))
+    state.git_hash = current_hash
+    asyncio.run(validate_repository_state(args.repo_path, current_hash))
 
     # Initialize GoalDecomposer and determine the next step
     decomposer = GoalDecomposer()
