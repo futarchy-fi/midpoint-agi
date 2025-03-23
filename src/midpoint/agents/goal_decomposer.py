@@ -112,7 +112,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                 elif '📄 Reading:' in record.msg:
                     record.msg = record.msg.replace('📄 Reading:', '📄')
                 elif '🔍 Searching code:' in record.msg:
-                    record.msg = record.msg.replace('🔍 Searching code:', '🔍')
+                    record.msg = record.msg.replace('🔍 Searching code:', '🔍 Searching for pattern:')
                 elif '🤖 API call completed' in record.msg:
                     return False  # Don't show API calls in console
                 elif '✅ Next step:' in record.msg:
@@ -807,7 +807,7 @@ def list_subgoal_files(logs_dir="logs"):
         A list of tuples containing (file_path, timestamp, next_step)
     """
     if not os.path.isdir(logs_dir):
-        print(f"Logs directory {logs_dir} does not exist")
+        logging.warning(f"Logs directory {logs_dir} does not exist")
         return []
         
     # Find all subgoal JSON files
@@ -859,16 +859,16 @@ def main():
     if args.list_subgoals:
         subgoal_files = list_subgoal_files()
         if not subgoal_files:
-            print("No saved subgoal files found in the logs directory")
+            logging.info("No saved subgoal files found in the logs directory")
             return
             
-        print("\nAvailable Subgoal Files:")
-        print("========================")
+        logging.info("\nAvailable Subgoal Files:")
+        logging.info("========================")
         for i, (file_path, timestamp, next_step) in enumerate(subgoal_files, 1):
-            print(f"{i}. {os.path.basename(file_path)}")
-            print(f"   Time: {timestamp}")
-            print(f"   Goal: {next_step}")
-            print()
+            logging.info(f"{i}. {os.path.basename(file_path)}")
+            logging.info(f"   Time: {timestamp}")
+            logging.info(f"   Goal: {next_step}")
+            logging.info("")
         return
 
     # Set up logging based on command line arguments
@@ -878,23 +878,23 @@ def main():
     if args.input_index is not None:
         subgoal_files = list_subgoal_files()
         if not subgoal_files:
-            print("No saved subgoal files found in the logs directory")
+            logging.warning("No saved subgoal files found in the logs directory")
             return
             
         if args.input_index < 1 or args.input_index > len(subgoal_files):
-            print(f"Error: Invalid index {args.input_index}. Please specify a value between 1 and {len(subgoal_files)}")
+            logging.error(f"Invalid index {args.input_index}. Please specify a value between 1 and {len(subgoal_files)}")
             return
             
         args.input_file = subgoal_files[args.input_index - 1][0]  # Get file path from the selected index
-        print(f"Using subgoal file: {os.path.basename(args.input_file)}")
+        logging.info(f"Using subgoal file: {os.path.basename(args.input_file)}")
 
     # Validate input arguments
     if not args.goal_description and not args.input_file:
-        print("Error: Either --goal-description or --input-file or --input-index must be provided")
+        logging.error("Either --goal-description or --input-file or --input-index must be provided")
         return
     
     if args.goal_description and args.input_file:
-        print("Warning: Both --goal-description and --input-file provided, using --input-file")
+        logging.warning("Both --goal-description and --input-file provided, using --input-file")
     
     # Load from input file if provided
     if args.input_file:
@@ -903,7 +903,7 @@ def main():
                 input_data = json.load(f)
             
             if not isinstance(input_data, dict):
-                print(f"Error: Input file {args.input_file} does not contain a valid JSON object")
+                logging.error(f"Error: Input file {args.input_file} does not contain a valid JSON object")
                 return
 
             # Extract goal description from the input file
@@ -912,7 +912,7 @@ def main():
                 # Only log this information, don't print to console
                 logging.info(f"Using next_step from input file: {goal_description}")
             else:
-                print(f"Error: Input file {args.input_file} does not contain a 'next_step' field")
+                logging.error(f"Input file {args.input_file} does not contain a 'next_step' field")
                 return
                 
             # Extract validation criteria if available
@@ -923,13 +923,13 @@ def main():
             # Only log this information, don't print to stdout
             logging.info(f"Added relevant context from input file: {relevant_context}")
         except json.JSONDecodeError:
-            print(f"Error: Input file {args.input_file} does not contain valid JSON")
+            logging.error(f"Input file {args.input_file} does not contain valid JSON")
             return
         except FileNotFoundError:
-            print(f"Error: Input file {args.input_file} not found")
+            logging.error(f"Input file {args.input_file} not found")
             return
         except Exception as e:
-            print(f"Error reading input file: {str(e)}")
+            logging.error(f"Error reading input file: {str(e)}")
             return
     else:
         # Use the goal description from command line
@@ -993,7 +993,7 @@ def main():
             json.dump(output_data, f, indent=2)
         
         # Only log the file location, don't print to stdout
-        logging.info(f"Saved subgoal to {output_file}")
+        logging.info(f"💾 Saved subgoal to {output_file}")
         
         # If append-to option is provided, create a chain file
         if args.append_to:
@@ -1027,11 +1027,11 @@ def main():
                     json.dump(chain_data, f, indent=2)
                 
                 logging.info(f"Appended subgoal to chain file: {args.append_to}")
-                print(f"Subgoal appended to chain: {args.append_to}")
-                print(f"Chain now has {len(chain_data['steps'])} steps")
+                logging.info(f"Subgoal appended to chain: {args.append_to}")
+                logging.info(f"Chain now has {len(chain_data['steps'])} steps")
             except Exception as e:
                 logging.error(f"Error appending to chain file: {str(e)}")
-                print(f"Error appending to chain file: {str(e)}")
+                logging.error(f"Error appending to chain file: {str(e)}")
         
         # Log all detailed information but don't print to stdout
         logging.debug("\n\n====================")
@@ -1062,35 +1062,35 @@ def main():
             logging.debug(f"{k}: {v}")
     except TypeError as e:
         if "'NoneType' object is not iterable" in str(e):
-            print("Error: The agent response processing failed. This typically happens when:")
-            print("1. The agent provided a final response without tool calls")
-            print("2. The response format wasn't properly handled")
-            print("Try running with --debug to see more details about the API interactions.")
-            print("Technical details:", str(e))
+            logging.error("The agent response processing failed. This typically happens when:")
+            logging.error("1. The agent provided a final response without tool calls")
+            logging.error("2. The response format wasn't properly handled")
+            logging.error("Try running with --debug to see more details about the API interactions.")
+            logging.error(f"Technical details: {str(e)}")
             logging.debug("NoneType iteration error: %s", str(e))
             return
         else:
-            print("Error: Missing required argument. Please ensure all required fields are provided.")
-            print("Details:", str(e))
+            logging.error("Missing required argument. Please ensure all required fields are provided.")
+            logging.error(f"Details: {str(e)}")
     except ValueError as e:
         if "uncommitted changes" in str(e):
-            print("Error: The repository has uncommitted changes.")
-            print("Please commit or stash your changes before proceeding.")
-            print("Details:", str(e).split(':', 1)[1].strip())
+            logging.error("The repository has uncommitted changes.")
+            logging.error("Please commit or stash your changes before proceeding.")
+            logging.error(f"Details: {str(e).split(':', 1)[1].strip()}")
             return
         elif "Directory does not exist" in str(e):
-            print(f"Warning: {str(e)}")
-            print("The agent tried to access a directory that doesn't exist.")
-            print("This may be because the component is not yet implemented or is in a different location.")
+            logging.warning(f"{str(e)}")
+            logging.warning("The agent tried to access a directory that doesn't exist.")
+            logging.warning("This may be because the component is not yet implemented or is in a different location.")
             logging.debug("Failed directory access: %s", str(e))
             return
         else:
-            print("Error:", str(e))
+            logging.error(f"Error: {str(e)}")
     except Exception as e:
         logging.error("An unexpected error occurred: %s", str(e))
         import traceback
         logging.error("Traceback: %s", traceback.format_exc())
-        print(f"Error: {str(e)}")
+        logging.error(f"Error: {str(e)}")
         return
 
 if __name__ == "__main__":
