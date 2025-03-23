@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 import logging
 from pathlib import Path
 import sys
+import datetime
 
 load_dotenv()
 
@@ -44,7 +45,6 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     log_dir.mkdir(exist_ok=True)
     
     # Create a unique log file name with timestamp
-    import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"goal_decomposer_{timestamp}.log"
     
@@ -82,6 +82,30 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         def filter(self, record):
             # Only process INFO level logs for formatting
             if record.levelno == logging.INFO:
+                # List of patterns to hide from console output
+                hide_patterns = [
+                    'Added relevant context from input file',
+                    'Using next_step from input file',
+                    'Validation criteria:',
+                    'validation_criteria',
+                    'Requires further decomposition',
+                    'relevant_context',
+                    'Determining next step for goal',
+                    '===',
+                    '====================',
+                    '\n====================',
+                    'NEXT STEP',
+                    'VALIDATION CRITERIA',
+                    'REASONING',
+                    'REQUIRES FURTHER DECOMPOSITION',
+                    'RELEVANT CONTEXT'
+                ]
+                
+                # Check if any hide patterns are in the message
+                for pattern in hide_patterns:
+                    if pattern in record.msg:
+                        return False
+                
                 # Make emojis and messages more concise
                 if '📂 Listing directory:' in record.msg:
                     record.msg = record.msg.replace('📂 Listing directory:', '📂')
@@ -96,16 +120,6 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     if 'main' not in sys._getframe().f_back.f_code.co_name:
                         return True
                     return False  # Don't show in main() since we have better formatting there
-                elif 'Validation criteria:' in record.msg:
-                    # Hide validation criteria messages in main() since we have better formatting there
-                    if 'main' not in sys._getframe().f_back.f_code.co_name:
-                        return True
-                    return False
-                elif 'Requires further decomposition:' in record.msg:
-                    # Hide decomposition info in main() since we have better formatting there
-                    if 'main' not in sys._getframe().f_back.f_code.co_name:
-                        return True
-                    return False
                 elif 'Determining next step for goal:' in record.msg:
                     try:
                         # Try to safely extract the goal description
@@ -124,6 +138,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     return False  # Don't show HTTP requests in console
                 elif 'Validating repository state' in record.msg:
                     return False  # Hide validation message in console
+                
             return True
     
     # Apply the filter only to the console handler
@@ -782,26 +797,160 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
             logging.error("Failed to check git hash: %s", str(e))
             raise ValueError(f"Failed to check git hash: {str(e)}")
 
+def list_subgoal_files(logs_dir="logs"):
+    """List available subgoal JSON files in the logs directory.
+    
+    Args:
+        logs_dir: Directory containing log files (default: "logs")
+        
+    Returns:
+        A list of tuples containing (file_path, timestamp, next_step)
+    """
+    if not os.path.isdir(logs_dir):
+        print(f"Logs directory {logs_dir} does not exist")
+        return []
+        
+    # Find all subgoal JSON files
+    subgoal_files = []
+    for file in os.listdir(logs_dir):
+        if file.startswith("subgoal_") and file.endswith(".json"):
+            file_path = os.path.join(logs_dir, file)
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                    
+                # Extract timestamp from filename (format: subgoal_TIMESTAMP_HASH.json)
+                parts = file.split('_')
+                if len(parts) >= 3:
+                    timestamp_str = parts[1]
+                    try:
+                        timestamp = datetime.datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                        formatted_time = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        formatted_time = "Unknown time"
+                else:
+                    formatted_time = "Unknown time"
+                    
+                next_step = data.get("next_step", "Unknown")
+                subgoal_files.append((file_path, formatted_time, next_step))
+            except Exception as e:
+                logging.debug(f"Error reading subgoal file {file}: {str(e)}")
+                
+    # Sort by timestamp (newest first)
+    subgoal_files.sort(key=lambda x: x[1], reverse=True)
+    return subgoal_files
+
 def main():
     parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
     parser.add_argument('--repo-path', required=True, help='Path to the git repository')
-    parser.add_argument('--goal-description', required=True, help='Description of the goal')
+    parser.add_argument('--goal-description', help='Description of the goal')
+    parser.add_argument('--input-file', help='Path to subgoal JSON file to use as input')
+    parser.add_argument('--input-index', type=int, help='Index of subgoal file from list to use as input (1-based)')
+    parser.add_argument('--append-to', help='Append the new subgoal to the chain from this file (creates a chain file)')
     parser.add_argument('--iteration', type=int, default=0, help='Iteration number')
     parser.add_argument('--execution-history', type=str, default='[]', help='Execution history as JSON string')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging on console (all logs are always written to file)')
     parser.add_argument('--quiet', action='store_true', help='Only show warnings and errors on console')
+    parser.add_argument('--list-subgoals', action='store_true', help='List available subgoal files in the logs directory')
 
     args = parser.parse_args()
 
+    # List available subgoal files if requested
+    if args.list_subgoals:
+        subgoal_files = list_subgoal_files()
+        if not subgoal_files:
+            print("No saved subgoal files found in the logs directory")
+            return
+            
+        print("\nAvailable Subgoal Files:")
+        print("========================")
+        for i, (file_path, timestamp, next_step) in enumerate(subgoal_files, 1):
+            print(f"{i}. {os.path.basename(file_path)}")
+            print(f"   Time: {timestamp}")
+            print(f"   Goal: {next_step}")
+            print()
+        return
+
     # Set up logging based on command line arguments
     log_file = configure_logging(args.debug, args.quiet)
+
+    # Handle input file by index if provided
+    if args.input_index is not None:
+        subgoal_files = list_subgoal_files()
+        if not subgoal_files:
+            print("No saved subgoal files found in the logs directory")
+            return
+            
+        if args.input_index < 1 or args.input_index > len(subgoal_files):
+            print(f"Error: Invalid index {args.input_index}. Please specify a value between 1 and {len(subgoal_files)}")
+            return
+            
+        args.input_file = subgoal_files[args.input_index - 1][0]  # Get file path from the selected index
+        print(f"Using subgoal file: {os.path.basename(args.input_file)}")
+
+    # Validate input arguments
+    if not args.goal_description and not args.input_file:
+        print("Error: Either --goal-description or --input-file or --input-index must be provided")
+        return
+    
+    if args.goal_description and args.input_file:
+        print("Warning: Both --goal-description and --input-file provided, using --input-file")
+    
+    # Load from input file if provided
+    if args.input_file:
+        try:
+            with open(args.input_file, 'r') as f:
+                input_data = json.load(f)
+            
+            if not isinstance(input_data, dict):
+                print(f"Error: Input file {args.input_file} does not contain a valid JSON object")
+                return
+
+            # Extract goal description from the input file
+            if "next_step" in input_data:
+                goal_description = input_data["next_step"]
+                # Only log this information, don't print to console
+                logging.info(f"Using next_step from input file: {goal_description}")
+            else:
+                print(f"Error: Input file {args.input_file} does not contain a 'next_step' field")
+                return
+                
+            # Extract validation criteria if available
+            validation_criteria = input_data.get("validation_criteria", [])
+            
+            # Extract relevant context if available
+            relevant_context = input_data.get("relevant_context", {})
+            # Only log this information, don't print to stdout
+            logging.info(f"Added relevant context from input file: {relevant_context}")
+        except json.JSONDecodeError:
+            print(f"Error: Input file {args.input_file} does not contain valid JSON")
+            return
+        except FileNotFoundError:
+            print(f"Error: Input file {args.input_file} not found")
+            return
+        except Exception as e:
+            print(f"Error reading input file: {str(e)}")
+            return
+    else:
+        # Use the goal description from command line
+        goal_description = args.goal_description
+        validation_criteria = []
+        relevant_context = {}
 
     try:
         logging.info("🚀 Starting GoalDecomposer")
         # Create the TaskContext
         state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
-        goal = Goal(description=args.goal_description)
+        goal = Goal(description=goal_description, validation_criteria=validation_criteria)
         context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+        
+        # Add relevant context to metadata if loaded from input file
+        if args.input_file and relevant_context:
+            if not hasattr(context, "metadata"):
+                context.metadata = {}
+            context.metadata["parent_context"] = relevant_context
+            # Only log this information, don't print to stdout
+            logging.info(f"Added relevant context from input file: {relevant_context}")
 
         # Validate repository state and get current hash
         current_hash = asyncio.run(get_current_hash(args.repo_path))
@@ -821,45 +970,96 @@ def main():
             quiet=args.quiet
         ))
 
-        # Output the result - print detailed information to console
-        # Show more complete information about the next step
-        print("\n\n====================")
-        print("=== NEXT STEP ===")
-        print("====================")
-        print(f"{next_step.next_step}")
+        # Save the output as a JSON file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        hash_suffix = os.urandom(3).hex()
+        output_file = os.path.join("logs", f"subgoal_{timestamp}_{hash_suffix}.json")
         
-        print("\n====================")
-        print("=== VALIDATION CRITERIA ===")
-        print("====================")
-        for i, criterion in enumerate(next_step.validation_criteria, 1):
-            print(f"{i}. {criterion}")
+        # Ensure logs directory exists
+        os.makedirs("logs", exist_ok=True)
         
-        print("\n====================")
-        print("=== REASONING ===")
-        print("====================")
-        print(f"{next_step.reasoning}")
+        # Create the output data
+        output_data = {
+            "next_step": next_step.next_step,
+            "validation_criteria": next_step.validation_criteria,
+            "reasoning": next_step.reasoning,
+            "requires_further_decomposition": next_step.requires_further_decomposition,
+            "relevant_context": next_step.relevant_context,
+            "metadata": next_step.metadata
+        }
         
-        print("\n====================")
-        print("=== REQUIRES FURTHER DECOMPOSITION ===")
-        print("====================")
-        print(f"{next_step.requires_further_decomposition}")
+        # Write the output to the file
+        with open(output_file, 'w') as f:
+            json.dump(output_data, f, indent=2)
         
-        # If there's relevant context, display it too
-        if next_step.relevant_context:
-            print("\n====================")
-            print("=== RELEVANT CONTEXT ===")
-            print("====================")
-            for key, value in next_step.relevant_context.items():
-                if isinstance(value, list):
-                    print(f"{key}:")
-                    for item in value:
-                        print(f"  - {item}")
-                else:
-                    print(f"{key}: {value}")
+        # Only log the file location, don't print to stdout
+        logging.info(f"Saved subgoal to {output_file}")
         
-        # Log the detailed output to the log file
-        logging.debug(f"Validation Criteria: {next_step.validation_criteria}")
-        logging.debug(f"Reasoning: {next_step.reasoning}")
+        # If append-to option is provided, create a chain file
+        if args.append_to:
+            try:
+                # Load the chain from the specified file
+                chain_data = None
+                if os.path.exists(args.append_to):
+                    with open(args.append_to, 'r') as f:
+                        chain_data = json.load(f)
+                
+                # Create a new chain file if it doesn't exist
+                if chain_data is None:
+                    chain_data = {
+                        "chain_name": f"Subgoal Chain {timestamp}",
+                        "created_at": timestamp,
+                        "steps": []
+                    }
+                
+                # Add current subgoal to the chain
+                new_step = {
+                    "step_number": len(chain_data["steps"]) + 1,
+                    "subgoal_file": os.path.basename(output_file),
+                    "timestamp": timestamp,
+                    "next_step": next_step.next_step,
+                    "requires_further_decomposition": next_step.requires_further_decomposition
+                }
+                chain_data["steps"].append(new_step)
+                
+                # Write the updated chain to the file
+                with open(args.append_to, 'w') as f:
+                    json.dump(chain_data, f, indent=2)
+                
+                logging.info(f"Appended subgoal to chain file: {args.append_to}")
+                print(f"Subgoal appended to chain: {args.append_to}")
+                print(f"Chain now has {len(chain_data['steps'])} steps")
+            except Exception as e:
+                logging.error(f"Error appending to chain file: {str(e)}")
+                print(f"Error appending to chain file: {str(e)}")
+        
+        # Log all detailed information but don't print to stdout
+        logging.debug("\n\n====================")
+        logging.debug("=== NEXT STEP ===")
+        logging.debug("====================")
+        logging.debug(next_step.next_step)
+        
+        logging.debug("\n====================")
+        logging.debug("=== VALIDATION CRITERIA ===")
+        logging.debug("====================")
+        for i, criteria in enumerate(next_step.validation_criteria, 1):
+            logging.debug(f"{i}. {criteria}")
+        
+        logging.debug("\n====================")
+        logging.debug("=== REASONING ===")
+        logging.debug("====================")
+        logging.debug(next_step.reasoning)
+        
+        logging.debug("\n====================")
+        logging.debug("=== REQUIRES FURTHER DECOMPOSITION ===")
+        logging.debug("====================")
+        logging.debug(str(next_step.requires_further_decomposition))
+        
+        logging.debug("\n====================")
+        logging.debug("=== RELEVANT CONTEXT ===")
+        logging.debug("====================")
+        for k, v in next_step.relevant_context.items():
+            logging.debug(f"{k}: {v}")
     except TypeError as e:
         if "'NoneType' object is not iterable" in str(e):
             print("Error: The agent response processing failed. This typically happens when:")
