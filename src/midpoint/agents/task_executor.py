@@ -9,11 +9,13 @@ All task-specific decisions and implementations should be handled by the LLM at 
 import asyncio
 import time
 import json
+import datetime
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import re
 import os
 import logging
+from pathlib import Path
 
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
 from .tools import initialize_all_tools
@@ -23,15 +25,74 @@ from .tools.git_tools import create_branch, create_commit, get_current_hash, get
 from .tools.filesystem_tools import list_directory, read_file
 from .tools.code_tools import search_code
 from .tools.web_tools import web_search, web_scrape
+from .tools.terminal_tools import run_terminal_cmd
 from .config import get_openai_api_key
 from openai import AsyncOpenAI
 
 # Set up logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger('TaskExecutor')
+
+def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
+    """
+    Configure logging for the TaskExecutor.
+    
+    Args:
+        debug: Whether to show debug messages on console
+        quiet: Whether to only show warnings and errors
+        log_dir_path: Directory to store log files
+    """
+    # Create log directory if it doesn't exist
+    log_dir = Path(log_dir_path)
+    log_dir.mkdir(exist_ok=True)
+    
+    # Create a unique log file name with timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"task_executor_{timestamp}.log"
+    
+    # Create file handler for full logging
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+    file_handler.setLevel(logging.DEBUG)  # Log everything to file
+    
+    # Create console handler with a more concise format
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    
+    # Set console handler level based on arguments
+    if debug:
+        console_handler.setLevel(logging.DEBUG)
+    elif quiet:
+        console_handler.setLevel(logging.WARNING)
+    else:
+        console_handler.setLevel(logging.INFO)
+    
+    # Set up root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture all logs
+    
+    # Remove existing handlers to prevent duplicates
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add our custom handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Create a special formatter for task execution events
+    class TaskExecutorFilter(logging.Filter):
+        def filter(self, record):
+            # Format specific log records for better clarity
+            if hasattr(record, 'taskstep') and record.taskstep:
+                record.msg = f"📋 Task Step: {record.msg}"
+            if hasattr(record, 'tool') and record.tool:
+                record.msg = f"🔧 Tool: {record.tool} - {record.msg}"
+            if hasattr(record, 'validation') and record.validation:
+                record.msg = f"✓ Validation: {record.msg}"
+            return True
+    
+    console_handler.addFilter(TaskExecutorFilter())
+    logger.info(f"Logging configured. Full logs will be saved to: {log_file}")
+    return log_file
 
 class TaskExecutor:
     """
@@ -296,22 +357,41 @@ Your response must be in JSON format with these fields:
         Returns:
             ExecutionResult containing the execution outcome
         """
-        logger.info(f"Starting task execution: {task}")
+        extra = {'taskstep': True}
+        logger.info(f"Starting task execution: {task}", extra=extra)
         logger.info(f"Repository: {context.state.repository_path}")
         logger.info(f"Current Git Hash: {context.state.git_hash}")
         
         # Initialize execution
         start_time = time.time()
         base_name = f"task-{context.iteration}"
+        branch_name = None
         
         try:
-            # Create a new branch for this execution
-            logger.info(f"Creating new branch: {base_name}")
-            branch_name = await create_branch(context.state.repository_path, base_name)
-            logger.info(f"Created branch: {branch_name}")
+            # Validate repository state
+            try:
+                current_hash = await get_current_hash(context.state.repository_path)
+                current_branch = await get_current_branch(context.state.repository_path)
+                logger.info(f"Current branch: {current_branch}, hash: {current_hash[:8]}")
+                
+                if current_hash != context.state.git_hash:
+                    logger.warning(f"Repository hash mismatch. Expected: {context.state.git_hash[:8]}, Got: {current_hash[:8]}")
+                    # Continue anyway but log the warning
+            except Exception as e:
+                logger.error(f"Error validating repository state: {str(e)}")
+                raise ValueError(f"Repository validation failed: {str(e)}")
             
-            # Update state with branch name
-            context.state.branch_name = branch_name
+            # Create a new branch for this execution
+            try:
+                logger.info(f"Creating new branch: {base_name}", extra=extra)
+                branch_name = await create_branch(context.state.repository_path, base_name)
+                logger.info(f"Created branch: {branch_name}", extra=extra)
+                
+                # Update state with branch name
+                context.state.branch_name = branch_name
+            except Exception as e:
+                logger.error(f"Failed to create branch: {str(e)}")
+                raise ValueError(f"Branch creation failed: {str(e)}")
             
             # Create the user prompt for the LLM
             user_prompt = f"""Task: {task}
@@ -328,91 +408,153 @@ Git Hash: {context.state.git_hash}"""
                 {"role": "user", "content": user_prompt}
             ]
             
+            # Maximum retries for LLM interactions
+            max_retries = 3
+            retry_count = 0
+            
             # Add a timeout for LLM interactions
-            async with asyncio.timeout(30):  # 30 second timeout for LLM interactions
-                while True:
-                    try:
-                        # Get LLM response
-                        response = await self.client.chat.completions.create(
-                            model="gpt-4-turbo-preview",
-                            messages=messages,
-                            temperature=0.7,
-                            max_tokens=2000
-                        )
-                        
-                        # Parse the response
-                        content = response.choices[0].message.content
-                        logger.debug(f"LLM response: {content}")
-                        
+            try:
+                # Use a different timeout approach for compatibility
+                # with different Python versions
+                async def execute_with_timeout():
+                    nonlocal retry_count
+                    while retry_count < max_retries:
                         try:
-                            # Try to parse as JSON
-                            final_output = json.loads(content)
-                        except json.JSONDecodeError:
-                            # If not JSON, try to extract JSON from the content
-                            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                            if json_match:
-                                final_output = json.loads(json_match.group())
-                            else:
-                                raise ValueError("No valid JSON found in response")
-                        
-                        # Validate required fields
-                        required_fields = ["task_completed", "final_commit_hash"]
-                        if not all(field in final_output for field in required_fields):
-                            logger.warning("Final output missing required fields")
-                            logger.debug(f"Missing fields: {[field for field in required_fields if field not in final_output]}")
-                            continue
+                            logger.info(f"Sending request to LLM (attempt {retry_count + 1}/{max_retries})", extra=extra)
+                            # Get LLM response
+                            response = await self.client.chat.completions.create(
+                                model="gpt-4-turbo-preview",
+                                messages=messages,
+                                temperature=0.7,
+                                max_tokens=2000
+                            )
                             
-                        # Return result based on task completion
-                        return ExecutionResult(
-                            success=final_output["task_completed"],
-                            branch_name=branch_name,
-                            git_hash=context.state.git_hash,  # Use current hash since commits are disabled
-                            error_message=None if final_output["task_completed"] else final_output.get("completion_reason"),
-                            execution_time=time.time() - start_time,
-                            repository_path=context.state.repository_path
-                        )
-                        
-                    except asyncio.TimeoutError:
-                        logger.error("LLM interaction timed out")
-                        return ExecutionResult(
-                            success=False,
-                            branch_name=branch_name,
-                            git_hash=context.state.git_hash,
-                            error_message="LLM interaction timed out",
-                            execution_time=time.time() - start_time,
-                            repository_path=context.state.repository_path
-                        )
-                    except Exception as e:
-                        logger.error(f"Error during LLM interaction: {str(e)}")
-                        return ExecutionResult(
-                            success=False,
-                            branch_name=branch_name,
-                            git_hash=context.state.git_hash,
-                            error_message=f"Error during LLM interaction: {str(e)}",
-                            execution_time=time.time() - start_time,
-                            repository_path=context.state.repository_path
-                        )
+                            # Parse the response
+                            content = response.choices[0].message.content
+                            logger.debug(f"LLM response received (length: {len(content)})")
+                            
+                            try:
+                                # Try to parse as JSON
+                                final_output = json.loads(content)
+                                logger.info("Successfully parsed LLM response as JSON", extra=extra)
+                            except json.JSONDecodeError as json_err:
+                                # If not JSON, try to extract JSON from the content
+                                logger.warning(f"Failed to parse response as JSON: {str(json_err)}")
+                                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                                if json_match:
+                                    try:
+                                        logger.info("Attempting to extract JSON from response", extra=extra)
+                                        final_output = json.loads(json_match.group())
+                                        logger.info("Successfully extracted and parsed JSON from response", extra=extra)
+                                    except json.JSONDecodeError as extract_err:
+                                        logger.error(f"Failed to parse extracted JSON: {str(extract_err)}")
+                                        raise ValueError(f"Failed to parse response: {str(extract_err)}")
+                                else:
+                                    logger.error("No valid JSON found in response")
+                                    raise ValueError("No valid JSON found in response")
+                            
+                            # Validate required fields
+                            required_fields = ["task_completed", "final_commit_hash"]
+                            missing_fields = [field for field in required_fields if field not in final_output]
+                            
+                            if missing_fields:
+                                logger.warning(f"Response missing required fields: {', '.join(missing_fields)}")
+                                retry_count += 1
+                                if retry_count >= max_retries:
+                                    raise ValueError(f"Response missing required fields after {max_retries} attempts")
+                                continue
+                            
+                            # Log validation steps if available
+                            if "validation_steps" in final_output and final_output["validation_steps"]:
+                                logger.info("Validation steps:", extra={'validation': True})
+                                for step in final_output["validation_steps"]:
+                                    logger.info(f"- {step}", extra={'validation': True})
+                            
+                            # Return result based on task completion
+                            task_completed = final_output.get("task_completed", False)
+                            final_hash = final_output.get("final_commit_hash", context.state.git_hash)
+                            completion_reason = final_output.get("completion_reason", "No reason provided")
+                            
+                            if task_completed:
+                                logger.info(f"✅ Task completed successfully", extra=extra)
+                            else:
+                                logger.warning(f"❌ Task failed: {completion_reason}", extra=extra)
+                            
+                            return ExecutionResult(
+                                success=task_completed,
+                                branch_name=branch_name,
+                                git_hash=final_hash,
+                                error_message=None if task_completed else completion_reason,
+                                execution_time=time.time() - start_time,
+                                repository_path=context.state.repository_path,
+                                validation_results=final_output.get("validation_steps", [])
+                            )
+                            
+                        except asyncio.TimeoutError:
+                            logger.error("LLM interaction timed out")
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                raise
+                            
+                        except Exception as e:
+                            logger.error(f"Error during LLM interaction: {str(e)}")
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                raise
+                
+                # Create a task with a timeout
+                try:
+                    return await asyncio.wait_for(execute_with_timeout(), timeout=300)  # 5-minute timeout
+                except asyncio.TimeoutError:
+                    logger.error("Task execution timed out after 5 minutes")
+                    return ExecutionResult(
+                        success=False,
+                        branch_name=branch_name or base_name,
+                        git_hash=context.state.git_hash,
+                        error_message="Task execution timed out after 5 minutes",
+                        execution_time=time.time() - start_time,
+                        repository_path=context.state.repository_path
+                    )
+            except Exception as e:
+                logger.error(f"Error during LLM interaction: {str(e)}")
+                return ExecutionResult(
+                    success=False,
+                    branch_name=branch_name or base_name,
+                    git_hash=context.state.git_hash,
+                    error_message=f"Error during LLM interaction: {str(e)}",
+                    execution_time=time.time() - start_time,
+                    repository_path=context.state.repository_path
+                )
             
         except Exception as e:
             logger.error(f"Fatal error during task execution: {str(e)}")
+            import traceback
+            logger.debug(f"Exception traceback: {traceback.format_exc()}")
+            
             # If execution fails, clean up the branch and go back to main
-            try:
-                await run_terminal_cmd(
-                    command=["git", "checkout", "main"], 
-                    cwd=context.state.repository_path
-                )
-                # Don't assume we know the branch name if create_branch failed
-                if 'branch_name' in locals():
+            if branch_name:
+                try:
+                    logger.info("Cleaning up after error - switching back to main branch", extra=extra)
                     await run_terminal_cmd(
-                        command=["git", "branch", "-D", branch_name],
+                        command="git checkout main", 
                         cwd=context.state.repository_path
                     )
-            except Exception as cleanup_error:
-                logger.error(f"Error during cleanup: {str(cleanup_error)}")
+                    
+                    logger.info(f"Removing branch: {branch_name}", extra=extra)
+                    await run_terminal_cmd(
+                        command=f"git branch -D {branch_name}",
+                        cwd=context.state.repository_path
+                    )
+                    logger.info("Cleanup completed", extra=extra)
+                except Exception as cleanup_error:
+                    logger.error(f"Error during cleanup: {str(cleanup_error)}")
+                    logger.debug(f"Cleanup exception traceback: {traceback.format_exc()}")
+            else:
+                logger.info("No branch was created, so no cleanup needed", extra=extra)
                 
             return ExecutionResult(
                 success=False,
-                branch_name=base_name,  # Use base_name since we don't have actual branch name
+                branch_name=branch_name or base_name,
                 git_hash=context.state.git_hash,
                 error_message=str(e),
                 execution_time=time.time() - start_time,
