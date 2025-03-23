@@ -153,6 +153,9 @@ async def run_executor(args):
         timestamp = int(result.execution_time) if result.execution_time else int(asyncio.get_event_loop().time())
         output_file = Path(args.output_dir) / f"task_result_{timestamp}.json"
         
+        # Get the input filename if it exists
+        input_filename = os.path.basename(args.input_file) if args.input_file else None
+        
         logger.info(f"Saving execution results to {output_file}")
         with open(output_file, 'w') as f:
             json.dump(
@@ -163,7 +166,8 @@ async def run_executor(args):
                     "branch_name": result.branch_name,
                     "git_hash": result.git_hash,
                     "error_message": result.error_message,
-                    "validation_results": result.validation_results if hasattr(result, 'validation_results') else []
+                    "validation_results": result.validation_results if hasattr(result, 'validation_results') else [],
+                    "input_file": input_filename  # Include the input filename in the result
                 },
                 f,
                 indent=2
@@ -174,6 +178,8 @@ async def run_executor(args):
             logger.info(f"\n✅ Task completed successfully in {result.execution_time:.2f} seconds")
             logger.info(f"Branch: {result.branch_name}")
             logger.info(f"Final commit: {result.git_hash[:8]}")
+            if input_filename:
+                logger.info(f"Input file: {input_filename}")
             
             # Display validation results if any
             if hasattr(result, 'validation_results') and result.validation_results:
@@ -183,6 +189,8 @@ async def run_executor(args):
         else:
             logger.error(f"\n❌ Task execution failed in {result.execution_time:.2f} seconds")
             logger.error(f"Error: {result.error_message}")
+            if input_filename:
+                logger.info(f"Input file: {input_filename}")
         
         logger.info(f"\nOutput saved to {output_file}")
         logger.info(f"Full logs saved to {log_file}")
