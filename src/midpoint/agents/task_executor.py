@@ -16,23 +16,13 @@ import os
 import logging
 
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
-from .goal_decomposer import validate_repository_state
-from .tools import (
-    check_repo_state,
-    create_branch,
-    create_commit,
-    get_current_hash,
-    get_current_branch,
-    checkout_branch,
-    list_directory,
-    read_file,
-    search_code,
-    edit_file,
-    run_terminal_cmd,
-    validate_repository_state,
-    web_search,
-    web_scrape
-)
+from .tools import initialize_all_tools
+from .tools.processor import ToolProcessor
+from .tools.registry import ToolRegistry
+from .tools.git_tools import create_branch, create_commit, get_current_hash, get_current_branch
+from .tools.filesystem_tools import list_directory, read_file
+from .tools.code_tools import search_code
+from .tools.web_tools import web_search, web_scrape
 from .config import get_openai_api_key
 from openai import AsyncOpenAI
 

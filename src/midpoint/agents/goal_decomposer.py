@@ -12,14 +12,12 @@ import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
-from midpoint.agents.tools import (
-    list_directory,
-    read_file,
-    search_code,
-    get_current_hash,
-    web_search,
-    web_scrape
-)
+from midpoint.agents.tools import initialize_all_tools
+from midpoint.agents.tools.processor import ToolProcessor
+from midpoint.agents.tools.filesystem_tools import list_directory, read_file
+from midpoint.agents.tools.code_tools import search_code
+from midpoint.agents.tools.git_tools import get_current_hash
+from midpoint.agents.tools.web_tools import web_search, web_scrape
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
 from dotenv import load_dotenv
