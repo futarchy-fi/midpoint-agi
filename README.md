@@ -284,40 +284,48 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Agent Memory System
 
-This project now includes an experimental agent memory system that allows agents to retain and recall information across sessions. The memory system uses a separate Git repository to store memory documents, which are organized by category.
+The system now includes an agent memory feature, allowing agents to retain and recall information across sessions. The memory system is organized as a separate Git repository storing memory documents categorized by type.
 
-### Key Components
+#### Key Components:
 
-- `scripts/init_memory_repo.py`: Script to initialize a memory repository
-- `scripts/memory_tools.py`: Utility functions for working with memory repository
-- `scripts/memory_example.py`: Example script demonstrating memory integration
-- `scripts/memory_integration.py`: Example of integrating memory with the agent system
+- **scripts/init_memory_repo.py**: Initializes a memory repository with appropriate structure
+- **scripts/memory_tools.py**: Utility functions for storing, retrieving memories, and managing cross-references
+- **scripts/memory_example.py**: Simple example demonstrating memory usage
+- **scripts/memory_integration.py**: Example showing integration with agent systems
+- **scripts/memory_revert_example.py**: Tool for reverting to previous states with synchronized code and memory
 
-### Usage
+#### Features:
 
-To initialize a memory repository:
+- **Document-based Memory**: Store and retrieve memories as documents
+- **Category Organization**: Organize memories by type (reasoning, observations, decisions)
+- **Cross-referencing System**: Track relationships between code and memory states
+- **Historical Tracking**: Maintain complete history of all code-memory mappings
+- **State Reversion**: Ability to revert to any previous state with matching code and memory
 
-```bash
-python scripts/init_memory_repo.py --path /path/to/memory/repo
-```
+#### Usage:
 
-To store and retrieve memory documents:
+1. Initialize the memory repository:
+   ```bash
+   python scripts/init_memory_repo.py ~/.midpoint/memory
+   ```
 
-```bash
-python scripts/memory_tools.py store --category reasoning --content "My reasoning"
-python scripts/memory_tools.py retrieve --category reasoning
-```
+2. Store and retrieve memories:
+   ```bash
+   # Store a memory document
+   python -m scripts.memory_tools store reasoning --content "This is important reasoning"
+   
+   # Retrieve recent memory documents
+   python -m scripts.memory_tools retrieve --category observations
+   ```
 
-To see a complete demonstration of the memory system:
+3. View cross-reference history:
+   ```bash
+   python -m scripts.memory_tools history
+   ```
 
-```bash
-python scripts/memory_example.py --init --store
-```
+4. Revert to previous states:
+   ```bash
+   python -m scripts.memory_revert_example interactive
+   ```
 
-To see how memory can be integrated with agents:
-
-```bash
-python scripts/memory_integration.py --init --store --query "What have you learned?"
-```
-
-For more information, see the [Memory System Documentation](docs/memory_system.md). 
+See the [Memory System Documentation](docs/memory_system.md) for complete details. 

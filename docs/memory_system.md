@@ -91,4 +91,102 @@ The memory system can be integrated with the existing Midpoint agent by:
 - Integration with vector database for semantic search
 - Automatic linking of code and memory states
 - Enhanced memory summarization and retrieval
-- Multi-agent memory sharing 
+- Multi-agent memory sharing
+
+## Cross-Reference System
+
+The memory system maintains a cross-reference between code repository states and memory repository states. This allows retrieval of memories that were relevant at a specific point in the code's history.
+
+### Structure
+
+The cross-reference information is stored in `metadata/cross-reference.json` with the following structure:
+
+```json
+{
+  "mappings": [
+    {
+      "code_hash": "1234567890abcdef",
+      "memory_hash": "abcdef1234567890",
+      "timestamp": 1679012345
+    },
+    {
+      "code_hash": "1234567890abcdef",
+      "memory_hash": "fedcba0987654321",
+      "timestamp": 1679012400
+    }
+  ],
+  "latest": {
+    "1234567890abcdef": "fedcba0987654321"
+  }
+}
+```
+
+This format supports:
+- Full history of all mappings, including timestamps
+- Multiple memory states for a single code state
+- Quick lookup of the latest memory state for any code state
+
+### Usage
+
+The system provides several ways to access the cross-reference data:
+
+1. **Get latest memory for code**:
+   ```python
+   memory_hash = get_memory_for_code_hash(code_hash)
+   ```
+
+2. **Get full history of memories for code**:
+   ```python
+   historical_mappings = get_memory_for_code_hash(code_hash, historical=True)
+   ```
+
+3. **Get memory from specific time period**:
+   ```python
+   memory_hash = get_memory_for_code_hash(code_hash, timestamp=specific_time)
+   ```
+
+### CLI Commands
+
+You can also interact with the cross-reference system using the CLI:
+
+```bash
+# Link a code hash to a memory hash
+python -m scripts.memory_tools link CODE_HASH MEMORY_HASH
+
+# Look up the latest memory hash for a code hash
+python -m scripts.memory_tools lookup CODE_HASH
+
+# View all historical mappings for a code hash
+python -m scripts.memory_tools lookup CODE_HASH --historical
+
+# Find memory hash from closest timestamp
+python -m scripts.memory_tools lookup CODE_HASH --timestamp=1679012345
+
+# View complete cross-reference history
+python -m scripts.memory_tools history
+```
+
+### State Reversion
+
+The cross-reference system's historical tracking allows precise reversion to previous states:
+
+1. **Identifying a state to revert to**:
+   ```bash
+   python -m scripts.memory_tools history
+   ```
+
+2. **Reverting to that state**:
+   ```python
+   # In code
+   code_hash = "1234567890abcdef"
+   timestamp = 1679012345  # Timestamp from history
+   
+   # Get the memory hash from that time
+   memory_hash = get_memory_for_code_hash(code_hash, timestamp=timestamp)
+   
+   # Checkout both repositories to that state
+   subprocess.run(["git", "checkout", code_hash], cwd=CODE_REPO_PATH)
+   subprocess.run(["git", "checkout", memory_hash], cwd=MEMORY_REPO_PATH)
+   ```
+
+This enables the Midpoint system to travel back in time to any specific state in its development history, with both code and memory correctly synchronized. 
