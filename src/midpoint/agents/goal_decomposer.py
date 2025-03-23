@@ -320,8 +320,33 @@ class GoalDecomposer:
         initialize_all_tools()
         self.tool_processor = ToolProcessor(self.client)
         
-        # Define the system prompt focusing on determining the next step
-        self.system_prompt = """You are an expert software architect and project planner.
+        # Get tools from registry
+        self.tools = ToolRegistry.get_tool_schemas()
+        
+        # Generate system prompt with dynamic tool descriptions
+        self.system_prompt = self._generate_system_prompt()
+
+    def _generate_system_prompt(self) -> str:
+        """
+        Generate a system prompt that includes dynamically generated tool descriptions.
+        
+        Returns:
+            The system prompt with tool descriptions.
+        """
+        # Generate list of available tools and their descriptions
+        tool_descriptions = []
+        for tool_schema in self.tools:
+            if tool_schema['type'] == 'function' and 'function' in tool_schema:
+                function = tool_schema['function']
+                name = function.get('name', '')
+                description = function.get('description', '')
+                tool_descriptions.append(f"- {name}: {description}")
+        
+        # Join the tool descriptions with newlines
+        tool_descriptions_text = "\n".join(tool_descriptions)
+        
+        # Create the system prompt with the tool descriptions
+        system_prompt = f"""You are an expert software architect and project planner.
 Your task is to determine the SINGLE NEXT STEP toward a complex software development goal.
 Follow the OODA loop: Observe, Orient, Decide, Act.
 
@@ -354,9 +379,7 @@ Also identify any relevant context that should be passed to child subgoals:
 - Structure this as key-value pairs in the 'relevant_context' field
 
 You have access to these tools:
-- list_directory: List files and directories in the repository
-- read_file: Read the contents of a file
-- search_code: Search the codebase for patterns
+{tool_descriptions_text}
 
 You MUST provide a structured response in JSON format with these fields:
 - next_step: A clear description of the single next step to take
@@ -365,188 +388,7 @@ You MUST provide a structured response in JSON format with these fields:
 - requires_further_decomposition: Boolean indicating if this step needs further breakdown (true) or can be directly executed (false)
 - relevant_context: Object containing relevant information to pass to child subgoals"""
         
-        # Define tool schema for the OpenAI API
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_directory",
-                    "description": "List the contents of a directory in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "directory": {
-                                "type": "string",
-                                "description": "Directory to list within the repository",
-                                "default": "."
-                            }
-                        },
-                        "required": ["repo_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read the contents of a file in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the file within the repository"
-                            },
-                            "start_line": {
-                                "type": "integer",
-                                "description": "First line to read (0-indexed)",
-                                "default": 0
-                            },
-                            "max_lines": {
-                                "type": "integer",
-                                "description": "Maximum number of lines to read",
-                                "default": 100
-                            }
-                        },
-                        "required": ["repo_path", "file_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_code",
-                    "description": "Search the codebase for patterns",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "pattern": {
-                                "type": "string",
-                                "description": "Regular expression pattern to search for"
-                            },
-                            "file_pattern": {
-                                "type": "string",
-                                "description": "Pattern for files to include (e.g., '*.py')",
-                                "default": "*"
-                            },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of results to return",
-                                "default": 20
-                            }
-                        },
-                        "required": ["repo_path", "pattern"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "description": "Search the web using DuckDuckGo's API",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The search query"
-                            },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of results to return",
-                                "default": 5
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "web_scrape",
-                    "description": "Scrape content from a webpage",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": "string",
-                                "description": "The URL to scrape"
-                            }
-                        },
-                        "required": ["url"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "store_memory_document",
-                    "description": "Store a document in the memory repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "Content of the document to store"
-                            },
-                            "category": {
-                                "type": "string",
-                                "description": "Category to store the document in (reasoning, observations, decisions)",
-                                "enum": ["reasoning", "observations", "decisions", "study"]
-                            },
-                            "metadata": {
-                                "type": "object",
-                                "description": "Additional metadata to store with the document",
-                                "default": {}
-                            },
-                            "memory_repo_path": {
-                                "type": "string",
-                                "description": "Path to the memory repository (optional)"
-                            }
-                        },
-                        "required": ["content", "category"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "retrieve_memory_documents",
-                    "description": "Retrieve documents from the memory repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "category": {
-                                "type": "string",
-                                "description": "Category to retrieve documents from (optional)"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum number of documents to retrieve",
-                                "default": 5
-                            },
-                            "memory_repo_path": {
-                                "type": "string",
-                                "description": "Path to the memory repository (optional)"
-                            }
-                        }
-                    }
-                }
-            }
-        ]
+        return system_prompt
 
     async def determine_next_step(self, context: TaskContext, setup_logging=False, debug=False, quiet=False) -> SubgoalPlan:
         """
@@ -1189,7 +1031,8 @@ appropriate when the goal involves gaining knowledge or understanding without ch
                     messages=messages,
                     model=self.model,
                     temperature=0.5,
-                    max_tokens=4000
+                    max_tokens=4000,
+                    validate_json_format=True
                 )
                 
                 # Log tool usage

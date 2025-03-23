@@ -127,10 +127,42 @@ class TaskExecutor:
             
         # Initialize OpenAI client
         self.client = AsyncOpenAI(api_key=api_key)
+        
+        # Initialize all tools for the ToolRegistry
+        initialize_all_tools()
+        
+        # Get tools from the registry
+        self.tools = ToolRegistry.get_tool_schemas()
+        
+        # Initialize the ToolProcessor
+        self.tool_processor = ToolProcessor(self.client)
+        
         logger.info("TaskExecutor initialized successfully")
         
-        # System prompt for the LLM that will make all task execution decisions
-        self.system_prompt = """You are a task execution agent responsible for implementing changes.
+        # Generate the system prompt with dynamically generated tool descriptions
+        self.system_prompt = self._generate_system_prompt()
+
+    def _generate_system_prompt(self) -> str:
+        """
+        Generate a system prompt that includes dynamically generated tool descriptions.
+        
+        Returns:
+            The system prompt with tool descriptions.
+        """
+        # Generate list of available tools and their descriptions
+        tool_descriptions = []
+        for tool_schema in self.tools:
+            if tool_schema['type'] == 'function' and 'function' in tool_schema:
+                function = tool_schema['function']
+                name = function.get('name', '')
+                description = function.get('description', '')
+                tool_descriptions.append(f"- {name}: {description}")
+        
+        # Join the tool descriptions with newlines
+        tool_descriptions_text = "\n".join(tool_descriptions)
+        
+        # Create the system prompt with the tool descriptions
+        system_prompt = f"""You are a task execution agent responsible for implementing changes.
 Your role is to:
 1. Execute tasks using available tools
 2. Track progress and report status
@@ -145,26 +177,8 @@ IMPORTANT: A new branch has been created for you to work on. You are responsible
 4. If only storing information in memory: Use memory repository tools and set task_completed to true
 5. Ensuring all code changes are committed before completing
 
-Available tools:
-- list_directory: List contents of a directory
-- read_file: Read contents of a file
-- search_code: Search for code patterns
-- create_commit: Create a git commit
-- run_terminal_cmd: Run a terminal command
-- edit_file: Edit the contents of a file
-- web_search: Search the web using DuckDuckGo's API
-- web_scrape: Scrape content from a webpage
-- store_memory_document: Store a document in the memory repository
-- retrieve_memory_documents: Retrieve documents from the memory repository
-
-IMPORTANT TOOL USAGE NOTES:
-1. When using tools, provide only the name without any prefixes (e.g., use "list_directory" not "functions.list_directory")
-2. The create_commit tool will return the new commit hash - you must save this hash and use it as the final_commit_hash in your response
-3. Always make your code changes and verify them before creating a commit
-4. For study/exploratory tasks, use store_memory_document to save your findings - these count as task completion
-5. Use memory repository tools to store important observations, findings, or decisions:
-   - store_memory_document to save information for future reference
-   - retrieve_memory_documents to recall previously stored information
+You have the following tools available:
+{tool_descriptions_text}
 
 Task completion criteria:
 1. A task is considered complete if EITHER:
@@ -182,245 +196,17 @@ For each task:
 4. Validate the changes
 5. Create appropriate commits if code was changed
 6. Store relevant information in the memory repository
-7. If you made code changes, return the final commit hash from the create_commit call
-   If you only stored information in memory, return the original git hash
 
-Your response must be in JSON format with these fields:
-{
-    "actions": [
-        {
-            "tool": "string",  # Name of the tool to use (without any prefixes)
-            "args": {},  # Arguments for the tool
-            "purpose": "string"  # Why this action is needed
-        }
-    ],
-    "final_commit_hash": "string",  # Hash returned from create_commit OR original hash if no code changes
-    "validation_steps": [  # Steps to validate the changes
-        "string"
-    ],
-    "task_completed": boolean,  # Whether the task was successfully completed
-    "completion_reason": "string",  # Explanation if task was not completed
-    "memory_documents": [  # Information stored in memory (if any)
-        {
-            "category": "string",  # Category of the document
-            "document_path": "string"  # Path of the document in memory
-        }
-    ],
-    "made_code_changes": boolean  # Whether you made changes to the code repository (default: false)
-}"""
+When you've completed the task or determined it cannot be completed, provide a final response with:
+1. A summary of what you did
+2. Whether the task was completed successfully
+3. Any validation steps that can be taken to verify the changes
+4. The git hash of the final commit, if you made code changes
+5. References to any memory documents you created
 
-        # Define tool schema for the OpenAI API
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_directory",
-                    "description": "List the contents of a directory in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "directory": {
-                                "type": "string",
-                                "description": "Directory to list within the repository",
-                                "default": "."
-                            }
-                        },
-                        "required": ["repo_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read the contents of a file in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the file within the repository"
-                            },
-                            "start_line": {
-                                "type": "integer",
-                                "description": "First line to read (0-indexed)",
-                                "default": 0
-                            },
-                            "max_lines": {
-                                "type": "integer",
-                                "description": "Maximum number of lines to read",
-                                "default": 100
-                            }
-                        },
-                        "required": ["repo_path", "file_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_code",
-                    "description": "Search the codebase for patterns",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "pattern": {
-                                "type": "string",
-                                "description": "Regular expression pattern to search for"
-                            },
-                            "file_pattern": {
-                                "type": "string",
-                                "description": "Pattern for files to include (e.g., '*.py')",
-                                "default": "*"
-                            },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of results to return",
-                                "default": 20
-                            }
-                        },
-                        "required": ["repo_path", "pattern"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "edit_file",
-                    "description": "Edit the contents of a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the file to edit"
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "New content for the file"
-                            }
-                        },
-                        "required": ["repo_path", "file_path", "content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_terminal_cmd",
-                    "description": "Run a terminal command",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The command to run"
-                            },
-                            "cwd": {
-                                "type": "string",
-                                "description": "Working directory for the command"
-                            }
-                        },
-                        "required": ["command", "cwd"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_commit",
-                    "description": "Create a git commit with the given message",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "message": {
-                                "type": "string",
-                                "description": "Commit message"
-                            }
-                        },
-                        "required": ["repo_path", "message"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "store_memory_document",
-                    "description": "Store a document in the memory repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "Content to store in the document"
-                            },
-                            "category": {
-                                "type": "string",
-                                "description": "Category to store the document under (reasoning, observations, decisions, study)",
-                                "default": "general"
-                            },
-                            "metadata": {
-                                "type": "object",
-                                "description": "Additional metadata to store with the document",
-                                "default": {}
-                            },
-                            "memory_repo_path": {
-                                "type": "string",
-                                "description": "Path to the memory repository (if not provided, will use the one from context)"
-                            }
-                        },
-                        "required": ["content", "category"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "retrieve_memory_documents",
-                    "description": "Retrieve documents from the memory repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "category": {
-                                "type": "string",
-                                "description": "Category to retrieve documents from (reasoning, observations, decisions, study)",
-                                "default": ""
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum number of documents to retrieve",
-                                "default": 10
-                            },
-                            "memory_repo_path": {
-                                "type": "string",
-                                "description": "Path to the memory repository (if not provided, will use the one from context)"
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            }
-        ]
+For exploratory or study tasks, use the memory repository to store your findings rather than making code changes."""
+        
+        return system_prompt
 
     async def execute_task(self, context: TaskContext, task: str) -> ExecutionResult:
         """
@@ -526,83 +312,95 @@ Use the store_memory_document tool to save this information with appropriate cat
                     nonlocal retry_count
                     while retry_count < max_retries:
                         try:
-                            logger.info(f"Sending request to LLM (attempt {retry_count + 1}/{max_retries})", extra=extra)
-                            # Get LLM response
-                            response = await self.client.chat.completions.create(
-                                model="gpt-4-turbo-preview",
+                            logger.info(f"Sending request to LLM with tool processing (attempt {retry_count + 1}/{max_retries})", extra=extra)
+                            
+                            # Use the ToolProcessor to handle the complete tool execution loop
+                            final_message, tool_usage = await self.tool_processor.run_llm_with_tools(
                                 messages=messages,
+                                model="gpt-4-turbo-preview",
                                 temperature=0.7,
-                                max_tokens=2000
+                                max_tokens=2000,
+                                validate_json_format=False
                             )
                             
-                            # Parse the response
-                            content = response.choices[0].message.content
-                            logger.debug(f"LLM response received (length: {len(content)})")
+                            # Log tool usage
+                            if tool_usage:
+                                logger.info(f"Model used {len(tool_usage)} tools during execution", extra=extra)
+                                for tool in tool_usage:
+                                    logger.debug(f"Used tool: {tool['tool']} with args: {tool['args']}")
                             
-                            try:
-                                # Try to parse as JSON
-                                final_output = json.loads(content)
-                                logger.info("Successfully parsed LLM response as JSON", extra=extra)
-                            except json.JSONDecodeError as json_err:
-                                # If not JSON, try to extract JSON from the content
-                                logger.warning(f"Failed to parse response as JSON: {str(json_err)}")
-                                json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                                if json_match:
-                                    try:
-                                        logger.info("Attempting to extract JSON from response", extra=extra)
-                                        final_output = json.loads(json_match.group())
-                                        logger.info("Successfully extracted and parsed JSON from response", extra=extra)
-                                    except json.JSONDecodeError as extract_err:
-                                        logger.error(f"Failed to parse extracted JSON: {str(extract_err)}")
-                                        raise ValueError(f"Failed to parse response: {str(extract_err)}")
+                            # Get the content from the final message
+                            content = final_message.content
+                            logger.debug(f"LLM final response received (length: {len(content)})")
+                            
+                            # Analyze the content to determine task status and outcomes
+                            # This is in free-form text now, not structured JSON
+                            
+                            # Check for task completion indicators
+                            task_completed = True  # Default to true unless we find indicators of failure
+                            completion_reason = ""
+                            memory_documents = []
+                            made_code_changes = False
+                            final_hash = context.state.git_hash  # Default to original hash
+                            validation_steps = []
+                            
+                            # Extract patterns for validation steps
+                            validation_pattern = r"validation steps?:?\s*[\n\*\-]+(.*?)(?:\n\n|\n#|\Z)"
+                            validation_match = re.search(validation_pattern, content, re.IGNORECASE | re.DOTALL)
+                            if validation_match:
+                                validation_text = validation_match.group(1).strip()
+                                # Split by newlines and bullet points
+                                validation_steps = [step.strip().lstrip("-*•").strip() for step in re.split(r"\n+|\*|\-|•", validation_text) if step.strip()]
+                            
+                            # Extract if task is completed or not
+                            if re.search(r"task (was |has been )?(not|couldn'?t) (be )?(completed|finished|successful)", content, re.IGNORECASE):
+                                task_completed = False
+                                # Try to find the reason
+                                reason_pattern = r"(reason|because|due to|error)[:\s]+(.*?)(?:\n\n|\n#|\Z)"
+                                reason_match = re.search(reason_pattern, content, re.IGNORECASE | re.DOTALL)
+                                if reason_match:
+                                    completion_reason = reason_match.group(2).strip()
                                 else:
-                                    logger.error("No valid JSON found in response")
-                                    raise ValueError("No valid JSON found in response")
+                                    completion_reason = "Task could not be completed"
                             
-                            # Validate required fields
-                            required_fields = ["task_completed"]
-                            missing_fields = [field for field in required_fields if field not in final_output]
+                            # Check for commit hash references
+                            commit_pattern = r"(commit hash|final hash|git hash)[:\s]+([a-f0-9]{7,40})"
+                            commit_match = re.search(commit_pattern, content, re.IGNORECASE)
+                            if commit_match:
+                                final_hash = commit_match.group(2).strip()
+                                made_code_changes = True
                             
-                            if missing_fields:
-                                logger.warning(f"Response missing required fields: {', '.join(missing_fields)}")
-                                retry_count += 1
-                                if retry_count >= max_retries:
-                                    raise ValueError(f"Response missing required fields after {max_retries} attempts")
-                                continue
-                            
-                            # Log validation steps if available
-                            if "validation_steps" in final_output and final_output["validation_steps"]:
-                                logger.info("Validation steps:", extra={'validation': True})
-                                for step in final_output["validation_steps"]:
-                                    logger.info(f"- {step}", extra={'validation': True})
-                            
-                            # Log memory documents if available
-                            memory_documents = final_output.get("memory_documents", [])
-                            if memory_documents:
-                                logger.info("Memory documents stored:", extra={'memory': True})
-                                for doc in memory_documents:
-                                    logger.info(f"- {doc.get('category', 'unknown')}: {doc.get('document_path', 'unknown')}", extra={'memory': True})
-                            
-                            # Check if code changes were made
-                            made_code_changes = final_output.get("made_code_changes", False)
-                            
-                            # Return result based on task completion
-                            task_completed = final_output.get("task_completed", False)
-                            completion_reason = final_output.get("completion_reason", "No reason provided")
-                            
-                            # Validate final_commit_hash is present when code changes are made
-                            if made_code_changes and "final_commit_hash" not in final_output:
-                                logger.warning("Made code changes but no final_commit_hash provided")
-                                retry_count += 1
-                                if retry_count >= max_retries:
-                                    raise ValueError("Made code changes but no final_commit_hash provided after multiple attempts")
-                                continue
+                            # Check for memory document references
+                            memory_pattern = r"memory document[s]?[:\s]+(.*?)(?:\n\n|\n#|\Z)"
+                            memory_match = re.search(memory_pattern, content, re.IGNORECASE | re.DOTALL)
+                            if memory_match:
+                                memory_text = memory_match.group(1).strip()
+                                # Try to extract individual documents with categories
+                                memory_items = re.findall(r"['\"]?([a-zA-Z0-9_]+)['\"]?\s*\(([a-zA-Z0-9_]+)\)", memory_text)
+                                for path, category in memory_items:
+                                    memory_documents.append({"document_path": path, "category": category})
                                 
-                            # Set final hash based on whether code changes were made
-                            if made_code_changes:
-                                final_hash = final_output.get("final_commit_hash")
-                            else:
-                                final_hash = context.state.git_hash
+                                # If we didn't find any with that pattern, try a simpler approach
+                                if not memory_documents:
+                                    # Just split by commas, newlines, or bullets
+                                    memory_items = [item.strip().lstrip("-*•").strip() for item in re.split(r"\n+|\*|\-|•|,", memory_text) if item.strip()]
+                                    for item in memory_items:
+                                        # Try to extract category if in format "path (category)"
+                                        cat_match = re.search(r"(.*?)\s*\(([a-zA-Z0-9_]+)\)", item)
+                                        if cat_match:
+                                            path = cat_match.group(1).strip().strip("'\"")
+                                            category = cat_match.group(2).strip()
+                                            memory_documents.append({"document_path": path, "category": category})
+                                        else:
+                                            # Just use the item as path and guess category
+                                            memory_documents.append({"document_path": item, "category": "unknown"})
+                            
+                            # Check for tool errors that might indicate task failure
+                            if "Error:" in content and not task_completed:
+                                if not completion_reason:
+                                    error_match = re.search(r"Error:?\s+(.*?)(?:\n\n|\n#|\Z)", content, re.IGNORECASE | re.DOTALL)
+                                    if error_match:
+                                        completion_reason = error_match.group(1).strip()
                             
                             # Detect uncommitted changes in the code repository
                             try:
@@ -615,59 +413,75 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 has_uncommitted_changes = bool(status_output.strip())
                                 
                                 if has_uncommitted_changes and task_completed:
-                                    logger.warning("Task marked as completed but uncommitted changes exist in repository")
-                                    task_completed = False
-                                    completion_reason = "Task has uncommitted changes in the repository"
+                                    # Check if this is a simple task like listing files that doesn't need commits
+                                    if "list" in task.lower() or "find" in task.lower() or "show" in task.lower() or "display" in task.lower():
+                                        # This is a simple informational task, ignore uncommitted changes
+                                        logger.info("Task is a simple informational task, ignoring uncommitted changes")
+                                    else:
+                                        logger.warning("Task marked as completed but uncommitted changes exist in repository")
+                                        task_completed = False
+                                        completion_reason = "Task has uncommitted changes in the repository"
                             except Exception as e:
                                 logger.error(f"Error checking for uncommitted changes: {str(e)}")
                             
                             # If no memory documents and no code changes, but marked complete, it's an error
                             if task_completed and not memory_documents and not made_code_changes:
-                                logger.warning("Task marked as completed but no changes were made to code or memory")
-                                task_completed = False
-                                completion_reason = "Task did not make any changes to code or memory repositories"
+                                # Check if this is a simple task like listing files that doesn't need changes
+                                if "list" in task.lower() or "find" in task.lower() or "show" in task.lower() or "display" in task.lower():
+                                    # This is a simple informational task, keep it marked as completed
+                                    logger.info("Task is a simple informational task, marking as completed")
+                                else:
+                                    logger.warning("Task marked as completed but no changes were made to code or memory")
+                                    task_completed = False
+                                    completion_reason = "Task did not make any changes to code or memory repositories"
                             
                             # Check if this is an exploratory task that's just getting started
-                            # If it has actions defined but hasn't stored anything yet, we'll treat this as a task in progress
-                            actions = final_output.get("actions", [])
-                            if not task_completed and actions and not memory_documents and not made_code_changes:
-                                # Check if the completion reason indicates this is just an initial step
-                                if any(keyword in completion_reason.lower() for keyword in ["initial", "first step", "starting", "begin", "locate"]):
-                                    logger.info("This appears to be an exploratory task in its initial step.")
-                                    logger.info("Creating an initial memory document to track progress.")
+                            # We'll look for phrases indicating the model is still exploring
+                            is_exploratory = False
+                            exploration_phrases = ["begin exploring", "start by", "first step", "initial exploration", 
+                                                   "starting with", "gather information", "looking through", "search for"]
+                            
+                            for phrase in exploration_phrases:
+                                if phrase in content.lower():
+                                    is_exploratory = True
+                                    break
+                            
+                            # For exploratory tasks, create an initial memory document if needed
+                            if not task_completed and not memory_documents and not made_code_changes and is_exploratory:
+                                logger.info("This appears to be an exploratory task in its initial step.")
+                                logger.info("Creating an initial memory document to track progress.")
+                                
+                                # Create a memory document to track the task progress
+                                try:
+                                    # Create a summary based on the model's response
+                                    memory_content = f"""## Study Session Progress Tracker
                                     
-                                    # Create a memory document to track the task progress
-                                    try:
-                                        # Create a summary of planned actions
-                                        planned_actions = "\n".join([f"- {action.get('purpose', 'No purpose specified')}" for action in actions])
-                                        memory_content = f"""## Study Session Progress Tracker
-                                        
-                                        ### Task
-                                        {task}
-                                        
-                                        ### Current Status
-                                        Initial exploration phase. The task is in progress.
-                                        
-                                        ### Planned Actions
-                                        {planned_actions}
-                                        
-                                        ### Findings So Far
-                                        No findings yet, exploration just beginning.
-                                        """
-                                        
-                                        await store_memory_document(
-                                            content=memory_content,
-                                            category="study",
-                                            metadata={"task": task, "status": "in_progress"},
-                                            memory_repo_path=context.state.memory_repository_path
-                                        )
-                                        
-                                        # Update the response data
-                                        memory_documents = [{"category": "study", "document_path": "task_progress.md"}]
-                                        task_completed = True
-                                        logger.info("Created initial progress tracking document in memory repository")
-                                    except Exception as e:
-                                        logger.error(f"Failed to create initial memory document: {str(e)}")
+                                    ### Task
+                                    {task}
+                                    
+                                    ### Current Status
+                                    Initial exploration phase. The task is in progress.
+                                    
+                                    ### Model's Response
+                                    {content[:2000]}  # Truncate if too long
+                                    
+                                    ### Findings So Far
+                                    No findings yet, exploration just beginning.
+                                    """
+                                    
+                                    await store_memory_document(
+                                        content=memory_content,
+                                        category="study",
+                                        metadata={"task": task, "status": "in_progress"},
+                                        memory_repo_path=context.state.memory_repository_path
+                                    )
+                                    
+                                    # Update the response data
+                                    memory_documents = [{"category": "study", "document_path": "task_progress.md"}]
+                                    task_completed = True
+                                    logger.info("Created initial progress tracking document in memory repository")
+                                except Exception as e:
+                                    logger.error(f"Failed to create initial memory document: {str(e)}")
                             
                             if task_completed:
                                 logger.info(f"✅ Task completed successfully", extra=extra)
@@ -681,7 +495,7 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 error_message=None if task_completed else completion_reason,
                                 execution_time=time.time() - start_time,
                                 repository_path=context.state.repository_path,
-                                validation_results=final_output.get("validation_steps", [])
+                                validation_results=validation_steps
                             )
                             
                         except asyncio.TimeoutError:

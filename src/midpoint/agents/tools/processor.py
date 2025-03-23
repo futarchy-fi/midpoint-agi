@@ -107,7 +107,8 @@ class ToolProcessor:
                                messages: List[Dict[str, Any]], 
                                model: str = "gpt-4o",
                                temperature: float = 0.1,
-                               max_tokens: int = 4000) -> Tuple[Any, List[Dict[str, Any]]]:
+                               max_tokens: int = 4000,
+                               validate_json_format: bool = False) -> Tuple[Any, List[Dict[str, Any]]]:
         """Run LLM with tools until a final response is generated."""
         current_messages = messages.copy()
         tool_usage = []
@@ -178,43 +179,48 @@ class ToolProcessor:
                     current_messages.extend(tool_results)
                 else:
                     # If the model isn't making a tool call, this is our final response
-                    try:
-                        # Try to parse the content as JSON
-                        content = assistant_message.content.strip()
-                        
-                        # Check if the JSON is valid, and if not, ask for valid JSON
+                    # Only validate JSON format if requested
+                    if validate_json_format:
                         try:
-                            # If JSON is embedded in code blocks, extract it
-                            if "```json" in content:
-                                parts = content.split("```json")
-                                if len(parts) > 1:
-                                    json_part = parts[1].split("```")[0].strip()
-                                    json.loads(json_part)  # Just testing if it's valid
-                            elif "```" in content:
-                                parts = content.split("```")
-                                if len(parts) > 1:
-                                    json_part = parts[1].strip()
-                                    json.loads(json_part)  # Just testing if it's valid
-                            else:
-                                # Try parsing directly
-                                json.loads(content)
-                                
-                            # If we got here, the JSON is valid, set as final response
-                            final_response = assistant_message
-                        except json.JSONDecodeError:
-                            # This was not a valid JSON, ask for a valid JSON
-                            if current_iteration < max_iterations:
-                                logging.warning(f"Invalid JSON response on iteration {current_iteration}, asking for valid JSON")
-                                current_messages.append({
-                                    "role": "user",
-                                    "content": "Please provide your response in valid JSON format with fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
-                                })
-                            else:
-                                # If we've reached max iterations, just return what we have
-                                logging.warning("Max iterations reached, returning whatever we have")
+                            # Try to parse the content as JSON
+                            content = assistant_message.content.strip()
+                            
+                            # Check if the JSON is valid, and if not, ask for valid JSON
+                            try:
+                                # If JSON is embedded in code blocks, extract it
+                                if "```json" in content:
+                                    parts = content.split("```json")
+                                    if len(parts) > 1:
+                                        json_part = parts[1].split("```")[0].strip()
+                                        json.loads(json_part)  # Just testing if it's valid
+                                elif "```" in content:
+                                    parts = content.split("```")
+                                    if len(parts) > 1:
+                                        json_part = parts[1].strip()
+                                        json.loads(json_part)  # Just testing if it's valid
+                                else:
+                                    # Try parsing directly
+                                    json.loads(content)
+                                    
+                                # If we got here, the JSON is valid, set as final response
                                 final_response = assistant_message
-                    except Exception as e:
-                        logging.error(f"Error processing final response: {str(e)}")
+                            except json.JSONDecodeError:
+                                # This was not a valid JSON, ask for a valid JSON
+                                if current_iteration < max_iterations:
+                                    logging.warning(f"Invalid JSON response on iteration {current_iteration}, asking for valid JSON")
+                                    current_messages.append({
+                                        "role": "user",
+                                        "content": "Please provide your response in valid JSON format with fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
+                                    })
+                                else:
+                                    # If we've reached max iterations, just return what we have
+                                    logging.warning("Max iterations reached, returning whatever we have")
+                                    final_response = assistant_message
+                        except Exception as e:
+                            logging.error(f"Error processing final response: {str(e)}")
+                            final_response = assistant_message
+                    else:
+                        # Skip JSON validation, just use the response as is
                         final_response = assistant_message
             
             except Exception as e:
