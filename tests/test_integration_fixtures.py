@@ -55,13 +55,14 @@ def setup_test_repository(with_dummy_files=True):
     
     return repo_path
 
-def create_test_subgoal_file(repo_path, requires_decomposition=False):
+def create_test_subgoal_file(repo_path, requires_decomposition=False, custom_content=None):
     """
     Create a test subgoal file in the logs directory.
     
     Args:
         repo_path: Path to the repository.
         requires_decomposition: Whether the subgoal requires further decomposition.
+        custom_content: Optional dict to override the default content of the subgoal file.
         
     Returns:
         Path to the created subgoal file.
@@ -73,25 +74,24 @@ def create_test_subgoal_file(repo_path, requires_decomposition=False):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     hash_suffix = os.urandom(3).hex()
     
-    # Decide on file prefix
-    file_prefix = "subgoal" if requires_decomposition else "task"
+    subgoal_file = logs_dir / f"test_subgoal_{timestamp}_{hash_suffix}.json"
     
-    # Create the subgoal file
-    subgoal_file = logs_dir / f"{file_prefix}_{timestamp}_{hash_suffix}.json"
-    
-    # Sample content for the subgoal
-    subgoal_content = {
-        "next_step": f"Test {'subgoal' if requires_decomposition else 'task'} for integration testing",
-        "validation_criteria": ["Test passes", "Integration works properly"],
-        "reasoning": "We need to test with realistic subgoal files",
+    # Default content
+    content = {
+        "goal": "Test goal for integration testing",
+        "next_step": "Add a print statement to main.py",
+        "validation_criteria": ["Test validation passes"],
+        "reasoning": "This is a test task for integration testing.",
         "requires_further_decomposition": requires_decomposition,
-        "relevant_context": {"test_context": "value"},
-        "metadata": {"source": "test_integration_fixtures"}
+        "relevant_context": {}
     }
     
-    # Write the subgoal content to the file
+    # Override with custom content if provided
+    if custom_content:
+        content.update(custom_content)
+    
     with open(subgoal_file, 'w') as f:
-        json.dump(subgoal_content, f, indent=2)
+        json.dump(content, f, indent=2)
     
     return subgoal_file
 
