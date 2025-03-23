@@ -38,9 +38,8 @@ try:
     # Try direct import first
     import memory_tools
     
-    # Create direct references to the functions we need
+    # Create direct references to the functions we need (except get_current_hash)
     get_repo_path = memory_tools.get_repo_path
-    get_current_hash = memory_tools.get_current_hash
     store_document = memory_tools.store_document
     retrieve_documents = memory_tools.retrieve_documents
     update_cross_reference = memory_tools.update_cross_reference
@@ -60,23 +59,6 @@ except Exception as e:
             print("Using fallback get_repo_path")
         return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
     
-    def get_current_hash(repo_path):
-        """Fallback implementation to get current git hash."""
-        if os.environ.get("DEBUG"):
-            print("Using fallback get_current_hash")
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return result.stdout.strip()
-        except:
-            return "unknown-hash"
-
     def store_document(content, category, metadata=None, repo_path=None):
         """Fallback implementation to store a document."""
         logging.warning("Using fallback store_document implementation.")
@@ -170,10 +152,11 @@ from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
+    get_current_hash,
     web_search,
     web_scrape,
     store_memory_document,
-    retrieve_memory_documents
+    retrieve_memory_documents,
 )
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
@@ -763,7 +746,7 @@ You MUST provide a structured response in JSON format with these fields:
                                 # Get the current memory hash before storing the document
                                 old_memory_hash = None
                                 try:
-                                    old_memory_hash = get_current_hash(memory_repo_path)
+                                    old_memory_hash = await get_current_hash(memory_repo_path)
                                 except Exception as e:
                                     logging.debug(f"Failed to get memory hash before storing document: {str(e)}")
                                 
@@ -793,7 +776,7 @@ You MUST provide a structured response in JSON format with these fields:
                                 # Get the new memory hash after storing the document
                                 if not new_memory_hash:
                                     try:
-                                        new_memory_hash = get_current_hash(memory_repo_path)
+                                        new_memory_hash = await get_current_hash(memory_repo_path)
                                     except Exception as e:
                                         logging.debug(f"Failed to get memory hash after storing document: {str(e)}")
                                 
@@ -1256,12 +1239,11 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     # If git_hash is provided, check that it matches the current hash
     if git_hash:
         try:
-            current_hash = get_current_hash(repo_path)
+            current_hash = await get_current_hash(repo_path)
             if current_hash != git_hash:
                 logging.warning("Repository hash mismatch: expected %s, got %s", git_hash, current_hash)
         except Exception as e:
-            logging.error("Failed to check git hash: %s", str(e))
-            raise ValueError(f"Failed to check git hash: {str(e)}")
+            logging.warning(f"Failed to validate repository hash: {str(e)}")
 
 def list_subgoal_files(logs_dir="logs"):
     """List available subgoal JSON files in the logs directory.
@@ -1306,7 +1288,10 @@ def list_subgoal_files(logs_dir="logs"):
     subgoal_files.sort(key=lambda x: x[1], reverse=True)
     return subgoal_files
 
-def main():
+async def main():
+    """
+    Main entry point for running the GoalDecomposer to determine the next step.
+    """
     parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
     parser.add_argument('--repo-path', required=True, help='Path to the git repository')
     parser.add_argument('--goal-description', help='Description of the goal')
@@ -1452,17 +1437,17 @@ def main():
             logging.info(f"Added relevant context from input file: {relevant_context}")
 
         # Validate repository state and get current hash
-        current_hash = get_current_hash(args.repo_path)
+        current_hash = await get_current_hash(args.repo_path)
         state.git_hash = current_hash
         
         # Get memory hash if not provided but memory repo path is
         if not state.memory_hash and state.memory_repository_path:
             try:
-                memory_hash = get_current_hash(state.memory_repository_path)
+                memory_hash = await get_current_hash(state.memory_repository_path)
                 state.memory_hash = memory_hash
                 logging.info(f"Setting memory hash to current hash: {memory_hash[:7] if memory_hash else 'None'}")
             except Exception as e:
-                logging.warning(f"Failed to get current memory hash: {str(e)}")
+                logging.warning(f"Failed to get memory hash: {str(e)}")
         
         # Look up memory hash based on code hash if no memory hash is available
         if not state.memory_hash and state.repository_path and state.git_hash:
@@ -1543,7 +1528,7 @@ def main():
         final_memory_hash = None
         if state.memory_repository_path:
             try:
-                final_memory_hash = get_current_hash(state.memory_repository_path)
+                final_memory_hash = await get_current_hash(state.memory_repository_path)
                 
                 # Log memory hash changes only if it changed since the last tool operation
                 # (we already log changes during tool operations)
@@ -1729,4 +1714,5 @@ def main():
         return
 
 if __name__ == "__main__":
-    main() 
+    # Set up argument parser and configure using main
+    asyncio.run(main()) 
