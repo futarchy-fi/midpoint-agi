@@ -19,7 +19,7 @@ src_path = Path(__file__).resolve().parent.parent / "src"
 sys.path.append(str(src_path))
 
 from midpoint.agents.task_executor import TaskExecutor, configure_logging
-from midpoint.agents.models import Goal, State, TaskContext, ExecutionResult
+from midpoint.agents.models import Goal, State, TaskContext, ExecutionResult, MemoryState
 from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
 from midpoint.agents import config
 
@@ -74,12 +74,35 @@ async def run_executor(args):
     repo_path = args.repo_path
     try:
         logger.info(f"Checking repository state at {repo_path}")
+        # Import here to avoid circular imports
+        from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
         git_hash = await get_current_hash(repo_path)
         branch = await get_current_branch(repo_path)
         logger.info(f"Current branch: {branch}, hash: {git_hash[:8]}")
     except Exception as e:
         logger.error(f"Error accessing git repository: {str(e)}")
         sys.exit(1)
+    
+    # Handle memory repository integration
+    memory_state = None
+    if args.memory_repo_path:
+        logger.info(f"Using memory repository at {args.memory_repo_path}")
+        memory_hash = args.memory_hash
+        
+        # If no memory hash provided, try to get current hash
+        if not memory_hash:
+            try:
+                # We already imported get_current_hash above
+                memory_hash = await get_current_hash(args.memory_repo_path)
+                logger.info(f"Using current memory hash: {memory_hash[:8]}")
+            except Exception as e:
+                logger.error(f"Error getting memory hash: {str(e)}")
+                sys.exit(1)
+        
+        memory_state = MemoryState(
+            memory_hash=memory_hash,
+            repository_path=args.memory_repo_path
+        )
     
     # Create goal
     logger.info("Creating task context")
@@ -93,7 +116,10 @@ async def run_executor(args):
     state = State(
         git_hash=git_hash,
         description=f"Repository state on branch {branch}",
-        repository_path=repo_path
+        repository_path=repo_path,
+        branch_name=branch,
+        memory_hash=memory_state.memory_hash if memory_state else None,
+        memory_repository_path=args.memory_repo_path
     )
     
     # Create task context
@@ -102,7 +128,8 @@ async def run_executor(args):
         goal=goal,
         iteration=0,
         execution_history=[],
-        metadata={}
+        metadata={},
+        memory_state=memory_state
     )
     
     # Initialize task executor
@@ -115,6 +142,10 @@ async def run_executor(args):
         logger.info(f"Repository: {repo_path}")
         logger.info(f"Branch: {branch}")
         logger.info(f"Initial commit: {git_hash[:8]}")
+        
+        if memory_state:
+            logger.info(f"Memory repository: {args.memory_repo_path}")
+            logger.info(f"Memory hash: {memory_state.memory_hash[:8]}")
         
         result = await executor.execute_task(context, task_description)
         
@@ -174,6 +205,10 @@ def main():
     task_group = parser.add_mutually_exclusive_group(required=True)
     task_group.add_argument('--task', help='Task description to execute')
     task_group.add_argument('--input-file', help='Path to subgoal JSON file containing the task')
+    
+    # Memory repository arguments
+    parser.add_argument('--memory-repo-path', help='Path to the memory repository')
+    parser.add_argument('--memory-hash', help='Git hash of the memory repository to use (if not provided, current hash will be used)')
     
     # Optional arguments
     parser.add_argument('--goal', help='Overall goal context for the task')

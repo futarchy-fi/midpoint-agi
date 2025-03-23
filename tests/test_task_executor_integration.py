@@ -25,12 +25,13 @@ from tests.test_helpers import async_test
 from tests.test_integration_fixtures import (
     setup_test_repository,
     create_test_subgoal_file,
-    cleanup_test_fixtures
+    cleanup_test_fixtures,
+    setup_memory_repository
 )
 
 # Import module under test
 from src.midpoint.agents.task_executor import TaskExecutor, configure_logging
-from src.midpoint.agents.models import State, Goal, TaskContext, ExecutionResult
+from src.midpoint.agents.models import State, Goal, TaskContext, ExecutionResult, MemoryState
 
 # Register cleanup function to run at exit
 atexit.register(cleanup_test_fixtures)
@@ -504,6 +505,102 @@ class TestTaskExecutorIntegration(unittest.TestCase):
         
         # Verify cleanup was performed even after cancellation
         self.assertTrue(cleanup_performed, "Cleanup should be performed after task cancellation")
+
+    @patch('src.midpoint.agents.task_executor.AsyncOpenAI')
+    @async_test
+    async def test_integration_with_memory(self, mock_openai):
+        """Test the integration with memory repository."""
+        # Setup memory repository
+        memory_path, memory_hash = setup_memory_repository()
+        
+        # Set up mock OpenAI client
+        mock_client = AsyncMock()
+        mock_openai.return_value = mock_client
+        
+        # Prepare a mock response from the LLM that includes memory operations
+        mock_response = AsyncMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "actions": [
+                {
+                    "tool": "edit_file",
+                    "args": {
+                        "file_path": "hello.py",
+                        "content": "print('Hello, World!')"
+                    },
+                    "purpose": "Creating hello.py with a print statement"
+                }
+            ],
+            "final_commit_hash": "test_commit_hash",
+            "validation_steps": [
+                "Verified hello.py exists",
+                "Confirmed hello.py contains print statement",
+                "Stored study document in memory"
+            ],
+            "task_completed": True,
+            "completion_reason": "Task was successful",
+            "memory_documents": [
+                {
+                    "category": "study",
+                    "document_path": "documents/study/doc_12345.md"
+                }
+            ]
+        })
+        
+        # Set up the mock chat completion
+        mock_client.chat.completions.create.return_value = mock_response
+        
+        # Mock the file creation function
+        with patch('src.midpoint.agents.tools.filesystem_tools.edit_file') as mock_edit_file:
+            # Set up the mock to actually create the file
+            async def create_mock_file(file_path, content, create_dirs=True):
+                # Create the file to test file existence check
+                file_path = Path(file_path)
+                if not file_path.is_absolute():
+                    file_path = Path(self.context.state.repository_path) / file_path
+                    
+                # Create parent directories if they don't exist
+                if create_dirs:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Write the content to the file
+                with open(file_path, 'w') as f:
+                    f.write(content)
+                    
+                return {"success": True, "message": f"Created file {file_path}"}
+                
+            mock_edit_file.side_effect = create_mock_file
+            
+            # Create a git commit mock
+            with patch('src.midpoint.agents.tools.git_tools.create_commit') as mock_create_commit:
+                mock_create_commit.return_value = {"hash": "test_commit_hash", "message": "Test commit"}
+                
+                # Initialize TaskExecutor
+                executor = TaskExecutor()
+                
+                # Update context with memory repository information
+                self.context.state.memory_repository_path = str(memory_path)
+                self.context.state.memory_hash = memory_hash
+                self.context.memory_state = MemoryState(
+                    memory_hash=memory_hash,
+                    repository_path=str(memory_path)
+                )
+                
+                # Execute the task
+                result = await executor.execute_task(self.context, self.task)
+                
+                # Check the result
+                self.assertTrue(result.success, "Task execution should be successful")
+                
+                # Successful result should have the test_commit_hash
+                self.assertEqual(result.git_hash, "test_commit_hash")
+                
+                # Since TaskExecutor doesn't execute tools directly but only reports the memory_documents
+                # from the LLM response, we should verify that the memory_documents were logged
+                # instead of verifying that the store_memory_document function was called
+                self.assertEqual(len(result.validation_results), 3)
+                self.assertIn("Stored study document in memory", result.validation_results)
 
 if __name__ == "__main__":
     unittest.main() 

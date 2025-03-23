@@ -26,6 +26,7 @@ from .tools.filesystem_tools import list_directory, read_file
 from .tools.code_tools import search_code
 from .tools.web_tools import web_search, web_scrape
 from .tools.terminal_tools import run_terminal_cmd
+from .tools.memory_tools import store_memory_document, retrieve_memory_documents
 from .config import get_openai_api_key
 from openai import AsyncOpenAI
 
@@ -88,6 +89,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                 record.msg = f"🔧 Tool: {record.tool} - {record.msg}"
             if hasattr(record, 'validation') and record.validation:
                 record.msg = f"✓ Validation: {record.msg}"
+            if hasattr(record, 'memory') and record.memory:
+                record.msg = f"📚 Memory: {record.msg}"
             return True
     
     console_handler.addFilter(TaskExecutorFilter())
@@ -133,12 +136,14 @@ Your role is to:
 2. Track progress and report status
 3. Handle errors gracefully
 4. Maintain clean git state
+5. Store important findings and observations in the memory repository
 
 IMPORTANT: A new branch has been created for you to work on. You are responsible for:
 1. Making all necessary changes to implement the task
 2. Creating commits with meaningful messages
 3. Ensuring all changes are committed before completing
 4. Returning the final commit hash in your output
+5. Storing relevant information in the memory repository when appropriate
 
 Available tools:
 - list_directory: List contents of a directory
@@ -149,12 +154,17 @@ Available tools:
 - edit_file: Edit the contents of a file
 - web_search: Search the web using DuckDuckGo's API
 - web_scrape: Scrape content from a webpage
+- store_memory_document: Store a document in the memory repository
+- retrieve_memory_documents: Retrieve documents from the memory repository
 
 IMPORTANT TOOL USAGE NOTES:
 1. When using tools, provide only the name without any prefixes (e.g., use "list_directory" not "functions.list_directory")
 2. The create_commit tool will return the new commit hash - you must save this hash and use it as the final_commit_hash in your response
 3. Always make your changes and verify them before creating a commit
 4. After creating a commit, store the returned hash and use it in your final output
+5. Use memory repository tools to store important observations, findings, or decisions:
+   - store_memory_document to save information for future reference
+   - retrieve_memory_documents to recall previously stored information
 
 For each task:
 1. Analyze the current repository state
@@ -162,7 +172,8 @@ For each task:
 3. Use the available tools to implement changes
 4. Validate the changes
 5. Create appropriate commits
-6. Return the final commit hash from the create_commit call
+6. Store relevant information in the memory repository
+7. Return the final commit hash from the create_commit call
 
 Your response must be in JSON format with these fields:
 {
@@ -178,7 +189,13 @@ Your response must be in JSON format with these fields:
         "string"
     ],
     "task_completed": boolean,  # Whether the task was successfully completed
-    "completion_reason": "string"  # Explanation if task was not completed
+    "completion_reason": "string",  # Explanation if task was not completed
+    "memory_documents": [  # Information stored in memory (if any)
+        {
+            "category": "string",  # Category of the document
+            "document_path": "string"  # Path of the document in memory
+        }
+    ]
 }"""
 
         # Define tool schema for the OpenAI API
@@ -333,6 +350,64 @@ Your response must be in JSON format with these fields:
                         "required": ["repo_path", "message"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "store_memory_document",
+                    "description": "Store a document in the memory repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Content to store in the document"
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "Category to store the document under (reasoning, observations, decisions, study)",
+                                "default": "general"
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional metadata to store with the document",
+                                "default": {}
+                            },
+                            "memory_repo_path": {
+                                "type": "string",
+                                "description": "Path to the memory repository (if not provided, will use the one from context)"
+                            }
+                        },
+                        "required": ["content", "category"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "retrieve_memory_documents",
+                    "description": "Retrieve documents from the memory repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "description": "Category to retrieve documents from (reasoning, observations, decisions, study)",
+                                "default": ""
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of documents to retrieve",
+                                "default": 10
+                            },
+                            "memory_repo_path": {
+                                "type": "string",
+                                "description": "Path to the memory repository (if not provided, will use the one from context)"
+                            }
+                        },
+                        "required": []
+                    }
+                }
             }
         ]
 
@@ -349,6 +424,7 @@ Your response must be in JSON format with these fields:
         3. Use the available tools to implement changes
         4. Validate the changes
         5. Create appropriate commits
+        6. Store relevant information in memory repository
         
         Args:
             context: The current task context
@@ -361,6 +437,11 @@ Your response must be in JSON format with these fields:
         logger.info(f"Starting task execution: {task}", extra=extra)
         logger.info(f"Repository: {context.state.repository_path}")
         logger.info(f"Current Git Hash: {context.state.git_hash}")
+        
+        # Log memory repository information if available
+        if context.state.memory_repository_path and context.state.memory_hash:
+            logger.info(f"Memory Repository: {context.state.memory_repository_path}")
+            logger.info(f"Memory Hash: {context.state.memory_hash}")
         
         # Initialize execution
         start_time = time.time()
@@ -399,6 +480,20 @@ Your response must be in JSON format with these fields:
 Repository Path: {context.state.repository_path}
 Branch: {branch_name} (newly created for this task)
 Git Hash: {context.state.git_hash}"""
+
+            # Add memory repository info if available
+            if context.state.memory_repository_path and context.state.memory_hash:
+                user_prompt += f"""
+
+Memory Repository Path: {context.state.memory_repository_path}
+Memory Hash: {context.state.memory_hash}
+
+You should use the memory repository to store important findings, decisions, and observations. 
+Use the store_memory_document tool to save this information with appropriate categories:
+- 'reasoning' for explanations of your thought process
+- 'observations' for interesting discoveries
+- 'decisions' for important choices you make
+- 'study' for research and learning outcomes"""
 
             logger.debug(f"User prompt: {user_prompt}")
 
@@ -469,6 +564,13 @@ Git Hash: {context.state.git_hash}"""
                                 logger.info("Validation steps:", extra={'validation': True})
                                 for step in final_output["validation_steps"]:
                                     logger.info(f"- {step}", extra={'validation': True})
+                            
+                            # Log memory documents if available
+                            memory_documents = final_output.get("memory_documents", [])
+                            if memory_documents:
+                                logger.info("Memory documents stored:", extra={'memory': True})
+                                for doc in memory_documents:
+                                    logger.info(f"- {doc.get('category', 'unknown')}: {doc.get('document_path', 'unknown')}", extra={'memory': True})
                             
                             # Return result based on task completion
                             task_completed = final_output.get("task_completed", False)

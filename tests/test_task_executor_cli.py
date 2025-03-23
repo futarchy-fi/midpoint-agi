@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
+import atexit
 
 # Add the parent directory to the Python path
 repo_root = Path(__file__).parent.parent
@@ -25,34 +26,34 @@ import run_task_executor
 from tests.test_helpers import async_test
 from tests.test_integration_fixtures import (
     setup_test_repository,
+    create_test_subgoal_file,
+    setup_memory_repository,
     cleanup_test_fixtures
 )
 
 from src.midpoint.agents.models import ExecutionResult, TaskContext
 from src.midpoint.agents.task_executor import TaskExecutor
 
+# Register cleanup function to run at exit
+atexit.register(cleanup_test_fixtures)
+
 class TestTaskExecutorCLI(unittest.TestCase):
     """Tests for the TaskExecutor CLI script."""
 
     def setUp(self):
         """Set up test fixtures."""
-        # Set up test repository
+        # Set up test repositories
         self.repo_path = setup_test_repository(with_dummy_files=True)
+        
+        # Set up memory repository
+        self.memory_path, self.memory_hash = setup_memory_repository()
+        
+        # Create test subgoal file
+        self.subgoal_file = create_test_subgoal_file(self.repo_path, requires_decomposition=False)
         
         # Create test output directory
         self.output_dir = self.repo_path / "test_output"
         self.output_dir.mkdir(exist_ok=True)
-        
-        # Create a test subgoal file
-        self.subgoal_file = self.repo_path / "test_subgoal.json"
-        with open(self.subgoal_file, 'w') as f:
-            json.dump({
-                "next_step": "Add a print statement to main.py",
-                "validation_criteria": ["main.py contains a print statement"],
-                "reasoning": "This is a test task",
-                "requires_further_decomposition": False,
-                "relevant_context": {}
-            }, f, indent=2)
         
         # Create an invalid subgoal file (missing required fields)
         self.invalid_subgoal_file = self.repo_path / "invalid_subgoal.json"
@@ -92,7 +93,7 @@ class TestTaskExecutorCLI(unittest.TestCase):
 
     def tearDown(self):
         """Tear down test fixtures."""
-        # Clean up is handled by the global cleanup function
+        # Individual test cleanup is handled by the global cleanup function
         pass
 
     def test_cli_help_command(self):
@@ -106,6 +107,10 @@ class TestTaskExecutorCLI(unittest.TestCase):
         self.assertEqual(result.returncode, 0, 
                          f"Script failed to show help: {result.stderr}")
         self.assertIn("Run the TaskExecutor with specified parameters", result.stdout)
+        
+        # Help output should include memory repository arguments
+        self.assertIn("--memory-repo-path", result.stdout)
+        self.assertIn("--memory-hash", result.stdout)
 
     def test_missing_arguments(self):
         """Test that the CLI properly errors on missing arguments."""
@@ -205,6 +210,8 @@ class TestTaskExecutorCLI(unittest.TestCase):
             debug = True
             quiet = False
             no_commit = False
+            memory_repo_path = None
+            memory_hash = None
         
         # Run the executor function
         result = await run_task_executor.run_executor(Args())
@@ -265,6 +272,8 @@ class TestTaskExecutorCLI(unittest.TestCase):
             debug = False
             quiet = False
             no_commit = False
+            memory_repo_path = None
+            memory_hash = None
         
         # Run the executor function
         result = await run_task_executor.run_executor(Args())
@@ -318,6 +327,8 @@ class TestTaskExecutorCLI(unittest.TestCase):
             debug = False
             quiet = False
             no_commit = False
+            memory_repo_path = None
+            memory_hash = None
         
         # Run the executor function
         result = await run_task_executor.run_executor(Args())
@@ -344,6 +355,50 @@ class TestTaskExecutorCLI(unittest.TestCase):
             task_context.goal.validation_criteria, 
             subgoal_data['validation_criteria']
         )
+
+    @patch('subprocess.run')
+    def test_cli_with_memory_args(self, mock_subprocess_run):
+        """Test that the CLI properly handles memory repository arguments."""
+        # Mock subprocess.run to return success
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Task execution completed successfully"
+        mock_result.stderr = ""
+        mock_subprocess_run.return_value = mock_result
+        
+        # Set up command line arguments
+        cli_args = [
+            sys.executable,
+            str(self.script_path),
+            "--repo-path", str(self.repo_path),
+            "--input-file", str(self.subgoal_file),
+            "--memory-repo-path", str(self.memory_path),
+            "--memory-hash", self.memory_hash
+        ]
+        
+        # Run the command
+        with patch.dict(os.environ, self.test_env):
+            result = subprocess.run(
+                cli_args,
+                capture_output=True,
+                text=True
+            )
+            
+            # Check that mock_subprocess_run was called with the correct arguments
+            mock_subprocess_run.assert_called()
+            
+            # Extract the args from the call
+            call_args = mock_subprocess_run.call_args[0][0]
+            
+            # Verify memory repository arguments were included
+            self.assertIn("--memory-repo-path", " ".join(call_args), 
+                        "Memory repository path argument should be passed")
+            self.assertIn("--memory-hash", " ".join(call_args),
+                        "Memory hash argument should be passed")
+            self.assertIn(str(self.memory_path), " ".join(call_args),
+                        "Memory repository path value should be passed")
+            self.assertIn(self.memory_hash, " ".join(call_args),
+                        "Memory hash value should be passed")
 
 if __name__ == "__main__":
     unittest.main() 
