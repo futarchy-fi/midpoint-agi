@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 def get_repo_path():
     """Get the memory repository path from environment variables."""
     load_dotenv()
-    return os.getenv("MEMORY_REPO_PATH", "./agent-memory")
+    return os.getenv("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
 
 def get_current_hash(repo_path):
     """Get the current commit hash of the memory repository."""

@@ -151,7 +151,7 @@ def main():
     parser = argparse.ArgumentParser(description="Initialize a memory repository")
     parser.add_argument(
         "--path",
-        default=os.getenv("MEMORY_REPO_PATH", "./agent-memory"),
+        default=os.getenv("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory")),
         help="Path to memory repository"
     )
     parser.add_argument(
