@@ -22,6 +22,119 @@ from midpoint.agents.tools import (
 )
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
+from dotenv import load_dotenv
+import logging
+from pathlib import Path
+import sys
+
+load_dotenv()
+
+# Create a function to configure logging so it only happens when needed
+def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
+    """
+    Configure logging for the goal decomposer.
+    
+    Args:
+        debug: Whether to show debug messages on console
+        quiet: Whether to only show warnings and the final result
+        log_dir_path: Directory to store log files
+    """
+    # Create log directory if it doesn't exist
+    log_dir = Path(log_dir_path)
+    log_dir.mkdir(exist_ok=True)
+    
+    # Create a unique log file name with timestamp
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"goal_decomposer_{timestamp}.log"
+    
+    # Create file handler for full logging
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    file_handler.setLevel(logging.DEBUG)  # Log everything to file
+    
+    # Create console handler with a more concise format
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    
+    # Set console handler level based on arguments
+    if debug:
+        console_handler.setLevel(logging.DEBUG)
+    elif quiet:
+        console_handler.setLevel(logging.WARNING)
+    else:
+        console_handler.setLevel(logging.INFO)
+    
+    # Set up root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture all logs
+    
+    # Remove existing handlers to prevent duplicates
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add our custom handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Set up a filter for console output to make it more concise
+    class ConsoleFormatFilter(logging.Filter):
+        def filter(self, record):
+            # Only process INFO level logs for formatting
+            if record.levelno == logging.INFO:
+                # Make emojis and messages more concise
+                if '📂 Listing directory:' in record.msg:
+                    record.msg = record.msg.replace('📂 Listing directory:', '📂')
+                elif '📄 Reading:' in record.msg:
+                    record.msg = record.msg.replace('📄 Reading:', '📄')
+                elif '🔍 Searching code:' in record.msg:
+                    record.msg = record.msg.replace('🔍 Searching code:', '🔍')
+                elif '🤖 API call completed' in record.msg:
+                    return False  # Don't show API calls in console
+                elif '✅ Next step:' in record.msg:
+                    # Show this message only in standalone mode
+                    if 'main' not in sys._getframe().f_back.f_code.co_name:
+                        return True
+                    return False  # Don't show in main() since we have better formatting there
+                elif 'Validation criteria:' in record.msg:
+                    # Hide validation criteria messages in main() since we have better formatting there
+                    if 'main' not in sys._getframe().f_back.f_code.co_name:
+                        return True
+                    return False
+                elif 'Requires further decomposition:' in record.msg:
+                    # Hide decomposition info in main() since we have better formatting there
+                    if 'main' not in sys._getframe().f_back.f_code.co_name:
+                        return True
+                    return False
+                elif 'Determining next step for goal:' in record.msg:
+                    try:
+                        # Try to safely extract the goal description
+                        if record.args and len(record.args) > 0:
+                            goal_desc = str(record.args[0])
+                            record.msg = f"🎯 Goal: {goal_desc}"
+                        else:
+                            record.msg = "🎯 Processing goal"
+                        record.args = ()  # Clear arguments to avoid formatting errors
+                    except:
+                        record.msg = "🎯 Processing goal"
+                        record.args = ()
+                elif '🚀 Starting GoalDecomposer' in record.msg:
+                    record.msg = '🚀 Starting'
+                elif 'HTTP Request:' in record.msg or 'API' in record.msg:
+                    return False  # Don't show HTTP requests in console
+                elif 'Validating repository state' in record.msg:
+                    return False  # Hide validation message in console
+            return True
+    
+    # Apply the filter only to the console handler
+    console_handler.addFilter(ConsoleFormatFilter())
+    
+    # Log the configuration
+    if quiet:
+        print("Running in quiet mode - only showing result and errors...", file=sys.stderr)
+    
+    # Return log file path for reference
+    return log_file
 
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
@@ -199,12 +312,15 @@ You MUST provide a structured response in JSON format with these fields:
             }
         ]
 
-    async def determine_next_step(self, context: TaskContext) -> SubgoalPlan:
+    async def determine_next_step(self, context: TaskContext, setup_logging=False, debug=False, quiet=False) -> SubgoalPlan:
         """
         Determine the next step toward achieving the goal.
         
         Args:
             context: The current task context containing the goal and state
+            setup_logging: Whether to set up logging for this invocation (should be False when called from orchestrator)
+            debug: Whether to enable debug logging on console
+            quiet: Whether to minimize console output
             
         Returns:
             A SubgoalPlan containing the next step and validation criteria
@@ -213,6 +329,11 @@ You MUST provide a structured response in JSON format with these fields:
             ValueError: If the goal or context is invalid
             Exception: For other errors during execution
         """
+        # Set up logging if requested (only when called directly, not from orchestrator)
+        if setup_logging:
+            configure_logging(debug, quiet)
+            
+        logging.info("Determining next step for goal: %s", context.goal.description)
         # Validate inputs
         if not context.goal:
             raise ValueError("No goal provided in context")
@@ -237,15 +358,23 @@ You MUST provide a structured response in JSON format with these fields:
             
             # Loop until we get a final output
             while final_output is None:
-                # Call OpenAI API
-                response = await self.client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    tools=self.tools,
-                    tool_choice="auto",
-                    temperature=0.1,
-                    max_tokens=4000
-                )
+                # Log BEFORE making the API call (at DEBUG level now)
+                logging.debug(f"Calling OpenAI API with model: gpt-4o (iteration {len(messages)//2})")
+                logging.debug("Request messages: %s", json.dumps(self._serialize_messages(messages), indent=2))
+                
+                try:
+                    response = await self.client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=messages,
+                        tools=self.tools,
+                        tool_choice="auto",
+                        temperature=0.1,
+                        max_tokens=4000
+                    )
+                    logging.info(f"🤖 API call completed ({len(messages)//2})")
+                except Exception as e:
+                    logging.error("Error calling OpenAI API: %s", str(e))
+                    raise
                 
                 # Get the model's message
                 message = response.choices[0].message
@@ -255,39 +384,102 @@ You MUST provide a structured response in JSON format with these fields:
                 
                 # Check if the model wants to use tools
                 if message.tool_calls:
+                    # Create a human-friendly summary of tool calls for INFO level
+                    tool_summary = []
+                    for tc in message.tool_calls:
+                        args = json.loads(tc.function.arguments)
+                        if tc.function.name == "list_directory":
+                            dir_path = args.get("directory", ".")
+                            tool_summary.append(f"📂 Listing directory: {dir_path}")
+                        elif tc.function.name == "read_file":
+                            file_path = args.get("file_path", "unknown")
+                            tool_summary.append(f"📄 Reading: {file_path}")
+                        elif tc.function.name == "search_code":
+                            pattern = args.get("pattern", "unknown")
+                            tool_summary.append(f"🔍 Searching code: {pattern}")
+                        elif tc.function.name == "web_search":
+                            query = args.get("query", "unknown")
+                            tool_summary.append(f"🌐 Web search: {query}")
+                        elif tc.function.name == "web_scrape":
+                            url = args.get("url", "unknown")
+                            tool_summary.append(f"🌐 Scraping: {url}")
+                        else:
+                            tool_summary.append(f"{tc.function.name}")
+                    
+                    # Log the summary at INFO level - only the first tool to keep it concise
+                    if tool_summary:
+                        logging.info(f"{tool_summary[0]}")
+                        # Log additional tools at DEBUG level if there are multiple
+                        if len(tool_summary) > 1:
+                            logging.debug(f"Additional tools: {', '.join(tool_summary[1:])}")
+                    
                     # Process each tool call
                     for tool_call in message.tool_calls:
-                        # Get function details
-                        function_name = tool_call.function.name
-                        function_args = json.loads(tool_call.function.arguments)
-                        
-                        # Track the tool usage
-                        tool_usage.append(f"{function_name}: {json.dumps(function_args)}")
-                        
-                        # Execute the appropriate function
-                        if function_name == "list_directory":
-                            result = await list_directory(**function_args)
-                            result_str = json.dumps(result, indent=2)
-                        elif function_name == "read_file":
-                            result_str = await read_file(**function_args)
-                        elif function_name == "search_code":
-                            result_str = await search_code(**function_args)
-                        elif function_name == "web_search":
-                            result_str = await web_search(**function_args)
-                        elif function_name == "web_scrape":
-                            result_str = await web_scrape(**function_args)
-                        else:
-                            result_str = f"Error: Unknown function {function_name}"
+                        try:
+                            # Get function details
+                            function_name = tool_call.function.name
+                            function_args = json.loads(tool_call.function.arguments)
                             
-                        # Add the function result to our messages
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": function_name,
-                            "content": result_str
-                        })
+                            # Log details at DEBUG level
+                            logging.debug("Executing tool: %s with arguments: %s", function_name, json.dumps(function_args))
+                            
+                            # Track the tool usage
+                            tool_usage.append(f"{function_name}: {json.dumps(function_args)}")
+                            
+                            # Execute the appropriate function
+                            if function_name == "list_directory":
+                                result = await list_directory(**function_args)
+                                result_str = json.dumps(result, indent=2)
+                            elif function_name == "read_file":
+                                result_str = await read_file(**function_args)
+                            elif function_name == "search_code":
+                                result_str = await search_code(**function_args)
+                            elif function_name == "web_search":
+                                result_str = await web_search(**function_args)
+                            elif function_name == "web_scrape":
+                                result_str = await web_scrape(**function_args)
+                            else:
+                                result_str = f"Error: Unknown function {function_name}"
+                            
+                            # Log completion at DEBUG level
+                            logging.debug(f"Completed executing tool: {function_name}")
+                                
+                            # Add the function result to our messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": function_name,
+                                "content": result_str
+                            })
+                        except ValueError as ve:
+                            # Handle specific errors with more user-friendly messages
+                            error_message = str(ve)
+                            logging.debug("Tool execution error: %s", error_message)
+                            if "Directory does not exist" in error_message:
+                                dir_name = error_message.split(': ')[1] if ': ' in error_message else ''
+                                logging.info(f"❌ Directory not found: {dir_name}")                              
+                            
+                            # Add the error message to our messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": function_name,
+                                "content": f"Error: {error_message}"
+                            })
+                        except Exception as e:
+                            # Handle any other exceptions (keep as ERROR)
+                            error_message = f"Unexpected error during tool execution: {str(e)}"
+                            logging.error(error_message)
+                            
+                            # Add the error message to our messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": function_name,
+                                "content": f"Error: {error_message}"
+                            })
                 else:
-                    # If no tool calls, check if we have a final output
+                    # If no tool calls, this should be the final response
                     if message.content:
                         try:
                             # Attempt to parse the response as JSON
@@ -346,10 +538,43 @@ You MUST provide a structured response in JSON format with these fields:
             # Validate the subgoal plan
             self._validate_subgoal(final_output, context)
             
+            # Log tool usage at debug level
+            logging.debug("Tool usage: %s", tool_usage)
+
+            # Add logging for API call details - use serialized messages at debug level
+            try:
+                serialized_messages = self._serialize_messages(messages)
+                logging.debug("API call history: %s", json.dumps(serialized_messages, indent=2))
+            except Exception as e:
+                logging.error("Failed to serialize messages for logging: %s", str(e))
+
+            # Log successful outcome at info level with a more complete message
+            logging.info(f"✅ Next step: {final_output.next_step}")
+            
+            # Add more detailed info at INFO level for better visibility
+            logging.info("Validation criteria:")
+            for i, criterion in enumerate(final_output.validation_criteria, 1):
+                logging.info(f"  {i}. {criterion}")
+            
+            logging.info(f"Requires further decomposition: {final_output.requires_further_decomposition}")
+            
+            # Add logging for the final output at debug level
+            try:
+                logging.debug("Final output details: %s", json.dumps(final_output.__dict__, indent=2))
+            except Exception as e:
+                logging.error("Failed to serialize final output for logging: %s", str(e))
+
+            # Fix the NoneType error - check if tool_calls exists and is not None
+            if hasattr(message, 'tool_calls') and message.tool_calls is not None:
+                logging.debug("Tool calls in final message: %d", len(message.tool_calls))
+            else:
+                logging.debug("No tool calls in final message")
+
             return final_output
             
         except Exception as e:
-            raise Exception(f"Error during next step determination: {str(e)}")
+            # Let the main function handle the specific error types
+            raise
     
     def _create_user_prompt(self, context: TaskContext) -> str:
         """Create the user prompt for the agent."""
@@ -384,6 +609,54 @@ Focus on providing a clear next step with measurable validation criteria.
             
         # Additional validation can be added here 
 
+    def _serialize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert OpenAI message objects to serializable dictionaries."""
+        serialized = []
+        for msg in messages:
+            # Create a base serialized message with the role
+            if isinstance(msg, dict) and "role" in msg:
+                serialized_msg = {"role": msg["role"]}
+                
+                # Handle content
+                if isinstance(msg, dict) and "content" in msg:
+                    serialized_msg["content"] = msg["content"]
+                
+                # Handle tool calls
+                if isinstance(msg, dict) and "tool_calls" in msg and msg["tool_calls"]:
+                    serialized_tool_calls = []
+                    
+                    for tool_call in msg["tool_calls"]:
+                        # For OpenAI objects with attribute-based access
+                        if hasattr(tool_call, "function") and hasattr(tool_call, "id"):
+                            try:
+                                serialized_tool_call = {
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call.function.name,
+                                        "arguments": tool_call.function.arguments
+                                    }
+                                }
+                                serialized_tool_calls.append(serialized_tool_call)
+                            except AttributeError:
+                                # Skip if attributes aren't accessible
+                                logging.debug("Skipping tool call due to missing attributes")
+                                continue
+                        # For dictionary-based tool calls
+                        elif isinstance(tool_call, dict) and "function" in tool_call:
+                            serialized_tool_calls.append(tool_call)
+                    
+                    # Only add tool_calls if we have any
+                    if serialized_tool_calls:
+                        serialized_msg["tool_calls"] = serialized_tool_calls
+                
+                serialized.append(serialized_msg)
+            else:
+                # If not a dict with role, just add a simplified version
+                serialized.append({"role": "unknown", "content": str(msg)})
+        
+        return serialized
+
     async def decompose_recursively(self, context: TaskContext, log_file: str = "goal_hierarchy.log") -> List[SubgoalPlan]:
         """
         Recursively decompose a goal until reaching directly executable tasks.
@@ -395,6 +668,7 @@ Focus on providing a clear next step with measurable validation criteria.
         Returns:
             List of SubgoalPlan objects representing the decomposition hierarchy
         """
+        logging.info("Starting recursive decomposition for the goal: %s", context.goal.description)
         # Validate repository state
         await validate_repository_state(
             context.state.repository_path, 
@@ -464,42 +738,49 @@ Focus on providing a clear next step with measurable validation criteria.
             
         return depth
 
-async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
-    """
-    Validate repository is in expected state before decomposition.
+async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
+    """Validate that the repository is in a good state for goal decomposition."""
+    logging.info("Validating repository state for path: %s", repo_path)
     
-    Args:
-        repo_path: Path to the git repository
-        expected_hash: Expected git hash of the repository
+    if not os.path.isdir(repo_path):
+        raise ValueError(f"Repository path does not exist: {repo_path}")
+    
+    # Check if this is a git repository
+    git_dir = os.path.join(repo_path, ".git")
+    if not os.path.isdir(git_dir):
+        logging.warning("Path does not appear to be a git repository: %s", repo_path)
+        return
+    
+    # Skip further checks if requested
+    if skip_clean_check:
+        return
+    
+    # Check if the repository has uncommitted changes
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
         
-    Returns:
-        True if repository is in expected state
-        
-    Raises:
-        ValueError: If repository is not in expected state
-    """
-    # Check if repo exists
-    if not os.path.exists(os.path.join(repo_path, ".git")):
-        raise ValueError(f"Not a git repository: {repo_path}")
+        if result.stdout.strip():
+            raise ValueError(f"Repository has uncommitted changes: {repo_path}")
+    except subprocess.CalledProcessError as e:
+        logging.error("Failed to check git status: %s", str(e))
+        raise ValueError(f"Failed to check git status: {str(e)}")
     
-    # Check current hash
-    current_hash = await get_current_hash(repo_path)
-    if current_hash != expected_hash:
-        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}")
-    
-    # Check for uncommitted changes
-    process = await asyncio.create_subprocess_exec(
-        "git", "status", "--porcelain",
-        cwd=repo_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    stdout, _ = await process.communicate()
-    
-    if stdout.strip():
-        raise ValueError(f"Repository has uncommitted changes: {stdout.decode()}")
-    
-    return True
+    # If git_hash is provided, check that it matches the current hash
+    if git_hash:
+        try:
+            current_hash = await get_current_hash(repo_path)
+            if current_hash != git_hash:
+                logging.warning("Repository hash mismatch: expected %s, got %s", git_hash, current_hash)
+        except Exception as e:
+            logging.error("Failed to check git hash: %s", str(e))
+            raise ValueError(f"Failed to check git hash: {str(e)}")
 
 def main():
     parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
@@ -507,10 +788,16 @@ def main():
     parser.add_argument('--goal-description', required=True, help='Description of the goal')
     parser.add_argument('--iteration', type=int, default=0, help='Iteration number')
     parser.add_argument('--execution-history', type=str, default='[]', help='Execution history as JSON string')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging on console (all logs are always written to file)')
+    parser.add_argument('--quiet', action='store_true', help='Only show warnings and errors on console')
 
     args = parser.parse_args()
 
+    # Set up logging based on command line arguments
+    log_file = configure_logging(args.debug, args.quiet)
+
     try:
+        logging.info("🚀 Starting GoalDecomposer")
         # Create the TaskContext
         state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
         goal = Goal(description=args.goal_description)
@@ -519,49 +806,92 @@ def main():
         # Validate repository state and get current hash
         current_hash = asyncio.run(get_current_hash(args.repo_path))
         state.git_hash = current_hash
-        asyncio.run(validate_repository_state(args.repo_path, current_hash))
+        asyncio.run(validate_repository_state(
+            args.repo_path,
+            git_hash=current_hash,  # Use the new parameter name
+            skip_clean_check=True
+        ))
 
         # Initialize GoalDecomposer and determine the next step
         decomposer = GoalDecomposer()
-        next_step = asyncio.run(decomposer.determine_next_step(context))
+        next_step = asyncio.run(decomposer.determine_next_step(
+            context,
+            setup_logging=True,  # This configures logging
+            debug=args.debug,
+            quiet=args.quiet
+        ))
 
-        # Output the result
-        print("Next Step:", next_step.next_step)
-        print("Validation Criteria:", next_step.validation_criteria)
-        print("Reasoning:", next_step.reasoning)
+        # Output the result - print detailed information to console
+        # Show more complete information about the next step
+        print("\n\n====================")
+        print("=== NEXT STEP ===")
+        print("====================")
+        print(f"{next_step.next_step}")
+        
+        print("\n====================")
+        print("=== VALIDATION CRITERIA ===")
+        print("====================")
+        for i, criterion in enumerate(next_step.validation_criteria, 1):
+            print(f"{i}. {criterion}")
+        
+        print("\n====================")
+        print("=== REASONING ===")
+        print("====================")
+        print(f"{next_step.reasoning}")
+        
+        print("\n====================")
+        print("=== REQUIRES FURTHER DECOMPOSITION ===")
+        print("====================")
+        print(f"{next_step.requires_further_decomposition}")
+        
+        # If there's relevant context, display it too
+        if next_step.relevant_context:
+            print("\n====================")
+            print("=== RELEVANT CONTEXT ===")
+            print("====================")
+            for key, value in next_step.relevant_context.items():
+                if isinstance(value, list):
+                    print(f"{key}:")
+                    for item in value:
+                        print(f"  - {item}")
+                else:
+                    print(f"{key}: {value}")
+        
+        # Log the detailed output to the log file
+        logging.debug(f"Validation Criteria: {next_step.validation_criteria}")
+        logging.debug(f"Reasoning: {next_step.reasoning}")
     except TypeError as e:
-        print("Error: Missing required argument. Please ensure all required fields are provided.")
-        print("Details:", str(e))
+        if "'NoneType' object is not iterable" in str(e):
+            print("Error: The agent response processing failed. This typically happens when:")
+            print("1. The agent provided a final response without tool calls")
+            print("2. The response format wasn't properly handled")
+            print("Try running with --debug to see more details about the API interactions.")
+            print("Technical details:", str(e))
+            logging.debug("NoneType iteration error: %s", str(e))
+            return
+        else:
+            print("Error: Missing required argument. Please ensure all required fields are provided.")
+            print("Details:", str(e))
     except ValueError as e:
         if "uncommitted changes" in str(e):
             print("Error: The repository has uncommitted changes.")
             print("Please commit or stash your changes before proceeding.")
             print("Details:", str(e).split(':', 1)[1].strip())
             return
+        elif "Directory does not exist" in str(e):
+            print(f"Warning: {str(e)}")
+            print("The agent tried to access a directory that doesn't exist.")
+            print("This may be because the component is not yet implemented or is in a different location.")
+            logging.debug("Failed directory access: %s", str(e))
+            return
         else:
             print("Error:", str(e))
     except Exception as e:
-        print("An unexpected error occurred:", str(e))
+        logging.error("An unexpected error occurred: %s", str(e))
+        import traceback
+        logging.error("Traceback: %s", traceback.format_exc())
+        print(f"Error: {str(e)}")
         return
-
-    # Create the TaskContext
-    state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
-    goal = Goal(description=args.goal_description)
-    context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
-
-    # Validate repository state and get current hash
-    current_hash = asyncio.run(get_current_hash(args.repo_path))
-    state.git_hash = current_hash
-    asyncio.run(validate_repository_state(args.repo_path, current_hash))
-
-    # Initialize GoalDecomposer and determine the next step
-    decomposer = GoalDecomposer()
-    next_step = asyncio.run(decomposer.determine_next_step(context))
-
-    # Output the result
-    print("Next Step:", next_step.next_step)
-    print("Validation Criteria:", next_step.validation_criteria)
-    print("Reasoning:", next_step.reasoning)
 
 if __name__ == "__main__":
     main() 
