@@ -130,7 +130,7 @@ class TaskExecutor:
         logger.info("TaskExecutor initialized successfully")
         
         # System prompt for the LLM that will make all task execution decisions
-        self.system_prompt = """You are a task execution agent responsible for implementing code changes.
+        self.system_prompt = """You are a task execution agent responsible for implementing changes.
 Your role is to:
 1. Execute tasks using available tools
 2. Track progress and report status
@@ -139,11 +139,11 @@ Your role is to:
 5. Store important findings and observations in the memory repository
 
 IMPORTANT: A new branch has been created for you to work on. You are responsible for:
-1. Making all necessary changes to implement the task
-2. Creating commits with meaningful messages
-3. Ensuring all changes are committed before completing
-4. Returning the final commit hash in your output
-5. Storing relevant information in the memory repository when appropriate
+1. Understanding the required changes for the task
+2. EITHER making code changes in the repository OR storing information in the memory repository (or both)
+3. If making code changes: Create commits with meaningful messages and return the commit hash
+4. If only storing information in memory: Use memory repository tools and set task_completed to true
+5. Ensuring all code changes are committed before completing
 
 Available tools:
 - list_directory: List contents of a directory
@@ -160,20 +160,30 @@ Available tools:
 IMPORTANT TOOL USAGE NOTES:
 1. When using tools, provide only the name without any prefixes (e.g., use "list_directory" not "functions.list_directory")
 2. The create_commit tool will return the new commit hash - you must save this hash and use it as the final_commit_hash in your response
-3. Always make your changes and verify them before creating a commit
-4. After creating a commit, store the returned hash and use it in your final output
+3. Always make your code changes and verify them before creating a commit
+4. For study/exploratory tasks, use store_memory_document to save your findings - these count as task completion
 5. Use memory repository tools to store important observations, findings, or decisions:
    - store_memory_document to save information for future reference
    - retrieve_memory_documents to recall previously stored information
 
+Task completion criteria:
+1. A task is considered complete if EITHER:
+   a. You made code changes and committed them, OR
+   b. You stored information in the memory repository without code changes
+2. A task is considered failed if:
+   a. You cannot complete the requested task for any reason, OR
+   b. You have uncommitted code changes, OR
+   c. You neither made code changes nor stored anything in memory
+
 For each task:
 1. Analyze the current repository state
-2. Determine what changes are needed
-3. Use the available tools to implement changes
+2. Determine what changes are needed (code changes, memory storage, or both)
+3. Use the available tools to implement those changes
 4. Validate the changes
-5. Create appropriate commits
+5. Create appropriate commits if code was changed
 6. Store relevant information in the memory repository
-7. Return the final commit hash from the create_commit call
+7. If you made code changes, return the final commit hash from the create_commit call
+   If you only stored information in memory, return the original git hash
 
 Your response must be in JSON format with these fields:
 {
@@ -184,7 +194,7 @@ Your response must be in JSON format with these fields:
             "purpose": "string"  # Why this action is needed
         }
     ],
-    "final_commit_hash": "string",  # Hash returned from the create_commit call
+    "final_commit_hash": "string",  # Hash returned from create_commit OR original hash if no code changes
     "validation_steps": [  # Steps to validate the changes
         "string"
     ],
@@ -195,7 +205,8 @@ Your response must be in JSON format with these fields:
             "category": "string",  # Category of the document
             "document_path": "string"  # Path of the document in memory
         }
-    ]
+    ],
+    "made_code_changes": boolean  # Whether you made changes to the code repository (default: false)
 }"""
 
         # Define tool schema for the OpenAI API
@@ -549,7 +560,7 @@ Use the store_memory_document tool to save this information with appropriate cat
                                     raise ValueError("No valid JSON found in response")
                             
                             # Validate required fields
-                            required_fields = ["task_completed", "final_commit_hash"]
+                            required_fields = ["task_completed"]
                             missing_fields = [field for field in required_fields if field not in final_output]
                             
                             if missing_fields:
@@ -572,10 +583,47 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 for doc in memory_documents:
                                     logger.info(f"- {doc.get('category', 'unknown')}: {doc.get('document_path', 'unknown')}", extra={'memory': True})
                             
+                            # Check if code changes were made
+                            made_code_changes = final_output.get("made_code_changes", False)
+                            
                             # Return result based on task completion
                             task_completed = final_output.get("task_completed", False)
-                            final_hash = final_output.get("final_commit_hash", context.state.git_hash)
                             completion_reason = final_output.get("completion_reason", "No reason provided")
+                            
+                            # Validate final_commit_hash is present when code changes are made
+                            if made_code_changes and "final_commit_hash" not in final_output:
+                                logger.warning("Made code changes but no final_commit_hash provided")
+                                retry_count += 1
+                                if retry_count >= max_retries:
+                                    raise ValueError("Made code changes but no final_commit_hash provided after multiple attempts")
+                                continue
+                                
+                            # Set final hash based on whether code changes were made
+                            if made_code_changes:
+                                final_hash = final_output.get("final_commit_hash")
+                            else:
+                                final_hash = context.state.git_hash
+                            
+                            # Detect uncommitted changes in the code repository
+                            try:
+                                status_output = await run_terminal_cmd(
+                                    command="git status --porcelain",
+                                    cwd=context.state.repository_path
+                                )
+                                has_uncommitted_changes = bool(status_output.strip())
+                                
+                                if has_uncommitted_changes and task_completed:
+                                    logger.warning("Task marked as completed but uncommitted changes exist in repository")
+                                    task_completed = False
+                                    completion_reason = "Task has uncommitted changes in the repository"
+                            except Exception as e:
+                                logger.error(f"Error checking for uncommitted changes: {str(e)}")
+                            
+                            # If no memory documents and no code changes, but marked complete, it's an error
+                            if task_completed and not memory_documents and not made_code_changes:
+                                logger.warning("Task marked as completed but no changes were made to code or memory")
+                                task_completed = False
+                                completion_reason = "Task did not make any changes to code or memory repositories"
                             
                             if task_completed:
                                 logger.info(f"✅ Task completed successfully", extra=extra)
