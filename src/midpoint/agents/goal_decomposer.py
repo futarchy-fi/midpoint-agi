@@ -14,10 +14,17 @@ from openai import AsyncOpenAI
 from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
 from midpoint.agents.tools import initialize_all_tools
 from midpoint.agents.tools.processor import ToolProcessor
-from midpoint.agents.tools.filesystem_tools import list_directory, read_file
-from midpoint.agents.tools.code_tools import search_code
-from midpoint.agents.tools.git_tools import get_current_hash
-from midpoint.agents.tools.web_tools import web_search, web_scrape
+from midpoint.agents.tools.registry import ToolRegistry
+from midpoint.agents.tools import (
+    list_directory,
+    read_file,
+    search_code,
+    get_current_hash,
+    web_search,
+    web_scrape,
+    store_memory_document,
+    retrieve_memory_documents
+)
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
 from dotenv import load_dotenv
@@ -31,16 +38,15 @@ import time
 # Import memory tools
 try:
     # Try to import directly when script is run as part of the module
-    from scripts.memory_tools import store_document, retrieve_documents, get_repo_path, get_memory_for_code_hash, update_cross_reference
+    from scripts.memory_tools import get_repo_path, get_memory_for_code_hash, update_cross_reference
 except ModuleNotFoundError:
     try:
         # Try absolute path when run as a script
         import sys
-        from pathlib import Path
         # Add the repo root to path
         repo_root = Path(__file__).parent.parent.parent.parent
         sys.path.append(str(repo_root))
-        from scripts.memory_tools import store_document, retrieve_documents, get_repo_path, get_memory_for_code_hash, update_cross_reference
+        from scripts.memory_tools import get_repo_path, get_memory_for_code_hash, update_cross_reference
     except ModuleNotFoundError:
         # Provide fallback implementations if imports still fail
         logging.warning("Memory tools import failed. Using fallback implementations.")
@@ -295,17 +301,24 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
     
-    def __init__(self):
-        """Initialize the GoalDecomposer agent."""
-        # Initialize OpenAI client with API key from config
+    def __init__(self, model: str = "gpt-4o", max_history_entries: int = 5):
+        """Initialize the GoalDecomposer."""
+        
+        self.logger = logging.getLogger('GoalDecomposer')
+        self.model = model
+        self.max_history_entries = max_history_entries
+        
+        # Get API key from config
         api_key = get_openai_api_key()
         if not api_key:
             raise ValueError("OpenAI API key not found in config or environment")
-        if not api_key.startswith("sk-"):
-            raise ValueError("Invalid OpenAI API key format")
-            
+        
         # Initialize OpenAI client
         self.client = AsyncOpenAI(api_key=api_key)
+        
+        # Initialize tool processor
+        initialize_all_tools()
+        self.tool_processor = ToolProcessor(self.client)
         
         # Define the system prompt focusing on determining the next step
         self.system_prompt = """You are an expert software architect and project planner.
@@ -1121,6 +1134,29 @@ appropriate when the goal involves gaining knowledge or understanding without ch
             current_metadata = current_metadata.get('parent_context', {})
             
         return depth
+
+    async def _run_with_tools(self, messages, max_attempts=3):
+        """Run the conversation with tool support."""
+        for attempt in range(max_attempts):
+            try:
+                self.logger.debug(f"Calling LLM with tools (attempt {attempt+1})")
+                final_message, tool_usage = await self.tool_processor.run_llm_with_tools(
+                    messages=messages,
+                    model=self.model,
+                    temperature=0.5,
+                    max_tokens=4000
+                )
+                
+                # Log tool usage
+                for tool in tool_usage:
+                    self.logger.debug(f"Used tool: {tool['tool']} with args: {tool['args']}")
+                
+                return final_message, tool_usage
+                
+            except Exception as e:
+                self.logger.error(f"Error in LLM call (attempt {attempt+1}): {str(e)}")
+                if attempt == max_attempts - 1:
+                    raise
 
 async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
     """Validate that the repository is in a good state for goal decomposition."""
