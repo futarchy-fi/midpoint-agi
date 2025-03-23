@@ -118,10 +118,27 @@ def update_cross_reference(code_hash, memory_hash, repo_path=None):
         with open(cross_ref_path, "r") as f:
             cross_ref = json.load(f)
     else:
-        cross_ref = {}
+        cross_ref = {
+            "mappings": [],
+            "latest": {}
+        }
     
-    # Update with new reference
-    cross_ref[code_hash] = memory_hash
+    # Ensure the structure has both mappings and latest
+    if "mappings" not in cross_ref:
+        cross_ref["mappings"] = []
+    if "latest" not in cross_ref:
+        cross_ref["latest"] = {}
+    
+    # Add to mappings history with timestamp
+    mapping = {
+        "code_hash": code_hash,
+        "memory_hash": memory_hash,
+        "timestamp": int(time.time())
+    }
+    cross_ref["mappings"].append(mapping)
+    
+    # Update the latest mapping
+    cross_ref["latest"][code_hash] = memory_hash
     
     # Save updated cross-reference
     with open(cross_ref_path, "w") as f:
@@ -136,8 +153,21 @@ def update_cross_reference(code_hash, memory_hash, repo_path=None):
     
     print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 
-def get_memory_for_code_hash(code_hash, repo_path=None):
-    """Get the memory hash corresponding to a code hash."""
+def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timestamp=None):
+    """
+    Get the memory hash corresponding to a code hash.
+    
+    Args:
+        code_hash: The code repository commit hash
+        repo_path: Path to the memory repository
+        historical: If True, returns all historical mappings for this code hash
+        timestamp: If provided, returns the mapping closest to this timestamp
+        
+    Returns:
+        If historical=True: List of mappings for this code hash
+        If timestamp provided: The mapping closest to the timestamp
+        Otherwise: The latest memory hash for this code hash
+    """
     # Get repository path
     repo_path = repo_path or get_repo_path()
     repo_path = Path(repo_path)
@@ -152,10 +182,47 @@ def get_memory_for_code_hash(code_hash, repo_path=None):
     with open(cross_ref_path, "r") as f:
         cross_ref = json.load(f)
     
-    memory_hash = cross_ref.get(code_hash)
+    # Handle old format
+    if not isinstance(cross_ref, dict) or ("mappings" not in cross_ref and "latest" not in cross_ref):
+        # Old format - convert
+        old_data = cross_ref
+        cross_ref = {
+            "mappings": [
+                {"code_hash": k, "memory_hash": v, "timestamp": int(time.time())}
+                for k, v in old_data.items()
+            ],
+            "latest": old_data
+        }
+    
+    # Return all historical mappings if requested
+    if historical:
+        historical_mappings = [
+            mapping for mapping in cross_ref.get("mappings", [])
+            if mapping["code_hash"] == code_hash
+        ]
+        if historical_mappings:
+            print(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+        else:
+            print(f"No historical mappings found for code hash: {code_hash[:7]}")
+        return historical_mappings
+    
+    # Return mapping closest to timestamp if provided
+    if timestamp:
+        mappings = [
+            mapping for mapping in cross_ref.get("mappings", [])
+            if mapping["code_hash"] == code_hash
+        ]
+        if mappings:
+            # Find closest mapping to timestamp
+            closest_mapping = min(mappings, key=lambda m: abs(m["timestamp"] - timestamp))
+            print(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
+            return closest_mapping["memory_hash"]
+    
+    # Otherwise return latest
+    memory_hash = cross_ref.get("latest", {}).get(code_hash)
     
     if memory_hash:
-        print(f"Found memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
+        print(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
     else:
         print(f"No memory hash found for code hash: {code_hash[:7]}")
     
@@ -187,6 +254,12 @@ def main():
     # Lookup command
     lookup_parser = subparsers.add_parser("lookup", help="Look up memory hash for code hash")
     lookup_parser.add_argument("code_hash", help="Code repository hash")
+    lookup_parser.add_argument("--historical", action="store_true", help="Return all historical mappings")
+    lookup_parser.add_argument("--timestamp", type=int, help="Find mapping closest to this timestamp")
+    
+    # New history command
+    history_parser = subparsers.add_parser("history", help="View full history of code-memory mappings")
+    history_parser.add_argument("--limit", type=int, default=10, help="Maximum number of entries")
     
     args = parser.parse_args()
     
@@ -224,7 +297,49 @@ def main():
         update_cross_reference(args.code_hash, args.memory_hash)
     
     elif args.command == "lookup":
-        get_memory_for_code_hash(args.code_hash)
+        if args.historical:
+            mappings = get_memory_for_code_hash(args.code_hash, historical=True)
+            if mappings:
+                print("\nHistorical mappings for code hash:", args.code_hash)
+                for i, mapping in enumerate(mappings):
+                    print(f"{i+1}. {mapping['timestamp']} (Unix timestamp): {mapping['memory_hash']}")
+        elif args.timestamp:
+            memory_hash = get_memory_for_code_hash(args.code_hash, timestamp=args.timestamp)
+            if memory_hash:
+                print(f"Memory hash: {memory_hash}")
+        else:
+            memory_hash = get_memory_for_code_hash(args.code_hash)
+            if memory_hash:
+                print(f"Memory hash: {memory_hash}")
+                
+    elif args.command == "history":
+        # Get repository path
+        repo_path = get_repo_path()
+        cross_ref_path = Path(repo_path) / "metadata" / "cross-reference.json"
+        
+        if not cross_ref_path.exists():
+            print(f"Cross-reference file not found: {cross_ref_path}")
+            return
+        
+        # Load cross-reference
+        with open(cross_ref_path, "r") as f:
+            cross_ref = json.load(f)
+        
+        if "mappings" not in cross_ref:
+            print("No history found in cross-reference file")
+            return
+        
+        # Sort by timestamp (newest first)
+        mappings = sorted(cross_ref["mappings"], key=lambda m: m["timestamp"], reverse=True)
+        
+        # Limit results
+        mappings = mappings[:args.limit]
+        
+        print("\nCross-reference history:")
+        for i, mapping in enumerate(mappings):
+            timestamp = mapping["timestamp"]
+            time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+            print(f"{i+1}. {time_str}: Code {mapping['code_hash'][:7]} -> Memory {mapping['memory_hash'][:7]}")
     
     else:
         parser.print_help()

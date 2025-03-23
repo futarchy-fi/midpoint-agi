@@ -153,12 +153,20 @@ class TestMemoryTools(unittest.TestCase):
         
         # Test data
         code_hash = "1234567890abcdef"
-        memory_hash = "abcdef1234567890"
+        memory_hash1 = "abcdef1234567890"
+        memory_hash2 = "fedcba0987654321"
         
-        # Call the function
+        # Call the function twice with same code hash but different memory hashes
         update_cross_reference(
             code_hash=code_hash,
-            memory_hash=memory_hash,
+            memory_hash=memory_hash1,
+            repo_path=str(self.memory_repo_path)
+        )
+        
+        # Call again with same code hash
+        update_cross_reference(
+            code_hash=code_hash,
+            memory_hash=memory_hash2,
             repo_path=str(self.memory_repo_path)
         )
         
@@ -168,27 +176,84 @@ class TestMemoryTools(unittest.TestCase):
         
         with open(cross_ref_path, "r") as f:
             cross_ref = json.load(f)
-            self.assertIn(code_hash, cross_ref)
-            self.assertEqual(cross_ref[code_hash], memory_hash)
+            
+            # Check the latest mapping
+            self.assertIn("latest", cross_ref)
+            self.assertIn(code_hash, cross_ref["latest"])
+            self.assertEqual(cross_ref["latest"][code_hash], memory_hash2)
+            
+            # Check the historical mappings
+            self.assertIn("mappings", cross_ref)
+            self.assertEqual(len(cross_ref["mappings"]), 2)
+            
+            # Both code hashes should be in the mappings
+            code_hashes_in_mappings = [m["code_hash"] for m in cross_ref["mappings"]]
+            self.assertEqual(code_hashes_in_mappings.count(code_hash), 2)
+            
+            # Both memory hashes should be in the mappings
+            memory_hashes_in_mappings = [m["memory_hash"] for m in cross_ref["mappings"]]
+            self.assertIn(memory_hash1, memory_hashes_in_mappings)
+            self.assertIn(memory_hash2, memory_hashes_in_mappings)
+            
+            # Each mapping should have a timestamp
+            for mapping in cross_ref["mappings"]:
+                self.assertIn("timestamp", mapping)
 
     def test_get_memory_for_code_hash(self):
         """Test that get_memory_for_code_hash returns the correct hash."""
-        # Create a test cross-reference file
+        # Create a test cross-reference file with historical data
         code_hash = "1234567890abcdef"
-        memory_hash = "abcdef1234567890"
+        memory_hash1 = "aaaaaa1111111111"
+        memory_hash2 = "bbbbbb2222222222"
+        
+        past_time = int(time.time()) - 3600  # 1 hour ago
+        current_time = int(time.time())
+        
+        cross_ref = {
+            "mappings": [
+                {"code_hash": code_hash, "memory_hash": memory_hash1, "timestamp": past_time},
+                {"code_hash": code_hash, "memory_hash": memory_hash2, "timestamp": current_time}
+            ],
+            "latest": {
+                code_hash: memory_hash2
+            }
+        }
         
         cross_ref_path = self.memory_repo_path / "metadata" / "cross-reference.json"
         with open(cross_ref_path, "w") as f:
-            json.dump({code_hash: memory_hash}, f)
+            json.dump(cross_ref, f)
         
-        # Call the function
+        # Test getting the latest memory hash
         result = get_memory_for_code_hash(
             code_hash=code_hash,
             repo_path=str(self.memory_repo_path)
         )
         
-        # Verify the result
-        self.assertEqual(result, memory_hash)
+        # Verify the result is the latest memory hash
+        self.assertEqual(result, memory_hash2)
+        
+        # Test getting historical mappings
+        historical_results = get_memory_for_code_hash(
+            code_hash=code_hash,
+            repo_path=str(self.memory_repo_path),
+            historical=True
+        )
+        
+        # Verify we got both mappings
+        self.assertEqual(len(historical_results), 2)
+        memory_hashes = [m["memory_hash"] for m in historical_results]
+        self.assertIn(memory_hash1, memory_hashes)
+        self.assertIn(memory_hash2, memory_hashes)
+        
+        # Test getting memory hash by timestamp (should get the older one)
+        timestamp_result = get_memory_for_code_hash(
+            code_hash=code_hash,
+            repo_path=str(self.memory_repo_path),
+            timestamp=past_time
+        )
+        
+        # Verify we got the memory hash from the past
+        self.assertEqual(timestamp_result, memory_hash1)
         
         # Test with a non-existent code hash
         non_existent = get_memory_for_code_hash(
