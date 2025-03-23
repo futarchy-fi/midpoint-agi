@@ -280,4 +280,44 @@ The typical workflow is:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Agent Memory System
+
+This project now includes an experimental agent memory system that allows agents to retain and recall information across sessions. The memory system uses a separate Git repository to store memory documents, which are organized by category.
+
+### Key Components
+
+- `scripts/init_memory_repo.py`: Script to initialize a memory repository
+- `scripts/memory_tools.py`: Utility functions for working with memory repository
+- `scripts/memory_example.py`: Example script demonstrating memory integration
+- `scripts/memory_integration.py`: Example of integrating memory with the agent system
+
+### Usage
+
+To initialize a memory repository:
+
+```bash
+python scripts/init_memory_repo.py --path /path/to/memory/repo
+```
+
+To store and retrieve memory documents:
+
+```bash
+python scripts/memory_tools.py store --category reasoning --content "My reasoning"
+python scripts/memory_tools.py retrieve --category reasoning
+```
+
+To see a complete demonstration of the memory system:
+
+```bash
+python scripts/memory_example.py --init --store
+```
+
+To see how memory can be integrated with agents:
+
+```bash
+python scripts/memory_integration.py --init --store --query "What have you learned?"
+```
+
+For more information, see the [Memory System Documentation](docs/memory_system.md). 
