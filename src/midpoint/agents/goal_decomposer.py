@@ -27,6 +27,139 @@ import logging
 from pathlib import Path
 import sys
 import datetime
+import subprocess
+import time
+
+# Import memory tools
+try:
+    # Try to import directly when script is run as part of the module
+    from scripts.memory_tools import store_document, retrieve_documents, get_repo_path, get_memory_for_code_hash, update_cross_reference
+except ModuleNotFoundError:
+    try:
+        # Try absolute path when run as a script
+        import sys
+        from pathlib import Path
+        # Add the repo root to path
+        repo_root = Path(__file__).parent.parent.parent.parent
+        sys.path.append(str(repo_root))
+        from scripts.memory_tools import store_document, retrieve_documents, get_repo_path, get_memory_for_code_hash, update_cross_reference
+    except ModuleNotFoundError:
+        # Provide fallback implementations if imports still fail
+        logging.warning("Memory tools import failed. Using fallback implementations.")
+        
+        def get_repo_path():
+            """Fallback implementation to get memory repository path."""
+            return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
+            
+        def get_current_hash(repo_path):
+            """Fallback implementation to get current git hash."""
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return result.stdout.strip()
+            except:
+                return "unknown-hash"
+                
+        def store_document(content, category, metadata=None, repo_path=None):
+            """Fallback implementation to store a document."""
+            logging.warning("Using fallback store_document implementation.")
+            # Get repository path
+            repo_path = repo_path or get_repo_path()
+            repo_path = Path(repo_path)
+            
+            # Create basic directories
+            docs_dir = repo_path / "documents" / category
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create a simple filename
+            filename = f"doc_{int(time.time())}.md"
+            doc_path = docs_dir / filename
+            
+            # Write content
+            with open(doc_path, "w") as f:
+                f.write(content)
+                
+            logging.info(f"Stored document at: {doc_path} (fallback implementation)")
+            return str(doc_path.relative_to(repo_path) if repo_path in doc_path.parents else doc_path)
+            
+        def retrieve_documents(category=None, limit=10, repo_path=None):
+            """Fallback implementation to retrieve documents."""
+            logging.warning("Using fallback retrieve_documents implementation.")
+            # Get repository path
+            repo_path = repo_path or get_repo_path()
+            repo_path = Path(repo_path)
+            
+            # Set search path
+            if category:
+                search_path = repo_path / "documents" / category
+            else:
+                search_path = repo_path / "documents"
+            
+            results = []
+            
+            if search_path.exists():
+                # Find all .md files
+                files = list(search_path.glob("**/*.md"))
+                
+                # Sort by modification time (newest first)
+                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                
+                # Limit results
+                files = files[:limit]
+                
+                # Read contents
+                for file in files:
+                    try:
+                        with open(file, "r") as f:
+                            results.append((str(file.relative_to(repo_path) if repo_path in file.parents else file), f.read()))
+                    except:
+                        pass
+            
+            return results
+            
+        def update_cross_reference(code_hash, memory_hash, repo_path=None):
+            """Fallback implementation to update cross-reference between code and memory."""
+            logging.warning("Using fallback update_cross_reference implementation.")
+            # Get repository path
+            repo_path = repo_path or get_repo_path()
+            repo_path = Path(repo_path)
+            
+            # Ensure metadata directory exists
+            metadata_dir = repo_path / "metadata"
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Path to cross-reference file
+            cross_ref_path = metadata_dir / "cross-reference.json"
+            
+            # Load existing cross-reference or create new
+            if cross_ref_path.exists():
+                try:
+                    with open(cross_ref_path, "r") as f:
+                        cross_ref = json.load(f)
+                except:
+                    cross_ref = {"mappings": [], "latest": {}}
+            else:
+                cross_ref = {"mappings": [], "latest": {}}
+            
+            # Update cross-reference
+            timestamp = int(time.time())
+            cross_ref["mappings"].append({
+                "code_hash": code_hash,
+                "memory_hash": memory_hash,
+                "timestamp": timestamp
+            })
+            cross_ref["latest"][code_hash] = memory_hash
+            
+            # Write updated cross-reference
+            with open(cross_ref_path, "w") as f:
+                json.dump(cross_ref, f, indent=2)
+            
+            logging.info(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 
 load_dotenv()
 
@@ -98,13 +231,18 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     'VALIDATION CRITERIA',
                     'REASONING',
                     'REQUIRES FURTHER DECOMPOSITION',
-                    'RELEVANT CONTEXT'
+                    'RELEVANT CONTEXT',
+                    '✅ Next step:',    # Hide the old next step format
                 ]
                 
                 # Check if any hide patterns are in the message
                 for pattern in hide_patterns:
                     if pattern in record.msg:
                         return False
+                
+                # Also hide the individual validation criteria lines from the default output
+                if record.msg.startswith('  ') and any(c.isdigit() for c in record.msg) and '. ' in record.msg:
+                    return False
                 
                 # Make emojis and messages more concise
                 if '📂 Listing directory:' in record.msg:
@@ -120,6 +258,9 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     if 'main' not in sys._getframe().f_back.f_code.co_name:
                         return True
                     return False  # Don't show in main() since we have better formatting there
+                # Allow our new emoji formats (status_emoji + step_type) to pass through
+                elif ('🔄 Next subgoal:' in record.msg) or ('✅ Next task:' in record.msg):
+                    return True
                 elif 'Determining next step for goal:' in record.msg:
                     try:
                         # Try to safely extract the goal description
@@ -178,6 +319,17 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
 
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
+
+You have access to a memory repository where you can store and retrieve information across sessions.
+For intellectual tasks (such as studying, analyzing, or understanding code), you should consider
+updating the memory repository as a valid next step. Tasks are considered "done" when the memory
+has been properly updated, even if no code changes were made.
+
+Memory categories:
+- reasoning: Documents capturing your reasoning process
+- observations: Documents recording observations about the codebase
+- decisions: Documents recording decisions made
+- study: Documents capturing in-depth study of code or concepts
 
 As part of your analysis, you MUST determine whether the next step requires further decomposition:
 - If the next step is still complex and would benefit from being broken down further, set 'requires_further_decomposition' to TRUE
@@ -324,6 +476,62 @@ You MUST provide a structured response in JSON format with these fields:
                         "required": ["url"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "store_memory_document",
+                    "description": "Store a document in the memory repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Content of the document to store"
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "Category to store the document in (reasoning, observations, decisions)",
+                                "enum": ["reasoning", "observations", "decisions", "study"]
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional metadata to store with the document",
+                                "default": {}
+                            },
+                            "memory_repo_path": {
+                                "type": "string",
+                                "description": "Path to the memory repository (optional)"
+                            }
+                        },
+                        "required": ["content", "category"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "retrieve_memory_documents",
+                    "description": "Retrieve documents from the memory repository",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "description": "Category to retrieve documents from (optional)"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of documents to retrieve",
+                                "default": 5
+                            },
+                            "memory_repo_path": {
+                                "type": "string",
+                                "description": "Path to the memory repository (optional)"
+                            }
+                        }
+                    }
+                }
             }
         ]
 
@@ -453,6 +661,70 @@ You MUST provide a structured response in JSON format with these fields:
                                 result_str = await web_search(**function_args)
                             elif function_name == "web_scrape":
                                 result_str = await web_scrape(**function_args)
+                            elif function_name == "store_memory_document":
+                                # Get memory repo path from context, function args, or default
+                                memory_repo_path = function_args.get("memory_repo_path")
+                                if not memory_repo_path:
+                                    if context.state.memory_repository_path:
+                                        memory_repo_path = context.state.memory_repository_path
+                                    elif context.memory_state and context.memory_state.repository_path:
+                                        memory_repo_path = context.memory_state.repository_path
+                                    else:
+                                        memory_repo_path = get_repo_path()
+                                
+                                # Prepare metadata with code hash if available
+                                metadata = function_args.get("metadata", {})
+                                if context.state.git_hash and "code_hash" not in metadata:
+                                    metadata["code_hash"] = context.state.git_hash
+                                
+                                # Store the document
+                                document_path = store_document(
+                                    content=function_args["content"],
+                                    category=function_args["category"],
+                                    metadata=metadata,
+                                    repo_path=memory_repo_path
+                                )
+                                
+                                result_str = json.dumps({
+                                    "success": True,
+                                    "document_path": document_path,
+                                    "message": f"Document stored in {function_args['category']} category"
+                                }, indent=2)
+                                
+                                logging.info(f"📝 Stored memory document in {function_args['category']} category")
+                            elif function_name == "retrieve_memory_documents":
+                                # Get memory repo path from context, function args, or default
+                                memory_repo_path = function_args.get("memory_repo_path")
+                                if not memory_repo_path:
+                                    if context.state.memory_repository_path:
+                                        memory_repo_path = context.state.memory_repository_path
+                                    elif context.memory_state and context.memory_state.repository_path:
+                                        memory_repo_path = context.memory_state.repository_path
+                                    else:
+                                        memory_repo_path = get_repo_path()
+                                
+                                # Retrieve documents
+                                documents = retrieve_documents(
+                                    category=function_args.get("category"),
+                                    limit=function_args.get("limit", 5),
+                                    repo_path=memory_repo_path
+                                )
+                                
+                                # Format the result
+                                result_docs = []
+                                for path, content in documents:
+                                    result_docs.append({
+                                        "path": path,
+                                        "content": content[:1000] + ("..." if len(content) > 1000 else "")
+                                    })
+                                
+                                result_str = json.dumps({
+                                    "success": True,
+                                    "documents": result_docs,
+                                    "total": len(documents)
+                                }, indent=2)
+                                
+                                logging.info(f"📚 Retrieved {len(documents)} memory documents")
                             else:
                                 result_str = f"Error: Unknown function {function_name}"
                             
@@ -566,12 +838,12 @@ You MUST provide a structured response in JSON format with these fields:
             # Log successful outcome at info level with a more complete message
             logging.info(f"✅ Next step: {final_output.next_step}")
             
-            # Add more detailed info at INFO level for better visibility
-            logging.info("Validation criteria:")
+            # Only log detailed validation criteria at debug level to avoid duplication
+            logging.debug("Validation criteria:")
             for i, criterion in enumerate(final_output.validation_criteria, 1):
-                logging.info(f"  {i}. {criterion}")
+                logging.debug(f"  {i}. {criterion}")
             
-            logging.info(f"Requires further decomposition: {final_output.requires_further_decomposition}")
+            logging.debug(f"Requires further decomposition: {final_output.requires_further_decomposition}")
             
             # Add logging for the final output at debug level
             try:
@@ -593,7 +865,7 @@ You MUST provide a structured response in JSON format with these fields:
     
     def _create_user_prompt(self, context: TaskContext) -> str:
         """Create the user prompt for the agent."""
-        return f"""Goal: {context.goal.description}
+        prompt = f"""Goal: {context.goal.description}
 
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
@@ -602,14 +874,35 @@ Current State:
 - Git Hash: {context.state.git_hash}
 - Description: {context.state.description}
 - Repository Path: {context.state.repository_path}
+"""
 
+        # Add memory information if available
+        if context.state.memory_hash and context.state.memory_repository_path:
+            prompt += f"""
+Memory State:
+- Memory Hash: {context.state.memory_hash}
+- Memory Repository Path: {context.state.memory_repository_path}
+"""
+        elif context.memory_state:
+            prompt += f"""
+Memory State:
+- Memory Hash: {context.memory_state.memory_hash}
+- Memory Repository Path: {context.memory_state.repository_path}
+"""
+
+        prompt += f"""
 Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.execution_history) if context.execution_history else 0}
 
 Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
 Focus on providing a clear next step with measurable validation criteria.
+
+NOTE: For intellectual tasks that involve studying or understanding code rather than modifying it,
+you can consider updating the memory repository as a valid next step. Memory operations are
+appropriate when the goal involves gaining knowledge or understanding without changing code.
 """
+        return prompt
     
     def _validate_subgoal(self, subgoal: SubgoalPlan, context: TaskContext) -> None:
         """Validate the generated subgoal plan."""
@@ -772,7 +1065,6 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     
     # Check if the repository has uncommitted changes
     try:
-        import subprocess
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=repo_path,
@@ -852,6 +1144,8 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug logging on console (all logs are always written to file)')
     parser.add_argument('--quiet', action='store_true', help='Only show warnings and errors on console')
     parser.add_argument('--list-subgoals', action='store_true', help='List available subgoal files in the logs directory')
+    parser.add_argument('--memory-hash', help='Hash of the memory repository state')
+    parser.add_argument('--memory-repo-path', help='Path to the memory repository')
 
     args = parser.parse_args()
 
@@ -865,9 +1159,21 @@ def main():
         logging.info("\nAvailable Subgoal Files:")
         logging.info("========================")
         for i, (file_path, timestamp, next_step) in enumerate(subgoal_files, 1):
+            # Check if the file is a subgoal that requires further decomposition
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                requires_decomposition = data.get("requires_further_decomposition", True)
+                emoji = "🔄" if requires_decomposition else "✅"
+                step_type = "Subgoal" if requires_decomposition else "Task"
+            except:
+                # Default to subgoal if we can't determine
+                emoji = "🔄"
+                step_type = "Subgoal"
+            
             logging.info(f"{i}. {os.path.basename(file_path)}")
             logging.info(f"   Time: {timestamp}")
-            logging.info(f"   Goal: {next_step}")
+            logging.info(f"   {emoji} {step_type}: {next_step}")
             logging.info("")
         return
 
@@ -922,6 +1228,19 @@ def main():
             relevant_context = input_data.get("relevant_context", {})
             # Only log this information, don't print to stdout
             logging.info(f"Added relevant context from input file: {relevant_context}")
+            
+            # Extract memory state information if available in the input data
+            if "memory_hash" in input_data:
+                state_memory_hash = input_data["memory_hash"]
+                if not args.memory_hash:  # Command line arg takes precedence
+                    args.memory_hash = state_memory_hash
+                    logging.info(f"Using memory hash from input file: {state_memory_hash[:7] if state_memory_hash else 'None'}")
+            
+            if "memory_repository_path" in input_data:
+                state_memory_repo_path = input_data["memory_repository_path"]
+                if not args.memory_repo_path:  # Command line arg takes precedence
+                    args.memory_repo_path = state_memory_repo_path
+                    logging.info(f"Using memory repository path from input file: {state_memory_repo_path}")
         except json.JSONDecodeError:
             logging.error(f"Input file {args.input_file} does not contain valid JSON")
             return
@@ -940,7 +1259,13 @@ def main():
     try:
         logging.info("🚀 Starting GoalDecomposer")
         # Create the TaskContext
-        state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
+        state = State(
+            repository_path=args.repo_path, 
+            git_hash="", 
+            description="Current state description",
+            memory_repository_path=args.memory_repo_path,
+            memory_hash=args.memory_hash
+        )
         goal = Goal(description=goal_description, validation_criteria=validation_criteria)
         context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
         
@@ -955,6 +1280,70 @@ def main():
         # Validate repository state and get current hash
         current_hash = asyncio.run(get_current_hash(args.repo_path))
         state.git_hash = current_hash
+        
+        # Get memory hash if not provided but memory repo path is
+        if not state.memory_hash and state.memory_repository_path:
+            try:
+                memory_hash = asyncio.run(get_current_hash(state.memory_repository_path))
+                state.memory_hash = memory_hash
+                logging.info(f"Setting memory hash to current hash: {memory_hash[:7] if memory_hash else 'None'}")
+            except Exception as e:
+                logging.warning(f"Failed to get current memory hash: {str(e)}")
+        
+        # Look up memory hash based on code hash if no memory hash is available
+        if not state.memory_hash and state.repository_path and state.git_hash:
+            try:
+                # Import memory tools - ensure get_memory_for_code_hash is available
+                from scripts.memory_tools import get_memory_for_code_hash
+                default_memory_path = os.path.expanduser("~/.midpoint/memory")
+                memory_repo_path = state.memory_repository_path or default_memory_path
+                
+                # Check if memory repo exists, create if not
+                memory_repo = Path(memory_repo_path)
+                if not memory_repo.exists():
+                    logging.info(f"Creating memory repository at {memory_repo_path}")
+                    memory_repo.mkdir(parents=True, exist_ok=True)
+                    # Create basic structure
+                    (memory_repo / "documents").mkdir(exist_ok=True)
+                    (memory_repo / "documents" / "reasoning").mkdir(exist_ok=True)
+                    (memory_repo / "documents" / "observations").mkdir(exist_ok=True)
+                    (memory_repo / "documents" / "decisions").mkdir(exist_ok=True)
+                    (memory_repo / "documents" / "study").mkdir(exist_ok=True)
+                    (memory_repo / "metadata").mkdir(exist_ok=True)
+                    
+                    # Create cross-reference file
+                    cross_ref_path = memory_repo / "metadata" / "cross-reference.json"
+                    with open(cross_ref_path, "w") as f:
+                        json.dump({"mappings": [], "latest": {}}, f, indent=2)
+                    
+                    # Initialize git repo if it doesn't exist
+                    try:
+                        subprocess.run(["git", "init"], cwd=memory_repo, check=True)
+                        # Create an initial commit
+                        with open(memory_repo / "README.md", "w") as f:
+                            f.write("# Agent Memory Repository\n\nThis repository stores memory documents for the agent.\n")
+                        subprocess.run(["git", "add", "."], cwd=memory_repo, check=True)
+                        subprocess.run(["git", "commit", "-m", "Initialize memory repository"], cwd=memory_repo, check=True)
+                        logging.info("Initialized git repository in memory repository")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize git repository in memory repository: {str(e)}")
+                
+                # Try to get memory hash for code hash
+                try:
+                    memory_hash = get_memory_for_code_hash(state.git_hash, repo_path=memory_repo_path)
+                    
+                    if memory_hash:
+                        state.memory_hash = memory_hash
+                        if not state.memory_repository_path:
+                            state.memory_repository_path = memory_repo_path
+                        logging.info(f"Found memory hash for code hash {state.git_hash[:7]}: {memory_hash[:7]}")
+                    else:
+                        logging.info(f"No memory hash found for code hash {state.git_hash[:7]}")
+                except Exception as e:
+                    logging.warning(f"Failed to get memory hash for code hash: {str(e)}")
+            except Exception as e:
+                logging.warning(f"Failed to process memory repository: {str(e)}")
+        
         asyncio.run(validate_repository_state(
             args.repo_path,
             git_hash=current_hash,  # Use the new parameter name
@@ -970,13 +1359,29 @@ def main():
             quiet=args.quiet
         ))
 
-        # Save the output as a JSON file
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        hash_suffix = os.urandom(3).hex()
-        output_file = os.path.join("logs", f"subgoal_{timestamp}_{hash_suffix}.json")
-        
-        # Ensure logs directory exists
-        os.makedirs("logs", exist_ok=True)
+        # Get the final memory hash if it might have changed
+        final_memory_hash = None
+        if state.memory_repository_path:
+            try:
+                final_memory_hash = asyncio.run(get_current_hash(state.memory_repository_path))
+                
+                # Log memory hash changes
+                if state.memory_hash != final_memory_hash:
+                    logging.info(f"🔄 Memory hash changed:")
+                    logging.info(f"   Initial: {state.memory_hash[:7] if state.memory_hash else 'None'}")
+                    logging.info(f"   Final:   {final_memory_hash[:7] if final_memory_hash else 'None'}")
+                    
+                    # Link the code and memory hashes if they've both changed
+                    if state.git_hash and final_memory_hash:
+                        try:
+                            update_cross_reference(state.git_hash, final_memory_hash, state.memory_repository_path)
+                            logging.info(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
+                        except Exception as e:
+                            logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
+                else:
+                    logging.info(f"📝 Memory hash unchanged: {final_memory_hash[:7] if final_memory_hash else 'None'}")
+            except Exception as e:
+                logging.warning(f"Failed to get final memory hash: {str(e)}")
         
         # Create the output data
         output_data = {
@@ -985,15 +1390,34 @@ def main():
             "reasoning": next_step.reasoning,
             "requires_further_decomposition": next_step.requires_further_decomposition,
             "relevant_context": next_step.relevant_context,
+            "memory_hash": final_memory_hash or state.memory_hash,  # Use final hash if available
+            "memory_repository_path": state.memory_repository_path,
             "metadata": next_step.metadata
         }
+        
+        # Save the output as a JSON file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        hash_suffix = os.urandom(3).hex()
+        
+        # Choose file prefix and emoji based on whether this needs further decomposition
+        file_prefix = "subgoal" if next_step.requires_further_decomposition else "task"
+        status_emoji = "🔄" if next_step.requires_further_decomposition else "✅"
+        step_type = "Next subgoal" if next_step.requires_further_decomposition else "Next task"
+        
+        output_file = os.path.join("logs", f"{file_prefix}_{timestamp}_{hash_suffix}.json")
+        
+        # Ensure logs directory exists
+        os.makedirs("logs", exist_ok=True)
         
         # Write the output to the file
         with open(output_file, 'w') as f:
             json.dump(output_data, f, indent=2)
         
-        # Only log the file location, don't print to stdout
-        logging.info(f"💾 Saved subgoal to {output_file}")
+        # Log the result to console with appropriate emoji and step type
+        logging.info(f"{status_emoji} {step_type}: {next_step.next_step}")
+        
+        # Only log the file location
+        logging.info(f"💾 Saved {file_prefix} to {output_file}")
         
         # If append-to option is provided, create a chain file
         if args.append_to:

@@ -14,6 +14,8 @@ class State:
     repository_path: str
     description: str
     branch_name: Optional[str] = None  # Current branch name
+    memory_hash: Optional[str] = None  # Hash of the current memory state
+    memory_repository_path: Optional[str] = None  # Path to the memory repository
 
 @dataclass
 class Goal:
