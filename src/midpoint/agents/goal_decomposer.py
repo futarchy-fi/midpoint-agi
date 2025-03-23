@@ -1318,7 +1318,7 @@ def main():
                 state_memory_repo_path = input_data["memory_repository_path"]
                 if not args.memory_repo_path:  # Command line arg takes precedence
                     args.memory_repo_path = state_memory_repo_path
-                    logging.info(f"Using memory repository path from input file: {state_memory_repo_path}")
+                    logging.debug(f"Using memory repository path from input file: {state_memory_repo_path}")
         except json.JSONDecodeError:
             logging.error(f"Input file {args.input_file} does not contain valid JSON")
             return
