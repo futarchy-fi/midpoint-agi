@@ -9,6 +9,7 @@ import string
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+import logging
 
 async def check_repo_state(repo_path: str) -> Dict[str, bool]:
     """Check the current state of the repository."""
@@ -186,20 +187,29 @@ async def list_directory(repo_path: str, directory: str = ".") -> Dict[str, List
         Dictionary with 'files' and 'directories' keys
     """
     full_path = Path(repo_path) / directory
+    logging.debug(f"Attempting to list directory: {full_path}")
     
     if not full_path.exists():
-        raise ValueError(f"Directory does not exist: {full_path}")
+        error_msg = f"Directory does not exist: {directory}"
+        logging.error(error_msg)
+        raise ValueError(error_msg)
         
     result = {
         "files": [],
         "directories": []
     }
     
-    for item in full_path.iterdir():
-        if item.is_file():
-            result["files"].append(item.name)
-        elif item.is_dir() and item.name != ".git":
-            result["directories"].append(item.name)
+    try:
+        for item in full_path.iterdir():
+            if item.is_file():
+                result["files"].append(item.name)
+            elif item.is_dir() and item.name != ".git":
+                result["directories"].append(item.name)
+                
+        logging.debug(f"Successfully listed directory {directory}: found {len(result['files'])} files and {len(result['directories'])} directories")
+    except Exception as e:
+        logging.error(f"Error listing directory {directory}: {str(e)}")
+        raise
             
     return result
 
