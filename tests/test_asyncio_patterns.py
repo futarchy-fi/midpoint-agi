@@ -123,11 +123,21 @@ class TestAsyncioPatterns(unittest.TestCase):
                             if short_name in {'run', 'main', 'get', 'post', 'put', 'delete'}:
                                 continue
                                 
-                            # Look for function calls without await
-                            pattern = rf'(?<!await\s+)(?<!await\()\b{re.escape(short_name)}\s*\('
-                            non_awaited_calls = re.findall(pattern, source_code)
+                            # Use simple pattern matching instead of complex lookbehinds
+                            # First find all calls to the function
+                            all_calls = re.findall(rf'\b{re.escape(short_name)}\s*\(', source_code)
                             
-                            if non_awaited_calls:
+                            # Then find all awaited calls
+                            awaited_calls = re.findall(rf'await\s+{re.escape(short_name)}\s*\(', source_code)
+                            awaited_calls += re.findall(rf'await\({re.escape(short_name)}\s*\(', source_code)
+                            
+                            # Find all calls inside asyncio.run
+                            asyncio_run_calls = re.findall(rf'asyncio\.run\(\s*{re.escape(short_name)}\s*\(', source_code)
+                            
+                            # Calculate potentially non-awaited calls
+                            non_awaited = len(all_calls) - len(awaited_calls) - len(asyncio_run_calls)
+                            
+                            if non_awaited > 0:
                                 # Verify this isn't a false positive by checking if function is called in an async function
                                 # This is a basic check - it would miss some cases but catch obvious ones
                                 async_context = re.search(rf'async\s+def.*?{re.escape(short_name)}\s*\(', source_code, re.DOTALL)
@@ -157,22 +167,26 @@ class TestAsyncioPatterns(unittest.TestCase):
                         # Look for validate_repository_state calls without await
                         # First check for the function being used
                         if 'validate_repository_state' in source_code:
-                            # Find all non-awaited calls
-                            non_awaited = re.findall(r'(?<!await\s+)(?<!asyncio\.run\()(?<!await\()validate_repository_state\s*\(', source_code)
+                            # Find all calls to the function
+                            all_calls = re.findall(r'validate_repository_state\s*\(', source_code)
                             
-                            # Find all calls inside asyncio.run
-                            inside_run = re.findall(r'asyncio\.run\(\s*validate_repository_state\s*\(', source_code)
+                            # Find all awaited calls and calls in asyncio.run
+                            awaited_calls = re.findall(r'await\s+validate_repository_state\s*\(', source_code)
+                            run_calls = re.findall(r'asyncio\.run\(\s*validate_repository_state\s*\(', source_code)
+                            
+                            # Calculate non-awaited calls
+                            non_awaited = len(all_calls) - len(awaited_calls) - len(run_calls)
                             
                             # Track if issues were found
-                            if non_awaited or inside_run:
+                            if non_awaited > 0 or run_calls:
                                 relative_path = py_file.relative_to(repo_root)
                                 
-                                if non_awaited:
+                                if non_awaited > 0:
                                     self.issues_found.append(
                                         f"Found non-awaited call to validate_repository_state in {relative_path}"
                                     )
                                     
-                                if inside_run:
+                                for _ in run_calls:
                                     self.issues_found.append(
                                         f"Found validate_repository_state inside asyncio.run() in {relative_path}"
                                     )

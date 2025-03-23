@@ -78,7 +78,9 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
     def test_integration_list_subgoals(self):
         """Test that the CLI can list available subgoals."""
         result = subprocess.run(
-            [sys.executable, str(self.script_path), "--list-subgoals"],
+            [sys.executable, str(self.script_path), 
+             "--repo-path", str(self.repo_path),
+             "--list-subgoals"],
             cwd=self.repo_path,
             capture_output=True,
             text=True
@@ -113,37 +115,44 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         
         # Run the script with the test subgoal file
         with patch.dict(os.environ, {"OPENAI_API_KEY": self.dummy_api_key}):
-            result = subprocess.run(
-                [sys.executable, str(self.script_path),
-                 "--repo-path", str(self.repo_path),
-                 "--input-file", str(self.subgoal_file),
-                 "--memory-hash", self.memory_hash,
-                 "--memory-repo-path", str(self.memory_path),
-                 "--debug"],
-                capture_output=True,
-                text=True
-            )
-        
-        # Check if the command ran successfully
-        self.assertEqual(result.returncode, 0, 
-                       f"Script failed with input file: {result.stderr}")
-        
-        # The output should include our mocked next step
-        self.assertIn("Mock integration test result", result.stdout)
-        
-        # There should be no asyncio-related errors
-        self.assertNotIn("asyncio.run() cannot be called from a running event loop", result.stderr)
-        self.assertNotIn("coroutine 'validate_repository_state' was never awaited", result.stderr)
-        
-        # Check that a new subgoal file was created in logs/
-        logs_dir = self.repo_path / "logs"
-        new_files = list(logs_dir.glob("task_*.json"))
-        self.assertGreater(len(new_files), 0, "No new task file was created")
-        
-        # Verify the content of the new file
-        with open(new_files[0], 'r') as f:
-            new_content = json.load(f)
-            self.assertEqual(new_content["next_step"], "Mock integration test result")
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(self.script_path),
+                     "--repo-path", str(self.repo_path),
+                     "--input-file", str(self.subgoal_file),
+                     "--memory-hash", self.memory_hash,
+                     "--memory-repo-path", str(self.memory_path),
+                     "--debug"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10  # Add timeout to avoid hanging
+                )
+                
+                # Check if the command ran successfully
+                self.assertEqual(result.returncode, 0, 
+                              f"Script failed with input file: {result.stderr}")
+                
+                # The output should include our mocked next step
+                self.assertIn("Mock integration test result", result.stdout)
+                
+                # There should be no asyncio-related errors
+                self.assertNotIn("asyncio.run() cannot be called from a running event loop", result.stderr)
+                self.assertNotIn("coroutine 'validate_repository_state' was never awaited", result.stderr)
+                
+                # Check that a new subgoal file was created in logs/
+                logs_dir = self.repo_path / "logs"
+                new_files = list(logs_dir.glob("task_*.json"))
+                self.assertGreater(len(new_files), 0, "No new task file was created")
+                
+                # Verify the content of the new file
+                with open(new_files[0], 'r') as f:
+                    new_content = json.load(f)
+                    self.assertEqual(new_content["next_step"], "Mock integration test result")
+            except subprocess.TimeoutExpired:
+                self.fail("Script execution timed out")
+            except subprocess.CalledProcessError as e:
+                self.fail(f"Script execution failed with return code {e.returncode}: {e.stderr}")
 
     @async_test
     async def test_goal_decomposer_instance_methods(self):

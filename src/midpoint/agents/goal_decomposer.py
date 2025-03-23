@@ -1402,13 +1402,13 @@ async def main():
                     logging.debug(f"Using memory repository path from input file: {state_memory_repo_path}")
         except json.JSONDecodeError:
             logging.error(f"Input file {args.input_file} does not contain valid JSON")
-            return
+            raise ValueError(f"Input file {args.input_file} does not contain valid JSON")
         except FileNotFoundError:
             logging.error(f"Input file {args.input_file} not found")
-            return
+            raise FileNotFoundError(f"Input file {args.input_file} not found")
         except Exception as e:
             logging.error(f"Error reading input file: {str(e)}")
-            return
+            raise
     else:
         # Use the goal description from command line
         goal_description = args.goal_description
@@ -1509,20 +1509,20 @@ async def main():
             except Exception as e:
                 logging.warning(f"Failed to process memory repository: {str(e)}")
         
-        asyncio.run(validate_repository_state(
+        await validate_repository_state(
             args.repo_path,
             git_hash=current_hash,  # Use the new parameter name
             skip_clean_check=True
-        ))
+        )
 
         # Initialize GoalDecomposer and determine the next step
         decomposer = GoalDecomposer()
-        next_step = asyncio.run(decomposer.determine_next_step(
+        next_step = await decomposer.determine_next_step(
             context,
             setup_logging=True,  # This configures logging
             debug=args.debug,
             quiet=args.quiet
-        ))
+        )
 
         # Get the final memory hash if it might have changed
         final_memory_hash = None
