@@ -15,6 +15,7 @@ Midpoint is an advanced AI system designed to overcome the fundamental limitatio
 - Task Execution System
 - Goal Validation System
 - Repository State Management
+- Memory Management System
 
 ### In Development
 - Main Orchestrator (coordination between components)
@@ -31,12 +32,85 @@ midpoint/
 ├── src/                    # Main source code
 │   └── midpoint/          # Core package
 │       ├── agents/        # Specialized AI agents
+│       ├── config/        # Configuration files
 │       ├── utils/         # Utility functions
 │       └── orchestrator.py # Main orchestrator (in development)
+├── scripts/               # Utility scripts
+│   ├── hooks/             # Git hooks
+│   └── memory_tools.py    # Memory system utilities
 ├── tests/                 # Test suite and development tools
 ├── docs/                  # Documentation
 └── logs/                  # Log files
 ```
+
+## Getting Started
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+   ```
+   pip install -e .
+   ```
+   For development and testing:
+   ```
+   pip install -e ".[dev]"
+   ```
+3. Install git hooks (optional):
+   ```
+   make install-hooks
+   ```
+
+### Usage
+
+Use the Makefile for common operations:
+
+```
+# Run the Midpoint system
+make run
+
+# Run tests
+make test
+
+# Run memory-specific tests
+make test-memory
+
+# Clean temporary files
+make clean
+
+# See all available commands
+make help
+```
+
+### Testing
+
+We use several mechanisms to ensure code quality:
+
+1. **Automated Tests**: Run tests via the Makefile
+   ```bash
+   # Run all tests
+   make test
+   
+   # Run memory-specific tests
+   make test-memory
+   ```
+
+2. **Manual Testing**: Run specific test suites with pytest
+   ```bash
+   # Run specific test file
+   python -m pytest tests/test_memory_tools.py
+   
+   # Run with verbose output
+   python -m pytest tests/test_memory_*.py -v
+   ```
+
+3. **Pre-commit Hooks**: Automatically run tests before each commit
+   - Install with `make install-hooks`
+   - Prevents commits if tests fail
+
+Our test suite includes:
+- **Unit Tests**: Test individual functions in isolation
+- **Integration Tests**: Test multiple components working together
 
 ## Current Implementation Status
 

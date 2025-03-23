@@ -1,0 +1,8 @@
+{
+  "points_budget": {
+    "planning": 1000,
+    "execution": 2000,
+    "validation": 500,
+    "analysis": 500
+  }
+} 
