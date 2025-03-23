@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import json
+import logging
 import argparse
 import subprocess
 from pathlib import Path
@@ -55,7 +56,11 @@ def store_document(content, category, metadata=None, repo_path=None):
     
     # Commit
     message = metadata.get("commit_message", f"Add {category} document: {filename}")
-    subprocess.run(["git", "commit", "-m", message], cwd=repo_path, check=True)
+    commit_result = subprocess.run(["git", "commit", "-m", message], cwd=repo_path, capture_output=True, text=True, check=True)
+    
+    # Log the git commit output at debug level
+    if hasattr(logging, 'debug') and commit_result.stdout:
+        logging.debug(commit_result.stdout.strip())
     
     # Get commit hash
     commit_hash = get_current_hash(repo_path)
@@ -64,8 +69,10 @@ def store_document(content, category, metadata=None, repo_path=None):
     if "code_hash" in metadata:
         update_cross_reference(metadata["code_hash"], commit_hash, repo_path)
     
-    print(f"Stored document at: {doc_path}")
-    print(f"Commit hash: {commit_hash}")
+    # Log storage information at debug level instead of printing
+    if hasattr(logging, 'debug'):
+        logging.debug(f"Stored document at: {doc_path}")
+        logging.debug(f"Commit hash: {commit_hash}")
     
     relative_path = str(doc_path.relative_to(repo_path))
     
@@ -90,7 +97,8 @@ def retrieve_documents(category=None, limit=10, repo_path=None):
         search_path = repo_path / "documents"
     
     if not search_path.exists():
-        print(f"Path does not exist: {search_path}")
+        if hasattr(logging, 'debug'):
+            logging.debug(f"Path does not exist: {search_path}")
         return []
     
     # Find all .md files
@@ -155,7 +163,11 @@ def update_cross_reference(code_hash, memory_hash, repo_path=None):
     # We don't add cross-reference.json to git or commit it
     # since it's in .gitignore and is managed separately
     
-    print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+    # Log cross-reference update at debug level instead of printing
+    if hasattr(logging, 'debug'):
+        logging.debug(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+    else:
+        print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 
 def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timestamp=None):
     """
@@ -179,7 +191,10 @@ def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timest
     cross_ref_path = repo_path / "metadata" / "cross-reference.json"
     
     if not cross_ref_path.exists():
-        print(f"Cross-reference file not found: {cross_ref_path}")
+        if hasattr(logging, 'debug'):
+            logging.debug(f"Cross-reference file not found: {cross_ref_path}")
+        else:
+            print(f"Cross-reference file not found: {cross_ref_path}")
         return None
     
     # Load cross-reference
@@ -205,9 +220,15 @@ def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timest
             if mapping["code_hash"] == code_hash
         ]
         if historical_mappings:
-            print(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+            else:
+                print(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
         else:
-            print(f"No historical mappings found for code hash: {code_hash[:7]}")
+            if hasattr(logging, 'debug'):
+                logging.debug(f"No historical mappings found for code hash: {code_hash[:7]}")
+            else:
+                print(f"No historical mappings found for code hash: {code_hash[:7]}")
         return historical_mappings
     
     # Return mapping closest to timestamp if provided
@@ -219,16 +240,25 @@ def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timest
         if mappings:
             # Find closest mapping to timestamp
             closest_mapping = min(mappings, key=lambda m: abs(m["timestamp"] - timestamp))
-            print(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
+            else:
+                print(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
             return closest_mapping["memory_hash"]
     
     # Otherwise return latest
     memory_hash = cross_ref.get("latest", {}).get(code_hash)
     
     if memory_hash:
-        print(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
+        if hasattr(logging, 'debug'):
+            logging.debug(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
+        else:
+            print(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
     else:
-        print(f"No memory hash found for code hash: {code_hash[:7]}")
+        if hasattr(logging, 'debug'):
+            logging.debug(f"No memory hash found for code hash: {code_hash[:7]}")
+        else:
+            print(f"No memory hash found for code hash: {code_hash[:7]}")
     
     return memory_hash
 
@@ -244,28 +274,48 @@ def main():
     store_parser.add_argument("--content", help="Content to store")
     store_parser.add_argument("--id", help="Document ID")
     store_parser.add_argument("--code-hash", help="Code hash to link to")
+    store_parser.add_argument("--debug", action="store_true", help="Show debug information")
     
     # Retrieve documents command
     retrieve_parser = subparsers.add_parser("retrieve", help="Retrieve documents")
     retrieve_parser.add_argument("--category", help="Document category")
     retrieve_parser.add_argument("--limit", type=int, default=5, help="Maximum number of documents")
+    retrieve_parser.add_argument("--debug", action="store_true", help="Show debug information")
     
     # Link command
     link_parser = subparsers.add_parser("link", help="Link code hash to memory hash")
     link_parser.add_argument("code_hash", help="Code repository hash")
     link_parser.add_argument("memory_hash", help="Memory repository hash")
+    link_parser.add_argument("--debug", action="store_true", help="Show debug information")
     
     # Lookup command
     lookup_parser = subparsers.add_parser("lookup", help="Look up memory hash for code hash")
     lookup_parser.add_argument("code_hash", help="Code repository hash")
     lookup_parser.add_argument("--historical", action="store_true", help="Return all historical mappings")
     lookup_parser.add_argument("--timestamp", type=int, help="Find mapping closest to this timestamp")
+    lookup_parser.add_argument("--debug", action="store_true", help="Show debug information")
     
     # New history command
     history_parser = subparsers.add_parser("history", help="View full history of code-memory mappings")
     history_parser.add_argument("--limit", type=int, default=10, help="Maximum number of entries")
+    history_parser.add_argument("--debug", action="store_true", help="Show debug information")
+    
+    # Add general arguments
+    parser.add_argument("--debug", action="store_true", help="Show debug information")
     
     args = parser.parse_args()
+    
+    # Configure basic logging
+    debug_mode = getattr(args, "debug", False)
+    logging_level = logging.DEBUG if debug_mode else logging.INFO
+    logging.basicConfig(
+        level=logging_level,
+        format='%(message)s'
+    )
+    
+    # Hide DEBUG messages by default when run as a command-line tool
+    if not debug_mode:
+        logging.getLogger().setLevel(logging.INFO)
     
     if args.command == "store":
         if args.file:
@@ -282,7 +332,8 @@ def main():
         if args.code_hash:
             metadata["code_hash"] = args.code_hash
         
-        store_document(content, args.category, metadata)
+        result = store_document(content, args.category, metadata)
+        print(f"Document stored: {result['path']}")
     
     elif args.command == "retrieve":
         documents = retrieve_documents(args.category, args.limit)
@@ -299,6 +350,7 @@ def main():
     
     elif args.command == "link":
         update_cross_reference(args.code_hash, args.memory_hash)
+        print(f"Linked code hash {args.code_hash[:7]} to memory hash {args.memory_hash[:7]}")
     
     elif args.command == "lookup":
         if args.historical:

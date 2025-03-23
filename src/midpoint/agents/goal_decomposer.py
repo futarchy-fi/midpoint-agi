@@ -159,7 +159,7 @@ except ModuleNotFoundError:
             with open(cross_ref_path, "w") as f:
                 json.dump(cross_ref, f, indent=2)
             
-            logging.info(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+            logging.debug(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 
 load_dotenv()
 
@@ -759,7 +759,7 @@ You MUST provide a structured response in JSON format with these fields:
                                     if context.state.git_hash:
                                         try:
                                             update_cross_reference(context.state.git_hash, new_memory_hash, memory_repo_path)
-                                            logging.info(f"🔗 Linked code hash {context.state.git_hash[:7]} to memory hash {new_memory_hash[:7]}")
+                                            logging.debug(f"🔗 Linked code hash {context.state.git_hash[:7]} to memory hash {new_memory_hash[:7]}")
                                         except Exception as e:
                                             logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
                                 
@@ -1465,7 +1465,7 @@ def main():
                         )
                         if result.stdout.strip():
                             # There were additional changes after tool operations
-                            logging.info(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
+                            logging.debug(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
                             
                             # Parse the git diff output and log each changed file
                             for line in result.stdout.strip().split('\n'):
@@ -1481,14 +1481,14 @@ def main():
                             logging.debug(f"Memory hash updated: {state.memory_hash[:7]} → {final_memory_hash[:7]} (no file changes)")
                     except Exception as e:
                         # Fallback to just logging the hash change
-                        logging.info(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
+                        logging.debug(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
                         logging.debug(f"Failed to get memory diff: {str(e)}")
                 
                 # Link the code and memory hashes if they've both changed
                 if state.git_hash and final_memory_hash and state.memory_hash != final_memory_hash:
                     try:
                         update_cross_reference(state.git_hash, final_memory_hash, state.memory_repository_path)
-                        logging.info(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
+                        logging.debug(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
                     except Exception as e:
                         logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
             except Exception as e:
@@ -1529,6 +1529,10 @@ def main():
         
         # Only log the file location
         logging.info(f"💾 Saved {file_prefix} to {output_file}")
+        
+        # Print the final memory hash change if it occurred (specifically at the end)
+        if state.memory_hash != final_memory_hash and final_memory_hash:
+            logging.info(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
         
         # If append-to option is provided, create a chain file
         if args.append_to:
