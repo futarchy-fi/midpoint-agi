@@ -10,7 +10,7 @@ import json
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
-from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
+from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext, MemoryState
 from midpoint.agents.tools import (
     list_directory,
     read_file,
@@ -201,7 +201,7 @@ You MUST provide a structured response in JSON format with these fields:
         Determine the next step toward achieving the goal.
         
         Args:
-            context: The current task context containing the goal and state
+            context: The current task context containing the goal, state, and optionally memory state
             
         Returns:
             A SubgoalPlan containing the next step and validation criteria
@@ -350,7 +350,7 @@ You MUST provide a structured response in JSON format with these fields:
     
     def _create_user_prompt(self, context: TaskContext) -> str:
         """Create the user prompt for the agent."""
-        return f"""Goal: {context.goal.description}
+        prompt = f"""Goal: {context.goal.description}
 
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
@@ -359,7 +359,17 @@ Current State:
 - Git Hash: {context.state.git_hash}
 - Description: {context.state.description}
 - Repository Path: {context.state.repository_path}
+"""
 
+        # Add memory state information if available
+        if context.memory_state:
+            prompt += f"""
+Memory State:
+- Memory Hash: {context.memory_state.memory_hash}
+- Memory Repository Path: {context.memory_state.repository_path}
+"""
+
+        prompt += f"""
 Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.execution_history) if context.execution_history else 0}
@@ -367,6 +377,7 @@ Context:
 Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
 Focus on providing a clear next step with measurable validation criteria.
 """
+        return prompt
     
     def _validate_subgoal(self, subgoal: SubgoalPlan, context: TaskContext) -> None:
         """Validate the generated subgoal plan."""
@@ -392,11 +403,8 @@ Focus on providing a clear next step with measurable validation criteria.
         Returns:
             List of SubgoalPlan objects representing the decomposition hierarchy
         """
-        # Validate repository state
-        await validate_repository_state(
-            context.state.repository_path, 
-            context.state.git_hash
-        )
+        # Validate repository state (both code and memory if available)
+        await validate_state(context)
         
         # Get the decomposition depth for logging
         depth = self._get_decomposition_depth(context)
@@ -433,6 +441,8 @@ Focus on providing a clear next step with measurable validation criteria.
             ),
             iteration=0,  # Reset for the new subgoal
             execution_history=context.execution_history,
+            # Preserve memory state if it exists
+            memory_state=context.memory_state,
             metadata={
                 **(context.metadata if hasattr(context, 'metadata') else {}),
                 "parent_goal": context.goal.description,
@@ -495,5 +505,33 @@ async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
     
     if stdout.strip():
         raise ValueError(f"Repository has uncommitted changes: {stdout.decode()}")
+    
+    return True
+
+async def validate_state(context: TaskContext) -> bool:
+    """
+    Validate both code and memory repository states if available.
+    
+    Args:
+        context: TaskContext containing state information
+        
+    Returns:
+        True if all repositories are in expected state
+        
+    Raises:
+        ValueError: If any repository is not in expected state
+    """
+    # Validate code repository
+    await validate_repository_state(
+        context.state.repository_path,
+        context.state.git_hash
+    )
+    
+    # If memory state is provided, validate it as well
+    if context.memory_state:
+        await validate_repository_state(
+            context.memory_state.repository_path,
+            context.memory_state.memory_hash
+        )
     
     return True 

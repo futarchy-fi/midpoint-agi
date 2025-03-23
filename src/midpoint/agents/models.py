@@ -33,6 +33,12 @@ class SubgoalPlan:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
+class MemoryState:
+    """Represents a memory repository state."""
+    memory_hash: str
+    repository_path: str
+
+@dataclass
 class StrategyPlan:
     """Represents a plan for achieving a goal."""
     steps: List[str]
@@ -41,12 +47,13 @@ class StrategyPlan:
 
 @dataclass
 class TaskContext:
-    """Represents the context for a task execution."""
+    """Contains all context for a task, including state, goal, and execution history."""
     state: State
     goal: Goal
-    iteration: int
-    execution_history: List[Dict[str, Any]]
+    iteration: int = 0
+    execution_history: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)  # Metadata for tracking decomposition context
+    memory_state: Optional[MemoryState] = None  # Optional memory state
 
 @dataclass
 class ExecutionTrace:
