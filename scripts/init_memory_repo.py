@@ -45,6 +45,14 @@ def init_memory_repo(repo_path, remote_url=None, branch=None):
         with open(cross_ref_path, "w") as f:
             json.dump({}, f, indent=2)
     
+    # Create .gitignore file to exclude cross-reference.json
+    gitignore_path = repo_path / ".gitignore"
+    if not gitignore_path.exists():
+        print(f"Creating .gitignore file to exclude cross-reference.json")
+        with open(gitignore_path, "w") as f:
+            f.write("# Ignore cross-reference file which changes frequently\n")
+            f.write("metadata/cross-reference.json\n")
+    
     # Add files to git
     print("Adding files to git")
     subprocess.run(["git", "add", "."], cwd=repo_path, check=True)

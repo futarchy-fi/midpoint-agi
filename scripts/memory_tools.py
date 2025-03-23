@@ -67,7 +67,15 @@ def store_document(content, category, metadata=None, repo_path=None):
     print(f"Stored document at: {doc_path}")
     print(f"Commit hash: {commit_hash}")
     
-    return str(doc_path.relative_to(repo_path))
+    relative_path = str(doc_path.relative_to(repo_path))
+    
+    # Return comprehensive information about the stored document
+    return {
+        "path": relative_path,
+        "memory_hash": commit_hash,
+        "category": category,
+        "filename": filename
+    }
 
 def retrieve_documents(category=None, limit=10, repo_path=None):
     """Retrieve documents from the memory repository."""
@@ -144,12 +152,8 @@ def update_cross_reference(code_hash, memory_hash, repo_path=None):
     with open(cross_ref_path, "w") as f:
         json.dump(cross_ref, f, indent=2)
     
-    # Add to git
-    subprocess.run(["git", "add", str(cross_ref_path)], cwd=repo_path, check=True)
-    
-    # Commit
-    message = f"Update cross-reference for code hash: {code_hash[:7]}"
-    subprocess.run(["git", "commit", "-m", message], cwd=repo_path, check=True)
+    # We don't add cross-reference.json to git or commit it
+    # since it's in .gitignore and is managed separately
     
     print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 

@@ -258,7 +258,9 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     if 'main' not in sys._getframe().f_back.f_code.co_name:
                         return True
                     return False  # Don't show in main() since we have better formatting there
-                # Allow our new emoji formats (status_emoji + step_type) to pass through
+                # Allow our new emoji formats to pass through
+                elif any(emoji in record.msg for emoji in ['📂', '📄', '🔍', '🌐', '💾', '🔄', '🔗', '✅', '📝', '➕', '➖', '🔀']):
+                    return True
                 elif ('🔄 Next subgoal:' in record.msg) or ('✅ Next task:' in record.msg):
                     return True
                 elif 'Determining next step for goal:' in record.msg:
@@ -613,21 +615,29 @@ You MUST provide a structured response in JSON format with these fields:
                         args = json.loads(tc.function.arguments)
                         if tc.function.name == "list_directory":
                             dir_path = args.get("directory", ".")
-                            tool_summary.append(f"📂 Listing directory: {dir_path}")
+                            tool_summary.append(f"📂 {dir_path}")
                         elif tc.function.name == "read_file":
                             file_path = args.get("file_path", "unknown")
-                            tool_summary.append(f"📄 Reading: {file_path}")
+                            tool_summary.append(f"📄 {file_path}")
                         elif tc.function.name == "search_code":
                             pattern = args.get("pattern", "unknown")
-                            tool_summary.append(f"🔍 Searching code: {pattern}")
+                            tool_summary.append(f"🔍 {pattern}")
                         elif tc.function.name == "web_search":
                             query = args.get("query", "unknown")
-                            tool_summary.append(f"🌐 Web search: {query}")
+                            tool_summary.append(f"🌐 {query}")
                         elif tc.function.name == "web_scrape":
                             url = args.get("url", "unknown")
-                            tool_summary.append(f"🌐 Scraping: {url}")
+                            tool_summary.append(f"🌐 {url}")
+                        elif tc.function.name == "store_memory_document":
+                            category = args.get("category", "unknown")
+                            content_preview = args.get("content", "")[:30] + "..." if len(args.get("content", "")) > 30 else args.get("content", "")
+                            tool_summary.append(f"💾 Storing document in {category}: \"{content_preview}\"")
+                        elif tc.function.name == "retrieve_memory_documents":
+                            category = args.get("category", "all")
+                            limit = args.get("limit", 5)
+                            tool_summary.append(f"🔍 Retrieving {limit} documents from {category}")
                         else:
-                            tool_summary.append(f"{tc.function.name}")
+                            tool_summary.append(f"🛠️ {tc.function.name}")
                     
                     # Log the summary at INFO level - only the first tool to keep it concise
                     if tool_summary:
@@ -677,21 +687,89 @@ You MUST provide a structured response in JSON format with these fields:
                                 if context.state.git_hash and "code_hash" not in metadata:
                                     metadata["code_hash"] = context.state.git_hash
                                 
+                                # Get the current memory hash before storing the document
+                                old_memory_hash = None
+                                try:
+                                    old_memory_hash = await get_current_hash(memory_repo_path)
+                                except Exception as e:
+                                    logging.debug(f"Failed to get memory hash before storing document: {str(e)}")
+                                
                                 # Store the document
-                                document_path = store_document(
+                                document_result = store_document(
                                     content=function_args["content"],
                                     category=function_args["category"],
                                     metadata=metadata,
                                     repo_path=memory_repo_path
                                 )
                                 
+                                # Extract information from the result
+                                if isinstance(document_result, dict):
+                                    document_path = document_result["path"]
+                                    document_filename = document_result["filename"]
+                                    # If store_document returned the memory hash, use it
+                                    if "memory_hash" in document_result:
+                                        new_memory_hash = document_result["memory_hash"]
+                                else:
+                                    # Handle old return format (just a string path)
+                                    document_path = document_result
+                                    document_filename = os.path.basename(document_path)
+                                
+                                # Log that we stored a document
+                                logging.info(f"💾 Stored document in {function_args['category']}: {document_filename}")
+                                
+                                # Get the new memory hash after storing the document
+                                if not new_memory_hash:
+                                    try:
+                                        new_memory_hash = await get_current_hash(memory_repo_path)
+                                    except Exception as e:
+                                        logging.debug(f"Failed to get memory hash after storing document: {str(e)}")
+                                
+                                # Log memory hash change if it occurred
+                                if old_memory_hash and new_memory_hash and old_memory_hash != new_memory_hash:
+                                    logging.info(f"🔄 Memory hash changed: {old_memory_hash[:7]} → {new_memory_hash[:7]}")
+                                    
+                                    # Show what changed in the memory repository
+                                    try:
+                                        # Get details of what changed in the memory repo
+                                        result = subprocess.run(
+                                            ["git", "diff", "--name-status", f"{old_memory_hash}..{new_memory_hash}"],
+                                            cwd=memory_repo_path,
+                                            capture_output=True,
+                                            text=True,
+                                            check=True
+                                        )
+                                        if result.stdout.strip():
+                                            # Parse the git diff output and log each changed file
+                                            for line in result.stdout.strip().split('\n'):
+                                                if not line.strip():
+                                                    continue
+                                                parts = line.split()
+                                                if len(parts) >= 2:
+                                                    change_type, file_path = parts[0], ' '.join(parts[1:])
+                                                    change_emoji = "📝" if change_type == "M" else "➕" if change_type == "A" else "➖" if change_type == "D" else "🔀"
+                                                    logging.info(f"{change_emoji} Memory {file_path} was {'modified' if change_type == 'M' else 'added' if change_type == 'A' else 'deleted' if change_type == 'D' else 'changed'}")
+                                    except Exception as e:
+                                        logging.debug(f"Failed to get memory diff: {str(e)}")
+                                    
+                                    # Update state's memory hash
+                                    if hasattr(context, 'state') and hasattr(context.state, 'memory_hash'):
+                                        context.state.memory_hash = new_memory_hash
+                                    
+                                    # Link code and memory hashes if code hash is available
+                                    if context.state.git_hash:
+                                        try:
+                                            update_cross_reference(context.state.git_hash, new_memory_hash, memory_repo_path)
+                                            logging.info(f"🔗 Linked code hash {context.state.git_hash[:7]} to memory hash {new_memory_hash[:7]}")
+                                        except Exception as e:
+                                            logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
+                                
                                 result_str = json.dumps({
                                     "success": True,
                                     "document_path": document_path,
                                     "message": f"Document stored in {function_args['category']} category"
-                                }, indent=2)
+                                })
                                 
-                                logging.info(f"📝 Stored memory document in {function_args['category']} category")
+                                logging.info(f"💾 Stored memory document: {document_path} in {function_args['category']} category")
                             elif function_name == "retrieve_memory_documents":
                                 # Get memory repo path from context, function args, or default
                                 memory_repo_path = function_args.get("memory_repo_path")
@@ -724,7 +802,7 @@ You MUST provide a structured response in JSON format with these fields:
                                     "total": len(documents)
                                 }, indent=2)
                                 
-                                logging.info(f"📚 Retrieved {len(documents)} memory documents")
+                                logging.info(f"🔍 Retrieved {len(documents)} memory documents")
                             else:
                                 result_str = f"Error: Unknown function {function_name}"
                             
@@ -1322,6 +1400,12 @@ def main():
                         # Create an initial commit
                         with open(memory_repo / "README.md", "w") as f:
                             f.write("# Agent Memory Repository\n\nThis repository stores memory documents for the agent.\n")
+                        
+                        # Create .gitignore to exclude cross-reference.json
+                        with open(memory_repo / ".gitignore", "w") as f:
+                            f.write("# Ignore cross-reference file which changes frequently\n")
+                            f.write("metadata/cross-reference.json\n")
+                            
                         subprocess.run(["git", "add", "."], cwd=memory_repo, check=True)
                         subprocess.run(["git", "commit", "-m", "Initialize memory repository"], cwd=memory_repo, check=True)
                         logging.info("Initialized git repository in memory repository")
@@ -1365,21 +1449,48 @@ def main():
             try:
                 final_memory_hash = asyncio.run(get_current_hash(state.memory_repository_path))
                 
-                # Log memory hash changes
+                # Log memory hash changes only if it changed since the last tool operation
+                # (we already log changes during tool operations)
                 if state.memory_hash != final_memory_hash:
-                    logging.info(f"🔄 Memory hash changed:")
-                    logging.info(f"   Initial: {state.memory_hash[:7] if state.memory_hash else 'None'}")
-                    logging.info(f"   Final:   {final_memory_hash[:7] if final_memory_hash else 'None'}")
-                    
-                    # Link the code and memory hashes if they've both changed
-                    if state.git_hash and final_memory_hash:
-                        try:
-                            update_cross_reference(state.git_hash, final_memory_hash, state.memory_repository_path)
-                            logging.info(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
-                        except Exception as e:
-                            logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
-                else:
-                    logging.info(f"📝 Memory hash unchanged: {final_memory_hash[:7] if final_memory_hash else 'None'}")
+                    # Check if there were actual changes from the current state.memory_hash
+                    # (which would have been updated during tool operations)
+                    try:
+                        # Get details of what changed in the memory repo
+                        result = subprocess.run(
+                            ["git", "diff", "--name-status", f"{state.memory_hash}..{final_memory_hash}"],
+                            cwd=state.memory_repository_path,
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        if result.stdout.strip():
+                            # There were additional changes after tool operations
+                            logging.info(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
+                            
+                            # Parse the git diff output and log each changed file
+                            for line in result.stdout.strip().split('\n'):
+                                if not line.strip():
+                                    continue
+                                parts = line.split()
+                                if len(parts) >= 2:
+                                    change_type, file_path = parts[0], ' '.join(parts[1:])
+                                    change_emoji = "📝" if change_type == "M" else "➕" if change_type == "A" else "➖" if change_type == "D" else "🔀"
+                                    logging.info(f"{change_emoji} Memory {file_path} was {'modified' if change_type == 'M' else 'added' if change_type == 'A' else 'deleted' if change_type == 'D' else 'changed'}")
+                        else:
+                            # No actual changes on disk, just updating the final hash
+                            logging.debug(f"Memory hash updated: {state.memory_hash[:7]} → {final_memory_hash[:7]} (no file changes)")
+                    except Exception as e:
+                        # Fallback to just logging the hash change
+                        logging.info(f"🔄 Memory hash changed after operations: {state.memory_hash[:7]} → {final_memory_hash[:7]}")
+                        logging.debug(f"Failed to get memory diff: {str(e)}")
+                
+                # Link the code and memory hashes if they've both changed
+                if state.git_hash and final_memory_hash and state.memory_hash != final_memory_hash:
+                    try:
+                        update_cross_reference(state.git_hash, final_memory_hash, state.memory_repository_path)
+                        logging.info(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
+                    except Exception as e:
+                        logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
             except Exception as e:
                 logging.warning(f"Failed to get final memory hash: {str(e)}")
         
