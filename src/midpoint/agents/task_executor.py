@@ -627,6 +627,48 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 task_completed = False
                                 completion_reason = "Task did not make any changes to code or memory repositories"
                             
+                            # Check if this is an exploratory task that's just getting started
+                            # If it has actions defined but hasn't stored anything yet, we'll treat this as a task in progress
+                            actions = final_output.get("actions", [])
+                            if not task_completed and actions and not memory_documents and not made_code_changes:
+                                # Check if the completion reason indicates this is just an initial step
+                                if any(keyword in completion_reason.lower() for keyword in ["initial", "first step", "starting", "begin", "locate"]):
+                                    logger.info("This appears to be an exploratory task in its initial step.")
+                                    logger.info("Creating an initial memory document to track progress.")
+                                    
+                                    # Create a memory document to track the task progress
+                                    try:
+                                        # Create a summary of planned actions
+                                        planned_actions = "\n".join([f"- {action.get('purpose', 'No purpose specified')}" for action in actions])
+                                        memory_content = f"""## Study Session Progress Tracker
+                                        
+                                        ### Task
+                                        {task}
+                                        
+                                        ### Current Status
+                                        Initial exploration phase. The task is in progress.
+                                        
+                                        ### Planned Actions
+                                        {planned_actions}
+                                        
+                                        ### Findings So Far
+                                        No findings yet, exploration just beginning.
+                                        """
+                                        
+                                        await store_memory_document(
+                                            content=memory_content,
+                                            category="study",
+                                            metadata={"task": task, "status": "in_progress"},
+                                            memory_repo_path=context.state.memory_repository_path
+                                        )
+                                        
+                                        # Update the response data
+                                        memory_documents = [{"category": "study", "document_path": "task_progress.md"}]
+                                        task_completed = True
+                                        logger.info("Created initial progress tracking document in memory repository")
+                                    except Exception as e:
+                                        logger.error(f"Failed to create initial memory document: {str(e)}")
+                            
                             if task_completed:
                                 logger.info(f"✅ Task completed successfully", extra=extra)
                             else:
