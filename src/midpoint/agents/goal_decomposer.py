@@ -5,7 +5,158 @@ This module implements the GoalDecomposer agent that determines the next step
 toward achieving a complex goal.
 """
 
+# Fix the memory tools imports - this must be at the top of the file
+import sys
 import os
+from pathlib import Path
+import logging
+import traceback
+
+# Early initialization of logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+# Set up the script location and repository root
+script_location = Path(__file__).resolve()
+repo_root = script_location.parent.parent.parent.parent
+
+# Add repo root and scripts directory to path
+sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / "scripts"))
+
+# Debug information
+if os.environ.get("DEBUG"):
+    print(f"Script location: {script_location}")
+    print(f"Repository root: {repo_root}")
+    print(f"Python path: {sys.path}")
+    scripts_dir = repo_root / "scripts"
+    print(f"Scripts directory exists: {scripts_dir.exists()}")
+    memory_tools_file = scripts_dir / "memory_tools.py"
+    print(f"Memory tools file exists: {memory_tools_file.exists()}")
+
+# Import the memory tools functions directly
+try:
+    # Try direct import first
+    import memory_tools
+    
+    # Create direct references to the functions we need
+    get_repo_path = memory_tools.get_repo_path
+    get_current_hash = memory_tools.get_current_hash
+    store_document = memory_tools.store_document
+    retrieve_documents = memory_tools.retrieve_documents
+    update_cross_reference = memory_tools.update_cross_reference
+    
+    # Log success
+    logging.debug("Successfully imported memory_tools directly")
+except Exception as e:
+    logging.warning(f"Memory tools import failed. Using fallback implementations. Error: {e}")
+    if os.environ.get("DEBUG"):
+        print("Exception traceback:")
+        traceback.print_exc()
+    
+    # Define fallback implementations
+    def get_repo_path():
+        """Fallback implementation to get memory repository path."""
+        if os.environ.get("DEBUG"):
+            print("Using fallback get_repo_path")
+        return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
+    
+    def get_current_hash(repo_path):
+        """Fallback implementation to get current git hash."""
+        if os.environ.get("DEBUG"):
+            print("Using fallback get_current_hash")
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return result.stdout.strip()
+        except:
+            return "unknown-hash"
+
+    def store_document(content, category, metadata=None, repo_path=None):
+        """Fallback implementation to store a document."""
+        logging.warning("Using fallback store_document implementation.")
+        import time
+        # Get repository path
+        repo_path = repo_path or get_repo_path()
+        repo_path = Path(repo_path)
+        
+        # Create basic directories
+        docs_dir = repo_path / "documents" / category
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create a simple filename
+        filename = f"doc_{int(time.time())}.md"
+        doc_path = docs_dir / filename
+        
+        # Write content
+        with open(doc_path, "w") as f:
+            f.write(content)
+            
+        logging.info(f"Stored document at: {doc_path} (fallback implementation)")
+        return str(doc_path.relative_to(repo_path) if repo_path in doc_path.parents else doc_path)
+        
+    def retrieve_documents(category=None, limit=10, repo_path=None):
+        """Fallback implementation to retrieve documents."""
+        logging.warning("Using fallback retrieve_documents implementation.")
+        # Get repository path
+        repo_path = repo_path or get_repo_path()
+        repo_path = Path(repo_path)
+        
+        # Set search path
+        if category:
+            search_path = repo_path / "documents" / category
+        else:
+            search_path = repo_path / "documents"
+        
+        results = []
+        
+        if search_path.exists():
+            # Find all .md files
+            files = list(search_path.glob("**/*.md"))
+            
+            # Sort by modification time (newest first)
+            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            
+            # Limit results
+            files = files[:limit]
+            
+            # Read contents
+            for file in files:
+                try:
+                    with open(file, "r") as f:
+                        results.append((str(file.relative_to(repo_path) if repo_path in file.parents else file), f.read()))
+                except:
+                    pass
+        
+        return results
+    
+    def update_cross_reference(code_hash, memory_hash, repo_path=None):
+        """Fallback implementation to update cross-reference between code and memory."""
+        logging.warning("Using fallback update_cross_reference implementation.")
+        # Get repository path
+        repo_path = repo_path or get_repo_path()
+        repo_path = Path(repo_path)
+        
+        # Create cross-reference directory
+        xref_dir = repo_path / "references"
+        xref_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create file for cross-reference
+        xref_path = xref_dir / f"{code_hash}.txt"
+        
+        # Write memory hash to the file
+        with open(xref_path, "w") as f:
+            f.write(memory_hash)
+            
+        logging.info(f"Updated cross-reference at: {xref_path} (fallback implementation)")
+        return True
+
+# Now import the rest of the modules needed
 import json
 import asyncio
 import argparse
@@ -19,7 +170,6 @@ from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
-    get_current_hash,
     web_search,
     web_scrape,
     store_memory_document,
@@ -28,142 +178,9 @@ from midpoint.agents.tools import (
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
 from dotenv import load_dotenv
-import logging
-from pathlib import Path
-import sys
 import datetime
 import subprocess
 import time
-
-# Import memory tools
-try:
-    # Try to import directly when script is run as part of the module
-    from scripts.memory_tools import get_repo_path, get_memory_for_code_hash, update_cross_reference
-except ModuleNotFoundError:
-    try:
-        # Try absolute path when run as a script
-        import sys
-        # Add the repo root to path
-        repo_root = Path(__file__).parent.parent.parent.parent
-        sys.path.append(str(repo_root))
-        from scripts.memory_tools import get_repo_path, get_memory_for_code_hash, update_cross_reference
-    except ModuleNotFoundError:
-        # Provide fallback implementations if imports still fail
-        logging.warning("Memory tools import failed. Using fallback implementations.")
-        
-        def get_repo_path():
-            """Fallback implementation to get memory repository path."""
-            return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
-            
-        def get_current_hash(repo_path):
-            """Fallback implementation to get current git hash."""
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                return result.stdout.strip()
-            except:
-                return "unknown-hash"
-                
-        def store_document(content, category, metadata=None, repo_path=None):
-            """Fallback implementation to store a document."""
-            logging.warning("Using fallback store_document implementation.")
-            # Get repository path
-            repo_path = repo_path or get_repo_path()
-            repo_path = Path(repo_path)
-            
-            # Create basic directories
-            docs_dir = repo_path / "documents" / category
-            docs_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Create a simple filename
-            filename = f"doc_{int(time.time())}.md"
-            doc_path = docs_dir / filename
-            
-            # Write content
-            with open(doc_path, "w") as f:
-                f.write(content)
-                
-            logging.info(f"Stored document at: {doc_path} (fallback implementation)")
-            return str(doc_path.relative_to(repo_path) if repo_path in doc_path.parents else doc_path)
-            
-        def retrieve_documents(category=None, limit=10, repo_path=None):
-            """Fallback implementation to retrieve documents."""
-            logging.warning("Using fallback retrieve_documents implementation.")
-            # Get repository path
-            repo_path = repo_path or get_repo_path()
-            repo_path = Path(repo_path)
-            
-            # Set search path
-            if category:
-                search_path = repo_path / "documents" / category
-            else:
-                search_path = repo_path / "documents"
-            
-            results = []
-            
-            if search_path.exists():
-                # Find all .md files
-                files = list(search_path.glob("**/*.md"))
-                
-                # Sort by modification time (newest first)
-                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                
-                # Limit results
-                files = files[:limit]
-                
-                # Read contents
-                for file in files:
-                    try:
-                        with open(file, "r") as f:
-                            results.append((str(file.relative_to(repo_path) if repo_path in file.parents else file), f.read()))
-                    except:
-                        pass
-            
-            return results
-            
-        def update_cross_reference(code_hash, memory_hash, repo_path=None):
-            """Fallback implementation to update cross-reference between code and memory."""
-            logging.warning("Using fallback update_cross_reference implementation.")
-            # Get repository path
-            repo_path = repo_path or get_repo_path()
-            repo_path = Path(repo_path)
-            
-            # Ensure metadata directory exists
-            metadata_dir = repo_path / "metadata"
-            metadata_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Path to cross-reference file
-            cross_ref_path = metadata_dir / "cross-reference.json"
-            
-            # Load existing cross-reference or create new
-            if cross_ref_path.exists():
-                try:
-                    with open(cross_ref_path, "r") as f:
-                        cross_ref = json.load(f)
-                except:
-                    cross_ref = {"mappings": [], "latest": {}}
-            else:
-                cross_ref = {"mappings": [], "latest": {}}
-            
-            # Update cross-reference
-            timestamp = int(time.time())
-            cross_ref["mappings"].append({
-                "code_hash": code_hash,
-                "memory_hash": memory_hash,
-                "timestamp": timestamp
-            })
-            cross_ref["latest"][code_hash] = memory_hash
-            
-            # Write updated cross-reference
-            with open(cross_ref_path, "w") as f:
-                json.dump(cross_ref, f, indent=2)
-            
-            logging.debug(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
 
 load_dotenv()
 
@@ -746,7 +763,7 @@ You MUST provide a structured response in JSON format with these fields:
                                 # Get the current memory hash before storing the document
                                 old_memory_hash = None
                                 try:
-                                    old_memory_hash = await get_current_hash(memory_repo_path)
+                                    old_memory_hash = get_current_hash(memory_repo_path)
                                 except Exception as e:
                                     logging.debug(f"Failed to get memory hash before storing document: {str(e)}")
                                 
@@ -776,7 +793,7 @@ You MUST provide a structured response in JSON format with these fields:
                                 # Get the new memory hash after storing the document
                                 if not new_memory_hash:
                                     try:
-                                        new_memory_hash = await get_current_hash(memory_repo_path)
+                                        new_memory_hash = get_current_hash(memory_repo_path)
                                     except Exception as e:
                                         logging.debug(f"Failed to get memory hash after storing document: {str(e)}")
                                 
@@ -1239,7 +1256,7 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     # If git_hash is provided, check that it matches the current hash
     if git_hash:
         try:
-            current_hash = await get_current_hash(repo_path)
+            current_hash = get_current_hash(repo_path)
             if current_hash != git_hash:
                 logging.warning("Repository hash mismatch: expected %s, got %s", git_hash, current_hash)
         except Exception as e:
@@ -1435,13 +1452,13 @@ def main():
             logging.info(f"Added relevant context from input file: {relevant_context}")
 
         # Validate repository state and get current hash
-        current_hash = asyncio.run(get_current_hash(args.repo_path))
+        current_hash = get_current_hash(args.repo_path)
         state.git_hash = current_hash
         
         # Get memory hash if not provided but memory repo path is
         if not state.memory_hash and state.memory_repository_path:
             try:
-                memory_hash = asyncio.run(get_current_hash(state.memory_repository_path))
+                memory_hash = get_current_hash(state.memory_repository_path)
                 state.memory_hash = memory_hash
                 logging.info(f"Setting memory hash to current hash: {memory_hash[:7] if memory_hash else 'None'}")
             except Exception as e:
@@ -1526,7 +1543,7 @@ def main():
         final_memory_hash = None
         if state.memory_repository_path:
             try:
-                final_memory_hash = asyncio.run(get_current_hash(state.memory_repository_path))
+                final_memory_hash = get_current_hash(state.memory_repository_path)
                 
                 # Log memory hash changes only if it changed since the last tool operation
                 # (we already log changes during tool operations)
