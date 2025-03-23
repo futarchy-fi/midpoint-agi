@@ -672,16 +672,61 @@ You MUST provide a structured response in JSON format with these fields:
                             
                             # Execute the appropriate function
                             if function_name == "list_directory":
-                                result = await list_directory(**function_args)
-                                result_str = json.dumps(result, indent=2)
+                                # Handle parameter mapping for list_directory
+                                # Convert repo_path/directory to path if present
+                                if "repo_path" in function_args or "directory" in function_args:
+                                    path = function_args.pop("repo_path", context.state.repository_path)
+                                    directory = function_args.pop("directory", ".")
+                                    function_args["path"] = os.path.join(path, directory)
+                                
+                                try:
+                                    result = await list_directory(**function_args)
+                                    result_str = json.dumps(result, indent=2)
+                                except TypeError as e:
+                                    error_msg = f"Unexpected error during tool execution: {str(e)}"
+                                    logging.error(error_msg)
+                                    result_str = {"error": error_msg}
+                                    result_str = json.dumps(result_str, indent=2)
                             elif function_name == "read_file":
-                                result_str = await read_file(**function_args)
+                                # Handle parameter mapping for read_file
+                                # Convert repo_path/file_path if needed
+                                if "repo_path" in function_args and "file_path" in function_args:
+                                    repo_path = function_args.pop("repo_path")
+                                    file_path = function_args.pop("file_path")
+                                    function_args["file_path"] = os.path.join(repo_path, file_path)
+                                
+                                try:
+                                    result = await read_file(**function_args)
+                                    result_str = json.dumps(result, indent=2)
+                                except TypeError as e:
+                                    error_msg = f"Unexpected error during tool execution: {str(e)}"
+                                    logging.error(error_msg)
+                                    result_str = {"error": error_msg}
+                                    result_str = json.dumps(result_str, indent=2)
                             elif function_name == "search_code":
-                                result_str = await search_code(**function_args)
+                                try:
+                                    result_str = await search_code(**function_args)
+                                except TypeError as e:
+                                    error_msg = f"Unexpected error during tool execution: {str(e)}"
+                                    logging.error(error_msg)
+                                    result_str = {"error": error_msg}
+                                    result_str = json.dumps(result_str, indent=2)
                             elif function_name == "web_search":
-                                result_str = await web_search(**function_args)
+                                try:
+                                    result_str = await web_search(**function_args)
+                                except TypeError as e:
+                                    error_msg = f"Unexpected error during tool execution: {str(e)}"
+                                    logging.error(error_msg)
+                                    result_str = {"error": error_msg}
+                                    result_str = json.dumps(result_str, indent=2)
                             elif function_name == "web_scrape":
-                                result_str = await web_scrape(**function_args)
+                                try:
+                                    result_str = await web_scrape(**function_args)
+                                except TypeError as e:
+                                    error_msg = f"Unexpected error during tool execution: {str(e)}"
+                                    logging.error(error_msg)
+                                    result_str = {"error": error_msg}
+                                    result_str = json.dumps(result_str, indent=2)
                             elif function_name == "store_memory_document":
                                 # Get memory repo path from context, function args, or default
                                 memory_repo_path = function_args.get("memory_repo_path")

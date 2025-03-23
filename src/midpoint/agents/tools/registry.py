@@ -19,10 +19,12 @@ class ToolRegistry:
     def register_tool(cls, tool):
         """Register a tool with the registry."""
         if tool.name in cls._tools:
-            logging.warning(f"Tool with name '{tool.name}' is already registered. Overwriting.")
+            # Only log a debug message instead of a warning when overwriting a tool
+            logging.debug(f"Tool with name '{tool.name}' is already registered. Overwriting.")
+        else:
+            logging.debug(f"Registered tool: {tool.name}")
         
         cls._tools[tool.name] = tool
-        logging.debug(f"Registered tool: {tool.name}")
         
         return tool
     
