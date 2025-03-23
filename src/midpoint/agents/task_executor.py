@@ -606,10 +606,12 @@ Use the store_memory_document tool to save this information with appropriate cat
                             
                             # Detect uncommitted changes in the code repository
                             try:
-                                status_output = await run_terminal_cmd(
+                                status_result = await run_terminal_cmd(
                                     command="git status --porcelain",
                                     cwd=context.state.repository_path
                                 )
+                                # Extract stdout from the result dictionary
+                                status_output = status_result.get("stdout", "")
                                 has_uncommitted_changes = bool(status_output.strip())
                                 
                                 if has_uncommitted_changes and task_completed:
