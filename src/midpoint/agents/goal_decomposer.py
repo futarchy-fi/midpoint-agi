@@ -8,17 +8,20 @@ toward achieving a complex goal.
 import os
 import json
 import asyncio
+import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
-from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext, MemoryState
+from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
 from midpoint.agents.tools import (
     list_directory,
     read_file,
     search_code,
-    get_current_hash
+    get_current_hash,
+    web_search,
+    web_scrape
 )
 from midpoint.agents.config import get_openai_api_key
-from ..utils.logging import log_manager
+from midpoint.utils.logging import log_manager
 
 class GoalDecomposer:
     """Agent responsible for determining the next step toward a complex goal."""
@@ -201,7 +204,7 @@ You MUST provide a structured response in JSON format with these fields:
         Determine the next step toward achieving the goal.
         
         Args:
-            context: The current task context containing the goal, state, and optionally memory state
+            context: The current task context containing the goal and state
             
         Returns:
             A SubgoalPlan containing the next step and validation criteria
@@ -350,7 +353,7 @@ You MUST provide a structured response in JSON format with these fields:
     
     def _create_user_prompt(self, context: TaskContext) -> str:
         """Create the user prompt for the agent."""
-        prompt = f"""Goal: {context.goal.description}
+        return f"""Goal: {context.goal.description}
 
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
@@ -359,17 +362,7 @@ Current State:
 - Git Hash: {context.state.git_hash}
 - Description: {context.state.description}
 - Repository Path: {context.state.repository_path}
-"""
 
-        # Add memory state information if available
-        if context.memory_state:
-            prompt += f"""
-Memory State:
-- Memory Hash: {context.memory_state.memory_hash}
-- Memory Repository Path: {context.memory_state.repository_path}
-"""
-
-        prompt += f"""
 Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.execution_history) if context.execution_history else 0}
@@ -377,7 +370,6 @@ Context:
 Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
 Focus on providing a clear next step with measurable validation criteria.
 """
-        return prompt
     
     def _validate_subgoal(self, subgoal: SubgoalPlan, context: TaskContext) -> None:
         """Validate the generated subgoal plan."""
@@ -403,8 +395,11 @@ Focus on providing a clear next step with measurable validation criteria.
         Returns:
             List of SubgoalPlan objects representing the decomposition hierarchy
         """
-        # Validate repository state (both code and memory if available)
-        await validate_state(context)
+        # Validate repository state
+        await validate_repository_state(
+            context.state.repository_path, 
+            context.state.git_hash
+        )
         
         # Get the decomposition depth for logging
         depth = self._get_decomposition_depth(context)
@@ -441,8 +436,6 @@ Focus on providing a clear next step with measurable validation criteria.
             ),
             iteration=0,  # Reset for the new subgoal
             execution_history=context.execution_history,
-            # Preserve memory state if it exists
-            memory_state=context.memory_state,
             metadata={
                 **(context.metadata if hasattr(context, 'metadata') else {}),
                 "parent_goal": context.goal.description,
@@ -508,30 +501,67 @@ async def validate_repository_state(repo_path: str, expected_hash: str) -> bool:
     
     return True
 
-async def validate_state(context: TaskContext) -> bool:
-    """
-    Validate both code and memory repository states if available.
-    
-    Args:
-        context: TaskContext containing state information
-        
-    Returns:
-        True if all repositories are in expected state
-        
-    Raises:
-        ValueError: If any repository is not in expected state
-    """
-    # Validate code repository
-    await validate_repository_state(
-        context.state.repository_path,
-        context.state.git_hash
-    )
-    
-    # If memory state is provided, validate it as well
-    if context.memory_state:
-        await validate_repository_state(
-            context.memory_state.repository_path,
-            context.memory_state.memory_hash
-        )
-    
-    return True 
+def main():
+    parser = argparse.ArgumentParser(description="Run GoalDecomposer to determine the next step.")
+    parser.add_argument('--repo-path', required=True, help='Path to the git repository')
+    parser.add_argument('--goal-description', required=True, help='Description of the goal')
+    parser.add_argument('--iteration', type=int, default=0, help='Iteration number')
+    parser.add_argument('--execution-history', type=str, default='[]', help='Execution history as JSON string')
+
+    args = parser.parse_args()
+
+    try:
+        # Create the TaskContext
+        state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
+        goal = Goal(description=args.goal_description)
+        context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+
+        # Validate repository state and get current hash
+        current_hash = asyncio.run(get_current_hash(args.repo_path))
+        state.git_hash = current_hash
+        asyncio.run(validate_repository_state(args.repo_path, current_hash))
+
+        # Initialize GoalDecomposer and determine the next step
+        decomposer = GoalDecomposer()
+        next_step = asyncio.run(decomposer.determine_next_step(context))
+
+        # Output the result
+        print("Next Step:", next_step.next_step)
+        print("Validation Criteria:", next_step.validation_criteria)
+        print("Reasoning:", next_step.reasoning)
+    except TypeError as e:
+        print("Error: Missing required argument. Please ensure all required fields are provided.")
+        print("Details:", str(e))
+    except ValueError as e:
+        if "uncommitted changes" in str(e):
+            print("Error: The repository has uncommitted changes.")
+            print("Please commit or stash your changes before proceeding.")
+            print("Details:", str(e).split(':', 1)[1].strip())
+            return
+        else:
+            print("Error:", str(e))
+    except Exception as e:
+        print("An unexpected error occurred:", str(e))
+        return
+
+    # Create the TaskContext
+    state = State(repository_path=args.repo_path, git_hash="", description="Current state description")
+    goal = Goal(description=args.goal_description)
+    context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+
+    # Validate repository state and get current hash
+    current_hash = asyncio.run(get_current_hash(args.repo_path))
+    state.git_hash = current_hash
+    asyncio.run(validate_repository_state(args.repo_path, current_hash))
+
+    # Initialize GoalDecomposer and determine the next step
+    decomposer = GoalDecomposer()
+    next_step = asyncio.run(decomposer.determine_next_step(context))
+
+    # Output the result
+    print("Next Step:", next_step.next_step)
+    print("Validation Criteria:", next_step.validation_criteria)
+    print("Reasoning:", next_step.reasoning)
+
+if __name__ == "__main__":
+    main() 
