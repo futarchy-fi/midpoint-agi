@@ -1,4 +1,4 @@
-.PHONY: run test install-hooks clean
+.PHONY: run test test-memory test-critical install-hooks clean
 
 # Run Midpoint
 run:
@@ -12,13 +12,17 @@ test:
 test-memory:
 	python -m pytest tests/test_memory_*.py -v
 
+# Run critical tests (tests run in pre-commit hook)
+test-critical:
+	python -m pytest tests/test_memory_*.py tests/test_filesystem_tools.py tests/test_specific_bugs.py tests/test_goal_decomposer_tools.py tests/test_tools_wrapper.py -v
+
 # Install git hooks
 install-hooks:
 	@echo "Installing git pre-commit hook..."
 	@cp scripts/hooks/pre-commit-hook.sh .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed successfully!"
-	@echo "The hook will run memory tests before each commit."
+	@echo "The hook will run critical tests before each commit."
 
 # Clean temporary files
 clean:
@@ -41,5 +45,6 @@ help:
 	@echo "  make run ARGS=\"...\"   - Run Midpoint with optional arguments"
 	@echo "  make test               - Run all tests"
 	@echo "  make test-memory        - Run memory-specific tests"
+	@echo "  make test-critical      - Run critical tests (included in pre-commit hook)"
 	@echo "  make install-hooks      - Install git hooks"
 	@echo "  make clean              - Clean temporary files" 

@@ -75,6 +75,9 @@ make test
 # Run memory-specific tests
 make test-memory
 
+# Run critical tests (those included in pre-commit hook)
+make test-critical
+
 # Clean temporary files
 make clean
 
@@ -107,6 +110,12 @@ We use several mechanisms to ensure code quality:
 3. **Pre-commit Hooks**: Automatically run tests before each commit
    - Install with `make install-hooks`
    - Prevents commits if tests fail
+   - Currently runs:
+     - Memory tests
+     - Filesystem tools tests
+     - Specific bugs tests 
+     - Goal decomposer tools tests
+     - Tools wrapper tests
 
 Our test suite includes:
 - **Unit Tests**: Test individual functions in isolation
