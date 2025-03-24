@@ -80,7 +80,8 @@ class TestSpecificBugs(unittest.TestCase):
         # Run the script with parameters that would trigger the issue
         result = subprocess.run(
             [sys.executable, str(self.script_path), 
-             "--repo-path", str(self.repo_path),
+             str(self.repo_path),  # repo_path as positional argument
+             "Test asyncio nesting bug",  # goal as positional argument
              "--input-file", str(subgoal_file),
              "--memory-hash", "a9c9c63eadd4b64b2191b78f811750953c1aa53b"],
             capture_output=True,

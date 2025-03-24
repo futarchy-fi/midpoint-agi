@@ -334,55 +334,58 @@ class Orchestrator:
             return None
 
 async def main():
-    """Command-line interface for the orchestrator."""
-    parser = argparse.ArgumentParser(description="Midpoint Orchestrator")
-    parser.add_argument("repo_path", help="Path to the git repository")
-    parser.add_argument("goal", help="Goal description")
-    parser.add_argument("--checkpoint", help="Path to checkpoint file for resuming")
-    parser.add_argument("--max-iterations", type=int, default=10, help="Maximum iterations to run")
-    parser.add_argument("--save-checkpoint", help="Path to save checkpoint file after each iteration")
+    """Command-line entry point."""
+    parser = argparse.ArgumentParser(description="Run the Midpoint orchestrator")
+    parser.add_argument("repo_path", help="Path to the target repository")
+    parser.add_argument("goal", help="Description of the goal to achieve")
+    parser.add_argument("--criteria", nargs="+", required=True, help="Validation criteria for the goal")
+    parser.add_argument("--threshold", type=float, default=0.8, help="Success threshold (0.0-1.0)")
+    parser.add_argument("--iterations", type=int, default=10, help="Maximum number of iterations")
+    parser.add_argument("--checkpoint", help="Path to save checkpoints")
+    parser.add_argument("--resume", help="Resume from checkpoint file")
+    
     args = parser.parse_args()
     
-    repo_path = args.repo_path
-    goal_description = args.goal
-    
-    # Create orchestrator
-    orchestrator = Orchestrator()
-    
-    # Initialize state
-    execution_history = []
-    start_iteration = 0
-    
-    # Try to load checkpoint if specified
+    # Create checkpoint directory if specified
     if args.checkpoint:
-        checkpoint_result = await orchestrator.load_checkpoint(args.checkpoint)
-        if checkpoint_result:
-            current_state, goal, execution_history, start_iteration = checkpoint_result
-        else:
-            # Create goal with empty validation criteria - these should be determined by the GoalDecomposer
-            goal = Goal(
-                description=goal_description,
-                validation_criteria=[],  # Let the GoalDecomposer determine appropriate criteria
-                success_threshold=0.8
-            )
-    else:
-        # Create goal with empty validation criteria - these should be determined by the GoalDecomposer
-        goal = Goal(
-            description=goal_description,
-            validation_criteria=[],  # Let the GoalDecomposer determine appropriate criteria
-            success_threshold=0.8
-        )
+        checkpoint_dir = Path(args.checkpoint).parent
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # Run orchestrator
-    result = await orchestrator.run(
-        repo_path=repo_path, 
-        goal=goal, 
-        max_iterations=args.max_iterations,
-        start_iteration=start_iteration,
-        checkpoint_path=args.save_checkpoint
+    # Create the goal
+    goal = Goal(
+        description=args.goal,
+        validation_criteria=args.criteria,
+        success_threshold=args.threshold
     )
     
-    # Print result
+    # Initialize orchestrator
+    orchestrator = Orchestrator()
+    
+    # Resume from checkpoint if specified
+    if args.resume:
+        checkpoint = await orchestrator.load_checkpoint(args.resume)
+        if checkpoint:
+            print(f"Resuming from checkpoint: {args.resume}")
+            result = await orchestrator.run(
+                repo_path=args.repo_path,
+                goal=checkpoint["goal"],
+                max_iterations=args.iterations,
+                start_iteration=checkpoint["iteration"],
+                checkpoint_path=args.checkpoint
+            )
+        else:
+            print(f"Failed to load checkpoint: {args.resume}")
+            return
+    else:
+        # Run new orchestration
+        result = await orchestrator.run(
+            repo_path=args.repo_path,
+            goal=goal,
+            max_iterations=args.iterations,
+            checkpoint_path=args.checkpoint
+        )
+    
+    # Print the result
     if result.success:
         print("\nOrchestration completed successfully!")
         print(f"Final Git Hash: {result.final_state.git_hash}")
@@ -396,8 +399,6 @@ async def main():
             print(f"{i}. {entry['subgoal']}")
             print(f"   Git Hash: {entry['git_hash']}")
             print(f"   Validation Score: {entry['validation_score']:.2f}")
-    
-    sys.exit(0 if result.success else 1)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

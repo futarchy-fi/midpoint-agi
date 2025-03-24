@@ -90,7 +90,8 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         # Run the script with the sample subgoal file
         result = subprocess.run(
             [sys.executable, str(self.script_path), 
-             "--repo-path", str(self.repo_path),
+             str(self.repo_path),  # repo_path as positional argument
+             "Test goal",  # goal as positional argument
              "--input-file", str(self.subgoal_file),
              "--debug"],
             capture_output=True,
@@ -170,7 +171,8 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         
         # Mock the argument parser
         with patch('sys.argv', ['goal_decomposer.py', 
-                               '--repo-path', str(self.repo_path),
+                               str(self.repo_path),  # repo_path as positional argument
+                               "Test goal",  # goal as positional argument
                                '--input-file', str(self.subgoal_file),
                                '--debug']):
             
@@ -203,12 +205,14 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         """Test that the CLI handles errors when the input file doesn't exist."""
         try:
             result = subprocess.run(
-                [sys.executable, str(self.script_path), 
-                 "--repo-path", str(self.repo_path),
+                [sys.executable, str(self.script_path),
+                 str(self.repo_path),  # repo_path as positional argument
+                 "Test goal",  # goal as positional argument
                  "--input-file", "nonexistent_file.json"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                env={**os.environ, "OPENAI_API_KEY": "dummy_key"}  # Provide a dummy API key
             )
             self.fail("Should have raised an exception for nonexistent file")
         except subprocess.CalledProcessError as e:

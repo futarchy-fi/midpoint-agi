@@ -71,7 +71,7 @@ async def run_task(
             print(f"   Git Hash: {entry['git_hash']}")
             print(f"   Validation Score: {entry['validation_score']:.2f}")
 
-def main():
+async def main():
     """Command-line entry point."""
     parser = argparse.ArgumentParser(description="Run a Midpoint task on a repository")
     parser.add_argument("repo_path", help="Path to the target repository")
@@ -90,7 +90,7 @@ def main():
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     # Run the task
-    asyncio.run(run_task(
+    await run_task(
         repo_path=args.repo_path,
         goal_description=args.goal,
         validation_criteria=args.criteria,
@@ -98,7 +98,7 @@ def main():
         max_iterations=args.iterations,
         checkpoint_path=args.checkpoint,
         start_branch=args.branch
-    ))
+    )
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

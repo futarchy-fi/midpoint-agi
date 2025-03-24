@@ -67,13 +67,27 @@ async def create_branch(repo_path: str, base_name: str) -> str:
         
     return branch_name
 
+async def validate_repository_state(repo_path: str, skip_clean_check: bool = False) -> None:
+    """Validate the state of the repository."""
+    # Check if repository exists and is a git repo
+    repo_path = Path(repo_path)
+    if not repo_path.exists():
+        raise ValueError(f"Repository path does not exist: {repo_path}")
+    
+    if not (repo_path / ".git").exists():
+        raise ValueError(f"Not a git repository: {repo_path}")
+    
+    if not skip_clean_check:
+        # Check if repository is clean
+        state = await check_repo_state(repo_path)
+        if not state["is_clean"]:
+            raise RuntimeError("Repository has uncommitted changes")
+
 async def revert_to_hash(repo_path: str, git_hash: str) -> None:
     """Revert the repository to a specific git hash."""
     # First check if we have uncommitted changes
-    state = await check_repo_state(repo_path)
-    if not state["is_clean"]:
-        raise RuntimeError("Cannot revert: repository has uncommitted changes")
-        
+    await validate_repository_state(repo_path)
+    
     # Hard reset to the hash
     result = await asyncio.create_subprocess_exec(
         "git", "reset", "--hard", git_hash,
@@ -159,10 +173,8 @@ async def get_current_branch(repo_path: str) -> str:
 async def checkout_branch(repo_path: str, branch_name: str) -> None:
     """Checkout a specific branch."""
     # First check if we have uncommitted changes
-    state = await check_repo_state(repo_path)
-    if not state["is_clean"]:
-        raise RuntimeError("Cannot checkout: repository has uncommitted changes")
-        
+    await validate_repository_state(repo_path)
+    
     result = await asyncio.create_subprocess_exec(
         "git", "checkout", branch_name,
         cwd=repo_path,
@@ -379,27 +391,6 @@ async def run_terminal_cmd(command: str, cwd: str) -> Tuple[str, str]:
         raise RuntimeError(f"Command failed: {stderr.decode()}")
         
     return stdout.decode(), stderr.decode()
-
-async def validate_repository_state(repo_path: str, expected_hash: str) -> None:
-    """
-    Validate that the repository is in the expected state.
-    
-    Args:
-        repo_path: Path to the git repository
-        expected_hash: Expected git hash to validate against
-        
-    Raises:
-        ValueError: If repository is not in the expected state
-    """
-    # First check if repository is clean
-    state = await check_repo_state(repo_path)
-    if not state["is_clean"]:
-        raise ValueError("Repository is not in a clean state")
-        
-    # Get current hash
-    current_hash = await get_current_hash(repo_path)
-    if current_hash != expected_hash:
-        raise ValueError(f"Repository hash mismatch. Expected: {expected_hash}, Got: {current_hash}")
 
 async def tavily_search(query: str, max_results: int = 5) -> str:
     """

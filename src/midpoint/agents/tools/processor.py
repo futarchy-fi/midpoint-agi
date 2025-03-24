@@ -105,7 +105,7 @@ class ToolProcessor:
     
     async def run_llm_with_tools(self, 
                                messages: List[Dict[str, Any]], 
-                               model: str = "gpt-4o",
+                               model: str = "gpt-4",
                                temperature: float = 0.1,
                                max_tokens: int = 4000,
                                validate_json_format: bool = False) -> Tuple[Any, List[Dict[str, Any]]]:
