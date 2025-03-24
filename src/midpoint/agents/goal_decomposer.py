@@ -418,6 +418,17 @@ You MUST provide a structured response in JSON format with these fields:
         if not context.state.repository_path:
             raise ValueError("Repository path not provided in state")
             
+        # Check if this is a top-level goal without a parent, if so create a top-level goal file
+        parent_goal_filename = None
+        if not hasattr(context, 'metadata') or not context.metadata or 'parent_goal' not in context.metadata:
+            # This is a top-level goal, create a goal file for it
+            parent_goal_filename = self.create_top_goal_file(context)
+            logging.info(f"Created top-level goal file: {parent_goal_filename}")
+        else:
+            # This is a subgoal, parent is already set
+            parent_goal_filename = context.metadata.get('parent_goal_file', '')
+            logging.info(f"Using parent goal: {parent_goal_filename}")
+            
         # Prepare the user prompt
         user_prompt = self._create_user_prompt(context)
         
@@ -941,110 +952,52 @@ appropriate when the goal involves gaining knowledge or understanding without ch
         
         return serialized
 
-    async def decompose_recursively(self, context: TaskContext, log_file: str = "goal_hierarchy.log") -> List[SubgoalPlan]:
+    def create_top_goal_file(self, context: TaskContext) -> str:
         """
-        Recursively decompose a goal until reaching directly executable tasks.
+        Create a subgoal file for a top-level goal.
         
         Args:
-            context: The current task context containing the goal and state
-            log_file: Path to log file for visualizing the goal hierarchy (deprecated)
+            context: The current task context containing the goal
             
         Returns:
-            List of SubgoalPlan objects representing the decomposition hierarchy
+            The filename of the created subgoal file
         """
-        logging.info("Starting recursive decomposition for the goal: %s", context.goal.description)
-        # Validate repository state
-        await validate_repository_state(
-            context.state.repository_path, 
-            context.state.git_hash
-        )
+        logging.info("Creating top-level goal file")
         
-        # Get the decomposition depth for logging
-        depth = self._get_decomposition_depth(context)
+        # Create the output data for the top-level goal
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        hash_suffix = os.urandom(3).hex()
         
-        # Get the next subgoal
-        subgoal = await self.determine_next_step(context)
+        # Create a unique file name
+        filename = f"subgoal_{timestamp}_{hash_suffix}.json"
+        goal_id = f"subgoal_{timestamp}_{hash_suffix}"
         
-        # Log this decomposition step with branch and git info
-        log_manager.log_goal_decomposition(
-            depth=depth,
-            parent_goal=context.goal.description,
-            subgoal=subgoal.next_step,
-            branch_name=context.state.branch_name if hasattr(context.state, 'branch_name') else None,
-            git_hash=context.state.git_hash
-        )
+        # Prepare the goal content
+        goal_content = {
+            "description": context.goal.description,
+            "next_step": context.goal.description,  # For top-level goals, these are the same
+            "validation_criteria": context.goal.validation_criteria,
+            "reasoning": "Top-level goal created for lineage tracking",
+            "requires_further_decomposition": True,  # Top-level goals always need decomposition
+            "relevant_context": {},
+            "parent_goal": "",  # Empty for top-level goals
+            "goal_id": goal_id,
+            "timestamp": timestamp,
+            "iteration": context.iteration
+        }
         
-        # If subgoal doesn't need further decomposition, return it
-        if not subgoal.requires_further_decomposition:
-            log_manager.log_execution_ready(
-                depth=depth + 1,
-                task=subgoal.next_step,
-                branch_name=context.state.branch_name if hasattr(context.state, 'branch_name') else None,
-                git_hash=context.state.git_hash
-            )
-            return [subgoal]
+        # Ensure logs directory exists
+        logs_dir = "logs"
+        os.makedirs(logs_dir, exist_ok=True)
         
-        # Create a new context with this subgoal as the goal
-        new_context = TaskContext(
-            state=context.state,
-            goal=Goal(
-                description=subgoal.next_step,
-                validation_criteria=subgoal.validation_criteria,
-                success_threshold=context.goal.success_threshold
-            ),
-            iteration=0,  # Reset for the new subgoal
-            execution_history=context.execution_history,
-            metadata={
-                **(context.metadata if hasattr(context, 'metadata') else {}),
-                "parent_goal": context.goal.description,
-                "parent_context": subgoal.relevant_context
-            }
-        )
-        
-        # Recursively decompose and collect all resulting subgoals
-        sub_subgoals = await self.decompose_recursively(new_context)
-        
-        # Return the current subgoal and all its sub-subgoals
-        return [subgoal] + sub_subgoals
-    
-    def _get_decomposition_depth(self, context: TaskContext) -> int:
-        """Determine the current decomposition depth from context metadata."""
-        # If there's no metadata or no parent_goal, we're at the root (depth 0)
-        if not hasattr(context, 'metadata') or not context.metadata:
-            return 0
+        # Write the goal file
+        output_file = os.path.join(logs_dir, filename)
+        with open(output_file, 'w') as f:
+            json.dump(goal_content, f, indent=2)
             
-        # Count the number of parent_goal references in metadata
-        depth = 0
-        current_metadata = context.metadata
-        while current_metadata and 'parent_goal' in current_metadata:
-            depth += 1
-            current_metadata = current_metadata.get('parent_context', {})
-            
-        return depth
-
-    async def _run_with_tools(self, messages, max_attempts=3):
-        """Run the conversation with tool support."""
-        for attempt in range(max_attempts):
-            try:
-                self.logger.debug(f"Calling LLM with tools (attempt {attempt+1})")
-                final_message, tool_usage = await self.tool_processor.run_llm_with_tools(
-                    messages=messages,
-                    model=self.model,
-                    temperature=0.5,
-                    max_tokens=4000,
-                    validate_json_format=True
-                )
-                
-                # Log tool usage
-                for tool in tool_usage:
-                    self.logger.debug(f"Used tool: {tool['tool']} with args: {tool['args']}")
-                
-                return final_message, tool_usage
-                
-            except Exception as e:
-                self.logger.error(f"Error in LLM call (attempt {attempt+1}): {str(e)}")
-                if attempt == max_attempts - 1:
-                    raise
+        logging.info(f"💾 Created top-level goal file: {output_file}")
+        
+        return filename
 
 async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
     """Validate that the repository is in a good state for goal decomposition."""
@@ -1092,24 +1045,22 @@ def list_subgoal_files(logs_dir="logs"):
     """List available subgoal JSON files in the logs directory.
     
     Args:
-        logs_dir: Directory containing log files (default: "logs")
+        logs_dir: Path to the logs directory containing subgoal files
         
     Returns:
-        A list of tuples containing (file_path, timestamp, next_step)
+        List of tuples (file_path, timestamp, next_step, parent_goal) sorted by timestamp (newest first)
     """
-    if not os.path.isdir(logs_dir):
-        logging.warning(f"Logs directory {logs_dir} does not exist")
-        return []
-        
-    # Find all subgoal JSON files
     subgoal_files = []
+    
+    # Ensure logs directory exists
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Find all subgoal JSON files
     for file in os.listdir(logs_dir):
-        if file.startswith("subgoal_") and file.endswith(".json"):
-            file_path = os.path.join(logs_dir, file)
+        file_path = os.path.join(logs_dir, file)
+        
+        if (file.startswith("subgoal_") or file.startswith("task_")) and file.endswith(".json"):
             try:
-                with open(file_path, 'r') as f:
-                    data = json.load(f)
-                    
                 # Extract timestamp from filename (format: subgoal_TIMESTAMP_HASH.json)
                 parts = file.split('_')
                 if len(parts) >= 3:
@@ -1121,14 +1072,21 @@ def list_subgoal_files(logs_dir="logs"):
                         formatted_time = "Unknown time"
                 else:
                     formatted_time = "Unknown time"
-                    
-                next_step = data.get("next_step", "Unknown")
-                subgoal_files.append((file_path, formatted_time, next_step))
+                
+                # Read file to extract next step and parent goal
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                    next_step = data.get("next_step", "Unknown")
+                    parent_goal = data.get("parent_goal", "")
+                
+                # Add to list
+                subgoal_files.append((file_path, formatted_time, next_step, parent_goal))
             except Exception as e:
                 logging.debug(f"Error reading subgoal file {file}: {str(e)}")
-                
+    
     # Sort by timestamp (newest first)
-    subgoal_files.sort(key=lambda x: x[1], reverse=True)
+    subgoal_files.sort(key=lambda x: os.path.getmtime(x[0]), reverse=True)
+    
     return subgoal_files
 
 async def main():
@@ -1160,7 +1118,7 @@ async def main():
             
         logging.info("\nAvailable Subgoal Files:")
         logging.info("========================")
-        for i, (file_path, timestamp, next_step) in enumerate(subgoal_files, 1):
+        for i, (file_path, timestamp, next_step, parent_goal) in enumerate(subgoal_files, 1):
             # Check if the file is a subgoal that requires further decomposition
             try:
                 with open(file_path, 'r') as f:
@@ -1176,6 +1134,7 @@ async def main():
             logging.info(f"{i}. {os.path.basename(file_path)}")
             logging.info(f"   Time: {timestamp}")
             logging.info(f"   {emoji} {step_type}: {next_step}")
+            logging.info(f"   Parent Goal: {parent_goal}")
             logging.info("")
         return
 
@@ -1231,6 +1190,18 @@ async def main():
             # Only log this information, don't print to stdout
             logging.info(f"Added relevant context from input file: {relevant_context}")
             
+            # Extract goal_id if available
+            goal_id = input_data.get("goal_id", "")
+            
+            # Extract parent_goal if available
+            parent_goal = input_data.get("parent_goal", "")
+            
+            # Extract timestamp if available
+            timestamp = input_data.get("timestamp", "")
+            
+            # Extract iteration if available
+            iteration = input_data.get("iteration", 0)
+            
             # Extract memory state information if available in the input data
             if "memory_hash" in input_data:
                 state_memory_hash = input_data["memory_hash"]
@@ -1257,6 +1228,10 @@ async def main():
         goal_description = args.goal_description
         validation_criteria = []
         relevant_context = {}
+        goal_id = ""
+        parent_goal = ""
+        timestamp = ""
+        iteration = args.iteration
 
     try:
         logging.info("🚀 Starting GoalDecomposer")
@@ -1269,15 +1244,22 @@ async def main():
             memory_hash=args.memory_hash
         )
         goal = Goal(description=goal_description, validation_criteria=validation_criteria)
-        context = TaskContext(state=state, goal=goal, iteration=args.iteration, execution_history=[])
+        context = TaskContext(state=state, goal=goal, iteration=iteration, execution_history=[])
         
         # Add relevant context to metadata if loaded from input file
-        if args.input_file and relevant_context:
+        if args.input_file and (relevant_context or parent_goal):
             if not hasattr(context, "metadata"):
                 context.metadata = {}
-            context.metadata["parent_context"] = relevant_context
-            # Only log this information, don't print to stdout
-            logging.info(f"Added relevant context from input file: {relevant_context}")
+            if relevant_context:
+                context.metadata["parent_context"] = relevant_context
+                # Only log this information, don't print to stdout
+                logging.info(f"Added relevant context from input file: {relevant_context}")
+            if parent_goal:
+                context.metadata["parent_goal_file"] = parent_goal
+                logging.info(f"Added parent goal from input file: {parent_goal}")
+            if goal_id:
+                context.metadata["goal_id"] = goal_id
+                logging.info(f"Added goal ID from input file: {goal_id}")
 
         # Validate repository state and get current hash
         current_hash = await get_current_hash(args.repo_path)
@@ -1419,18 +1401,6 @@ async def main():
                 logging.warning(f"Failed to get final memory hash: {str(e)}")
         
         # Create the output data
-        output_data = {
-            "next_step": next_step.next_step,
-            "validation_criteria": next_step.validation_criteria,
-            "reasoning": next_step.reasoning,
-            "requires_further_decomposition": next_step.requires_further_decomposition,
-            "relevant_context": next_step.relevant_context,
-            "memory_hash": final_memory_hash or state.memory_hash,  # Use final hash if available
-            "memory_repository_path": state.memory_repository_path,
-            "metadata": next_step.metadata
-        }
-        
-        # Save the output as a JSON file
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         hash_suffix = os.urandom(3).hex()
         
@@ -1439,10 +1409,43 @@ async def main():
         status_emoji = "🔄" if next_step.requires_further_decomposition else "✅"
         step_type = "Next subgoal" if next_step.requires_further_decomposition else "Next task"
         
-        output_file = os.path.join("logs", f"{file_prefix}_{timestamp}_{hash_suffix}.json")
+        # Create a unique file name and goal_id
+        output_filename = f"{file_prefix}_{timestamp}_{hash_suffix}.json"
+        goal_id = f"{file_prefix}_{timestamp}_{hash_suffix}"
+        
+        # Determine parent goal from context or input file
+        parent_goal = ""
+        if args.input_file:
+            parent_goal = os.path.basename(args.input_file)
+        elif hasattr(context, 'metadata') and context.metadata and 'parent_goal_file' in context.metadata:
+            parent_goal = context.metadata['parent_goal_file']
+        
+        # Set the goal_id and parent_goal in the SubgoalPlan
+        next_step.goal_id = goal_id
+        next_step.parent_goal = parent_goal
+        next_step.timestamp = timestamp
+        next_step.iteration = context.iteration
+        
+        output_file = os.path.join("logs", output_filename)
         
         # Ensure logs directory exists
         os.makedirs("logs", exist_ok=True)
+        
+        # Create the output data structure
+        output_data = {
+            "next_step": next_step.next_step,
+            "validation_criteria": next_step.validation_criteria,
+            "reasoning": next_step.reasoning,
+            "requires_further_decomposition": next_step.requires_further_decomposition,
+            "relevant_context": next_step.relevant_context,
+            "memory_hash": final_memory_hash or state.memory_hash,  # Use final hash if available
+            "memory_repository_path": state.memory_repository_path,
+            "parent_goal": next_step.parent_goal,  # Add parent goal reference
+            "goal_id": next_step.goal_id,          # Add goal ID
+            "timestamp": next_step.timestamp,      # Add timestamp
+            "iteration": next_step.iteration,      # Add iteration
+            "metadata": next_step.metadata
+        }
         
         # Write the output to the file
         with open(output_file, 'w') as f:
@@ -1493,7 +1496,6 @@ async def main():
                 logging.info(f"Subgoal appended to chain: {args.append_to}")
                 logging.info(f"Chain now has {len(chain_data['steps'])} steps")
             except Exception as e:
-                logging.error(f"Error appending to chain file: {str(e)}")
                 logging.error(f"Error appending to chain file: {str(e)}")
         
         # Log all detailed information but don't print to stdout

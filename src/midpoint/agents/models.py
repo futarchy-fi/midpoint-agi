@@ -33,6 +33,10 @@ class SubgoalPlan:
     requires_further_decomposition: bool = True  # Flag to indicate if more decomposition is needed
     relevant_context: Dict[str, Any] = field(default_factory=dict)  # Context to pass to child goals
     metadata: Dict[str, Any] = field(default_factory=dict)
+    parent_goal: Optional[str] = None  # Reference to the parent goal file
+    goal_id: Optional[str] = None  # Unique identifier for this goal
+    timestamp: Optional[str] = None  # When this goal was created
+    iteration: int = 0  # Current iteration in the overall process
 
 @dataclass
 class MemoryState:
