@@ -45,11 +45,18 @@ def init_memory_repo(repo_path, remote_url=None, branch=None):
         subprocess.run(["git", "init"], cwd=repo_path, check=True)
     
     # Create basic structure
-    for directory in ["documents", "metadata"]:
+    for directory in ["documents", "metadata", "general_memory"]:
         dir_path = repo_path / directory
         if not dir_path.exists():
             print(f"Creating directory {dir_path}")
-            dir_path.mkdir(exist_ok=True)
+            dir_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create README.md in general_memory directory
+    readme_path = repo_path / "general_memory" / "README.md"
+    if not readme_path.exists():
+        print(f"Creating README.md in general_memory directory")
+        with open(readme_path, "w") as f:
+            f.write("# General Memory\n\nThis directory contains general memory documents that are not specific to any particular category.\n")
     
     # Create cross-reference file if it doesn't exist
     cross_ref_path = repo_path / "metadata" / "cross-reference.json"
