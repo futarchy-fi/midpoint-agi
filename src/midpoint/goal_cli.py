@@ -921,7 +921,7 @@ def show_goal_status():
                     status = "✅"  # Completed task
                 else:
                     if not state_compatible:
-                        status = "🔶"  # State-incompatible task
+                        status = "🔺"  # Branch task
                     else:
                         status = "🔷"  # Directly executable task
             else:
@@ -946,7 +946,7 @@ def show_goal_status():
                                 status = "✅"  # Completed task
                             else:
                                 if not state_compatible:
-                                    status = "🔶"  # State-incompatible task
+                                    status = "🔺"  # Branch task
                                 else:
                                     status = "🔷"  # Directly executable task
                         else:
@@ -957,19 +957,19 @@ def show_goal_status():
                     status = "⚪"  # All subgoals complete but needs explicit completion
                 elif has_completed_tasks:
                     if not state_compatible:
-                        status = "🟣"  # Partially completed but state-incompatible
+                        status = "🔸"  # Branch subgoal
                     else:
                         status = "🟡"  # Partially completed (has some completed tasks)
                 else:
                     if not state_compatible:
-                        status = "🟤"  # Incompatible with parent state
+                        status = "🔸"  # Branch subgoal
                     else:
                         status = "⚪"  # Some subgoals incomplete
         
         # Show task count instead of progress percentage
         progress_text = ""
         if "completed_task_count" in goal and "total_task_count" in goal and not goal.get("complete", False):
-            progress_text = f" [{goal['completed_task_count']}/{goal['total_task_count']} tasks]"
+            progress_text = f" ({goal['completed_task_count']} completed tasks)"
         
         print(f"{indent}{status} {goal_id}{progress_text}: {goal['description']}")
         
@@ -1021,9 +1021,8 @@ def show_goal_status():
     print("⚪ Incomplete (no tasks completed)")
     print("🔷 Directly executable task")
     print("🔘 Not yet decomposed")
-    print("🔶 Task with state mismatch")
-    print("🟣 Partially completed with state mismatch")
-    print("🟤 Incompatible with parent state")
+    print("🔺 Branch task")
+    print("🔸 Branch subgoal")
 
 
 def show_goal_tree():
@@ -1056,26 +1055,57 @@ def show_goal_tree():
             
         goal = goal_files[goal_id]
         
+        # Check for state compatibility with parent
+        state_compatible = True
+        parent_id = goal.get("parent_goal", "")
+        if parent_id in goal_files:
+            parent = goal_files[parent_id]
+            
+            # Check if this goal or task has an initial_state
+            if "initial_state" in goal and "current_state" in parent:
+                # Compare initial git hash with parent's current git hash
+                goal_initial_hash = goal.get("initial_state", {}).get("git_hash", "")
+                parent_current_hash = parent.get("current_state", {}).get("git_hash", "")
+                
+                if goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash:
+                    state_compatible = False
+        
         # Determine status symbol
         if goal.get("complete", False):
             status = "✅"
         else:
-            # Check if all subgoals are complete
-            # Use case-insensitive comparison
-            subgoals = {k: v for k, v in goal_files.items() 
-                       if v.get("parent_goal", "").upper() == goal_id.upper() or 
-                          v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
-            
-            if not subgoals:
-                # Check if goal is a task or directly executable
-                if goal.get("is_task", False) or goal.get("requires_further_decomposition") is False:
-                    status = "🔷"  # Task/directly executable
+            # Special handling for tasks
+            if goal.get("is_task", False):
+                if "execution_result" in goal and goal["execution_result"].get("success"):
+                    status = "✅"  # Completed task
                 else:
-                    status = "🔘"  # No subgoals (not yet decomposed)
-            elif all(sg.get("complete", False) for sg in subgoals.values()):
-                status = "🟠"  # All subgoals complete but not merged
+                    if not state_compatible:
+                        status = "🔺"  # Branch task
+                    else:
+                        status = "🔷"  # Directly executable task
             else:
-                status = "⚪"  # Some subgoals incomplete
+                # Check if all subgoals are complete
+                # Use case-insensitive comparison
+                subgoals = {k: v for k, v in goal_files.items() 
+                           if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                              v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
+                
+                if not subgoals:
+                    # Check if goal is a task or directly executable
+                    if goal.get("is_task", False) or goal.get("requires_further_decomposition") is False:
+                        if not state_compatible:
+                            status = "🔺"  # Branch task
+                        else:
+                            status = "🔷"  # Directly executable task
+                    else:
+                        status = "🔘"  # No subgoals (not yet decomposed)
+                elif all(sg.get("complete", False) for sg in subgoals.values()):
+                    status = "⚪"  # All subgoals complete but needs explicit completion
+                else:
+                    if not state_compatible:
+                        status = "🔸"  # Branch subgoal
+                    else:
+                        status = "⚪"  # Some subgoals incomplete
         
         # Determine branch characters
         branch = "└── " if is_last else "├── "
@@ -1109,10 +1139,12 @@ def show_goal_tree():
     # Print legend
     print("\nStatus Legend:")
     print("✅ Complete")
-    print("🟠 All subgoals complete (ready to merge)")
-    print("⚪ Incomplete (some subgoals pending)")
+    print("🟡 Partially completed")
+    print("⚪ Incomplete")
     print("🔷 Directly executable task")
     print("🔘 Not yet decomposed")
+    print("🔺 Branch task")
+    print("🔸 Branch subgoal")
 
 
 def show_goal_history():
