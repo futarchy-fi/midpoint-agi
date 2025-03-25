@@ -384,7 +384,14 @@ class GoalDecomposer:
             )
             # Log more detailed information about the memory result
             logging.info(f"Saved {interaction_type} to memory: {result}")
-            logging.info(f"Memory details - path: {result.get('path')}, hash: {result.get('memory_hash')}, category: {result.get('category')}, filename: {result.get('filename')}")
+            
+            # Handle the nested document_path structure if present
+            doc_path_info = result.get("document_path", {})
+            if isinstance(doc_path_info, dict):
+                logging.info(f"Memory details from document_path - path: {doc_path_info.get('path')}, hash: {doc_path_info.get('memory_hash')}, category: {doc_path_info.get('category')}, filename: {doc_path_info.get('filename')}")
+            else:
+                logging.info(f"Memory details (direct) - path: {result.get('path')}, hash: {result.get('memory_hash')}, category: {result.get('category')}, filename: {result.get('filename')}")
+            
             return result
         except Exception as e:
             logging.error(f"Failed to save {interaction_type} to memory: {str(e)}")
@@ -613,13 +620,27 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 )
                 
                 # Update context state with memory information if available
-                if memory_result and "path" in memory_result:
+                if memory_result and memory_result.get("success"):
                     logging.info(f"Saved conversation to memory: {memory_result}")
-                    # Update memory hash and path in the context state
-                    if "memory_hash" in memory_result:
-                        context.state.memory_hash = memory_result.get("memory_hash")
-                    # Store document path
-                    context.state.memory_document_path = memory_result.get("path")
+                    
+                    # Handle the case where document_path is a dictionary
+                    doc_path_info = memory_result.get("document_path", {})
+                    if isinstance(doc_path_info, dict):
+                        # Update memory hash from the document_path dictionary
+                        if "memory_hash" in doc_path_info:
+                            context.state.memory_hash = doc_path_info.get("memory_hash")
+                        # Store document path from the document_path dictionary
+                        if "path" in doc_path_info:
+                            context.state.memory_document_path = doc_path_info.get("path")
+                    # Handle the case where the fields are directly in memory_result
+                    else:
+                        # Update memory hash if available at top level
+                        if "memory_hash" in memory_result:
+                            context.state.memory_hash = memory_result.get("memory_hash")
+                        # Store document path if available at top level
+                        if "path" in memory_result:
+                            context.state.memory_document_path = memory_result.get("path")
+                    
                     # Set memory timestamp
                     context.state.memory_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             except Exception as e:
