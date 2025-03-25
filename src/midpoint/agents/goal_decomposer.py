@@ -1238,6 +1238,19 @@ async def decompose_goal(
     initial_memory_hash = context.state.memory_hash
     initial_git_hash = context.state.git_hash
     
+    # If we have a parent goal, ensure we inherit its memory hash
+    if parent_goal and not initial_memory_hash:
+        try:
+            parent_goal_file = Path(repo_path) / ".goal" / f"{parent_goal}.json"
+            if parent_goal_file.exists():
+                with open(parent_goal_file, 'r') as f:
+                    parent_content = json.load(f)
+                    if "current_state" in parent_content and "memory_hash" in parent_content["current_state"]:
+                        context.state.memory_hash = parent_content["current_state"]["memory_hash"]
+                        logging.info(f"Inherited memory hash {context.state.memory_hash} from parent goal {parent_goal}")
+        except Exception as e:
+            logging.warning(f"Failed to inherit memory hash from parent goal: {e}")
+    
     # Validate repository state
     if not bypass_validation:
         try:
