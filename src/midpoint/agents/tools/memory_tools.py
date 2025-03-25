@@ -44,8 +44,11 @@ except ImportError:
         docs_dir = repo_path / "documents" / category
         docs_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create a simple filename
-        filename = f"doc_{int(time.time())}.md"
+        # Create a simple filename (check if metadata has a custom_filename)
+        if metadata and 'custom_filename' in metadata:
+            filename = metadata['custom_filename']
+        else:
+            filename = f"doc_{int(time.time())}.md"
         doc_path = docs_dir / filename
         
         # Write content

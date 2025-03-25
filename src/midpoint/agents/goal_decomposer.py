@@ -299,11 +299,20 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     return log_file
 
 class GoalDecomposer:
-    """Agent responsible for determining the next step toward a complex goal."""
+    """
+    Goal decomposition agent implementation.
+    
+    This agent is responsible for determining the next step toward achieving a complex goal.
+    """
     
     def __init__(self, model: str = "gpt-4", max_history_entries: int = 5):
-        """Initialize the GoalDecomposer."""
+        """
+        Initialize the goal decomposer.
         
+        Args:
+            model: The model to use for generation
+            max_history_entries: Maximum number of history entries to consider
+        """
         self.logger = logging.getLogger('GoalDecomposer')
         self.model = model
         self.max_history_entries = max_history_entries
@@ -325,6 +334,59 @@ class GoalDecomposer:
         
         # Generate system prompt with dynamic tool descriptions
         self.system_prompt = self._generate_system_prompt()
+        
+    async def _save_interaction_to_memory(self, 
+                                        interaction_type: str, 
+                                        content: str, 
+                                        metadata: Dict[str, Any] = None, 
+                                        memory_repo_path: str = None) -> Dict[str, Any]:
+        """
+        Save an interaction to the memory system.
+        
+        Args:
+            interaction_type: Type of interaction (e.g., 'conversation', 'reasoning', 'tool_use', 'final_output')
+            content: Content of the interaction
+            metadata: Additional metadata about the interaction
+            memory_repo_path: Path to the memory repository (optional)
+            
+        Returns:
+            Result of the memory storage operation
+        """
+        # Create a timestamped filename
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save directly to general_memory folder without creating subfolders
+        category = "../general_memory"
+        
+        # Create metadata if not provided
+        if metadata is None:
+            metadata = {}
+        
+        # Add timestamp and interaction type to metadata
+        metadata["timestamp"] = timestamp
+        metadata["interaction_type"] = interaction_type
+        metadata["agent_type"] = "goal_decomposer"
+        
+        # Create a custom filename with format: TIMESTAMP_goal_decomposer_TYPE.md
+        filename = f"{timestamp}_goal_decomposer_{interaction_type}.md"
+        
+        # Set the id field in metadata (used by store_document to create the filename)
+        metadata["id"] = f"{timestamp}_goal_decomposer_{interaction_type}"
+        
+        # Store the document
+        try:
+            result = await store_memory_document(
+                content=content,
+                category=category,
+                metadata=metadata,
+                memory_repo_path=memory_repo_path
+            )
+            logging.info(f"Saved {interaction_type} to memory: {result.get('document_path', 'unknown path')}")
+            return result
+        except Exception as e:
+            logging.error(f"Failed to save {interaction_type} to memory: {str(e)}")
+            return {"success": False, "error": str(e)}
 
     def _generate_system_prompt(self) -> str:
         """
@@ -423,6 +485,9 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         # Prepare the user prompt
         user_prompt = self._create_user_prompt(context)
         
+        # Get memory repository path if available
+        memory_repo_path = context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None
+        
         # Initialize messages
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -489,6 +554,19 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             try:
                 serialized_messages = self._serialize_messages(messages)
                 logging.debug("API call history: %s", json.dumps(serialized_messages, indent=2))
+                
+                # Save only the complete conversation to memory
+                await self._save_interaction_to_memory(
+                    interaction_type="conversation",
+                    content=json.dumps(serialized_messages, indent=2),
+                    metadata={
+                        "goal": context.goal.description, 
+                        "message_count": len(serialized_messages),
+                        "next_step": final_output.next_step,
+                        "requires_further_decomposition": final_output.requires_further_decomposition
+                    },
+                    memory_repo_path=memory_repo_path
+                )
             except Exception as e:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
 
@@ -517,6 +595,13 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             return final_output
             
         except Exception as e:
+            # Log the error to memory
+            await self._save_interaction_to_memory(
+                interaction_type="error",
+                content=f"Error in determine_next_step: {str(e)}\n\n{traceback.format_exc()}",
+                metadata={"error_type": type(e).__name__, "goal": context.goal.description},
+                memory_repo_path=memory_repo_path
+            )
             # Let the main function handle the specific error types
             raise
     
