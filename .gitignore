@@ -52,6 +52,7 @@ coverage.xml
 debug/test-repo/
 debug/__pycache__/
 logs/
+.goal/
 
 # Local config file with API keys
 config.json
