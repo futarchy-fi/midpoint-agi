@@ -913,7 +913,42 @@ async def decompose_goal(
     
     # Create goal file in the specified goals directory or logs directory if goals_dir not specified
     target_dir = goals_dir if goals_dir is not None else logs_dir
-    goal_file = decomposer.create_top_goal_file(context, logs_dir=target_dir)
+    
+    # If we have a parent_goal, create a subgoal file instead of overwriting the parent
+    if parent_goal:
+        # Generate subgoal ID based on parent_goal
+        subgoal_id = decomposer.generate_goal_id(parent_goal, logs_dir=target_dir)
+        
+        # Build the subgoal file data
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        subgoal_content = {
+            "description": subgoal_plan.next_step,
+            "next_step": subgoal_plan.next_step,
+            "validation_criteria": subgoal_plan.validation_criteria,
+            "reasoning": subgoal_plan.reasoning,
+            "requires_further_decomposition": subgoal_plan.requires_further_decomposition,
+            "relevant_context": subgoal_plan.relevant_context,
+            "parent_goal": parent_goal,
+            "goal_id": subgoal_id,
+            "timestamp": timestamp,
+            "iteration": context.iteration
+        }
+        
+        # Ensure directory exists
+        Path(target_dir).mkdir(exist_ok=True)
+        
+        # Write the subgoal file
+        subgoal_file = f"{subgoal_id}.json"
+        output_file = Path(target_dir) / subgoal_file
+        with open(output_file, 'w') as f:
+            json.dump(subgoal_content, f, indent=2)
+            
+        logging.info(f"💾 Created subgoal file: {output_file}")
+        goal_file = subgoal_file
+    else:
+        # For top-level goals, use the existing method
+        goal_file = decomposer.create_top_goal_file(context, logs_dir=target_dir)
+    
     logging.info(f"Created goal file: {goal_file} in {target_dir}")
     
     # Return result
