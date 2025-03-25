@@ -41,8 +41,16 @@ goal = "midpoint.goal_cli:main"
 testpaths = ["tests"]
 python_files = "test_*.py"
 addopts = "-v"
-# Register our custom plugin for environment checks
-confcutdir = "src/midpoint/testing"
+# Register path to our custom testing plugin
+pythonpath = ["src"]
+# Set the default fixture loop scope for asyncio
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+# Filter warnings
+filterwarnings = [
+    "ignore::urllib3.exceptions.NotOpenSSLWarning",
+    "ignore::DeprecationWarning"
+]
 
 [tool.black]
 line-length = 88

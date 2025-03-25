@@ -6,15 +6,15 @@ run:
 
 # Run tests
 test:
-	python -m pytest tests/ -v
+	PYTHONWARNINGS=ignore python -m pytest tests/ -v
 
 # Run memory-specific tests
 test-memory:
-	python -m pytest tests/test_memory_*.py -v
+	PYTHONWARNINGS=ignore python -m pytest tests/test_memory_*.py -v
 
 # Run critical tests (tests run in pre-commit hook)
 test-critical:
-	python -m pytest tests/test_memory_*.py tests/test_filesystem_tools.py tests/test_specific_bugs.py tests/test_goal_decomposer_tools.py tests/test_tools_wrapper.py -v
+	PYTHONWARNINGS=ignore python -m pytest tests/test_memory_*.py tests/test_filesystem_tools.py tests/test_specific_bugs.py tests/test_goal_decomposer_tools.py tests/test_tools_wrapper.py -v
 
 # Install git hooks
 install-hooks:

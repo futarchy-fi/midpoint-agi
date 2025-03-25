@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 # Run memory tests first
 echo -e "${YELLOW}Running memory tests...${NC}"
-python -m pytest tests/test_memory_*.py -v
+PYTHONWARNINGS=ignore python -m pytest tests/test_memory_*.py -v
 
 # Check if memory tests passed
 if [ $? -ne 0 ]; then
@@ -19,7 +19,7 @@ fi
 
 # Run filesystem tools tests
 echo -e "${YELLOW}Running filesystem tools tests...${NC}"
-python -m pytest tests/test_filesystem_tools.py -v
+PYTHONWARNINGS=ignore python -m pytest tests/test_filesystem_tools.py -v
 
 # Check if filesystem tools tests passed
 if [ $? -ne 0 ]; then
@@ -29,7 +29,7 @@ fi
 
 # Run specific bugs tests
 echo -e "${YELLOW}Running specific bugs tests...${NC}"
-python -m pytest tests/test_specific_bugs.py -v
+PYTHONWARNINGS=ignore python -m pytest tests/test_specific_bugs.py -v
 
 # Check if specific bugs tests passed
 if [ $? -ne 0 ]; then
@@ -39,7 +39,7 @@ fi
 
 # Run goal decomposer tools tests
 echo -e "${YELLOW}Running goal decomposer tools tests...${NC}"
-python -m pytest tests/test_goal_decomposer_tools.py -v
+PYTHONWARNINGS=ignore python -m pytest tests/test_goal_decomposer_tools.py -v
 
 # Check if goal decomposer tools tests passed
 if [ $? -ne 0 ]; then
@@ -49,7 +49,7 @@ fi
 
 # Run tools wrapper tests
 echo -e "${YELLOW}Running tools wrapper tests...${NC}"
-python -m pytest tests/test_tools_wrapper.py -v
+PYTHONWARNINGS=ignore python -m pytest tests/test_tools_wrapper.py -v
 
 # Check if tools wrapper tests passed
 if [ $? -ne 0 ]; then

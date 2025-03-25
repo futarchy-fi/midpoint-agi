@@ -143,7 +143,8 @@ def setup_memory_repository():
 def cleanup_test_fixtures():
     """Clean up all test fixtures."""
     try:
-        shutil.rmtree(TEST_FIXTURES_ROOT)
+        if os.path.exists(TEST_FIXTURES_ROOT):
+            shutil.rmtree(TEST_FIXTURES_ROOT)
     except Exception as e:
         print(f"Warning: Failed to clean up test fixtures: {e}")
 
