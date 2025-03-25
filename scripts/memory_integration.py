@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import argparse
 import logging
 from typing import Optional, Dict, Any
+import subprocess
 
 # Add the parent directory to the Python path
 repo_root = Path(__file__).parent.parent
@@ -134,6 +135,23 @@ def store_agent_memory(
     # Get the code hash from the agent's state
     code_hash = agent.state.git_hash
     
+    # Get the memory repository path
+    repo_path = memory_repo_path or get_repo_path()
+    
+    # Check for untracked files
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    if result.stdout:
+        untracked_files = [line[3:] for line in result.stdout.splitlines() if line.startswith("??")]
+        if untracked_files:
+            error_msg = f"Cannot store agent memory: Found untracked files in memory repository:\n{chr(10).join(untracked_files)}\nPlease commit or remove these files before proceeding."
+            raise RuntimeError(error_msg)
+    
     # Create metadata if not provided
     if metadata is None:
         metadata = {}
@@ -146,9 +164,6 @@ def store_agent_memory(
     metadata["code_hash"] = code_hash
     if "commit_message" not in metadata:
         metadata["commit_message"] = f"Add {category} document"
-    
-    # Get the memory repository path
-    repo_path = memory_repo_path or get_repo_path()
     
     # Store the document
     result = store_document(

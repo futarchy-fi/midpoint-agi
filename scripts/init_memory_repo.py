@@ -26,6 +26,19 @@ def init_memory_repo(repo_path, remote_url=None, branch=None):
     git_dir = repo_path / ".git"
     if git_dir.exists():
         print(f"Repository already exists at {repo_path}")
+        # Check for untracked files
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        if result.stdout:
+            untracked_files = [line[3:] for line in result.stdout.splitlines() if line.startswith("??")]
+            if untracked_files:
+                error_msg = f"Cannot proceed: Found untracked files in memory repository:\n{chr(10).join(untracked_files)}\nPlease commit or remove these files before proceeding."
+                raise RuntimeError(error_msg)
     else:
         # Initialize git repository
         print(f"Initializing git repository at {repo_path}")

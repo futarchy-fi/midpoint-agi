@@ -148,12 +148,32 @@ def create_goal_file(goal_id, description, parent_id=None):
         except Exception as e:
             logging.warning(f"Failed to initialize memory repository: {e}")
     
+    # Check for untracked files in memory repository
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        if result.stdout.strip():
+            # Check specifically for untracked files (lines starting with ??)
+            has_untracked = any(line.startswith("??") for line in result.stdout.splitlines())
+            if has_untracked:
+                error_msg = "Memory repository has untracked files. Please commit or remove them before creating a new goal."
+                logging.error(error_msg)
+                raise RuntimeError(error_msg)
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Failed to check memory repository status: {e}"
+        logging.error(error_msg)
+        raise RuntimeError(error_msg)
+    
     # Get the initial commit hash (this will be the base memory state)
     memory_hash = None
     try:
         # Find the first commit in the memory repository
         # This ensures we always use the same initial hash regardless of current state
-        import subprocess
         result = subprocess.run(
             ["git", "rev-list", "--max-parents=0", "HEAD"],
             cwd=memory_repo_path,

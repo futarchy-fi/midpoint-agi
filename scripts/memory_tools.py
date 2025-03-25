@@ -57,6 +57,20 @@ def store_document(content, category, metadata=None, repo_path=None, memory_hash
     if not target_hash:
         raise ValueError("Memory hash is required - either as parameter or in metadata['memory_hash']")
     
+    # Check for untracked files
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    if result.stdout:
+        untracked_files = [line[3:] for line in result.stdout.splitlines() if line.startswith("??")]
+        if untracked_files:
+            error_msg = f"Cannot store document: Found untracked files in memory repository:\n{chr(10).join(untracked_files)}\nPlease commit or remove these files before proceeding."
+            raise RuntimeError(error_msg)
+    
     # Create a filename based on metadata
     filename = f"{metadata.get('id', 'doc')}_{int(time.time())}.md"
     doc_path = repo_path / "documents" / category / filename
@@ -306,9 +320,23 @@ def update_cross_reference(code_hash, memory_hash, repo_path=None, base_memory_h
     if not base_memory_hash:
         base_memory_hash = memory_hash  # Default to the memory hash we're referencing
     
+    # Check for untracked files
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    if result.stdout:
+        untracked_files = [line[3:] for line in result.stdout.splitlines() if line.startswith("??")]
+        if untracked_files:
+            error_msg = f"Cannot update cross-reference: Found untracked files in memory repository:\n{chr(10).join(untracked_files)}\nPlease commit or remove these files before proceeding."
+            raise RuntimeError(error_msg)
+    
     # Keep track of original position to restore later
     original_branch = None
-    
+
     try:
         # Save the current branch or commit we're on
         try:
