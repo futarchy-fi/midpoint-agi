@@ -427,7 +427,6 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         else:
             # This is a subgoal, parent is already set
             parent_goal_filename = context.metadata.get('parent_goal_file', '')
-            logging.info(f"Using parent goal: {parent_goal_filename}")
             
         # Prepare the user prompt
         user_prompt = self._create_user_prompt(context)
