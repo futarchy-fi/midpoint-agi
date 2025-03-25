@@ -8,6 +8,7 @@ import os
 import io
 import sys
 import unittest
+import logging
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 import tempfile
@@ -54,7 +55,8 @@ class TestGoalCliDecompose(unittest.TestCase):
         self.cleanup()
     
     @patch('midpoint.goal_cli.agent_decompose_goal')
-    def test_decompose_existing_goal_success(self, mock_decompose_goal):
+    @async_test
+    async def test_decompose_existing_goal_success(self, mock_decompose_goal):
         """Test the decompose_existing_goal function with a successful result."""
         # Set up the mock
         mock_decompose_goal.return_value = {
@@ -71,8 +73,8 @@ class TestGoalCliDecompose(unittest.TestCase):
         sys.stdout = stdout_buffer
         
         try:
-            # Call the function
-            result = goal_cli.decompose_existing_goal(self.goal_id)
+            # Call the function with await
+            result = await goal_cli.decompose_existing_goal(self.goal_id)
             
             # Check the result
             self.assertTrue(result)
@@ -97,7 +99,9 @@ class TestGoalCliDecompose(unittest.TestCase):
             sys.stdout = orig_stdout
     
     @patch('midpoint.goal_cli.agent_decompose_goal')
-    def test_decompose_existing_goal_failure(self, mock_decompose_goal):
+    @patch('logging.error')
+    @async_test
+    async def test_decompose_existing_goal_failure(self, mock_logging_error, mock_decompose_goal):
         """Test the decompose_existing_goal function with a failed result."""
         # Set up the mock
         mock_decompose_goal.return_value = {
@@ -105,53 +109,27 @@ class TestGoalCliDecompose(unittest.TestCase):
             "error": "Failed to generate subgoals"
         }
         
-        # Capture stdout and stderr
-        orig_stdout = sys.stdout
-        orig_stderr = sys.stderr
-        stdout_buffer = io.StringIO()
-        stderr_buffer = io.StringIO()
-        sys.stdout = stdout_buffer
-        sys.stderr = stderr_buffer
+        # Call the function with await
+        result = await goal_cli.decompose_existing_goal(self.goal_id)
         
-        try:
-            # Call the function
-            result = goal_cli.decompose_existing_goal(self.goal_id)
-            
-            # Check the result
-            self.assertFalse(result)
-            
-            # Check the error output
-            stderr = stderr_buffer.getvalue()
-            self.assertIn("Failed to decompose goal: Failed to generate subgoals", stderr)
-        finally:
-            # Restore stdout and stderr
-            sys.stdout = orig_stdout
-            sys.stderr = orig_stderr
+        # Check the result
+        self.assertFalse(result)
+        
+        # Check that the error was logged with the correct message
+        mock_logging_error.assert_any_call("Failed to decompose goal: Failed to generate subgoals")
     
-    def test_decompose_nonexistent_goal(self):
+    @patch('logging.error')
+    @async_test
+    async def test_decompose_nonexistent_goal(self, mock_logging_error):
         """Test decompose_existing_goal with a nonexistent goal."""
-        # Capture stderr
-        orig_stdout = sys.stdout
-        orig_stderr = sys.stderr
-        stdout_buffer = io.StringIO()
-        stderr_buffer = io.StringIO()
-        sys.stdout = stdout_buffer
-        sys.stderr = stderr_buffer
+        # Call the function with a nonexistent goal and await
+        result = await goal_cli.decompose_existing_goal("NonExistentGoal")
         
-        try:
-            # Call the function with a nonexistent goal
-            result = goal_cli.decompose_existing_goal("NonExistentGoal")
-            
-            # Check the result
-            self.assertFalse(result)
-            
-            # Check the error output
-            stderr = stderr_buffer.getvalue()
-            self.assertIn("Goal NonExistentGoal not found", stderr)
-        finally:
-            # Restore stdout and stderr
-            sys.stdout = orig_stdout
-            sys.stderr = orig_stderr
+        # Check the result
+        self.assertFalse(result)
+        
+        # Check that the error was logged with the correct message
+        mock_logging_error.assert_called_with("Goal NonExistentGoal not found")
 
 
 if __name__ == "__main__":
