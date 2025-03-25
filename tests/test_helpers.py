@@ -16,6 +16,15 @@ def async_test(coroutine_function: Callable[..., Coroutine]) -> Callable:
                 self.assertEqual(result, expected_value)
     """
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coroutine_function(*args, **kwargs))
+        # Always create a new event loop for each test
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            return loop.run_until_complete(coroutine_function(*args, **kwargs))
+        finally:
+            # Clean up properly
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+    
     return wrapper 

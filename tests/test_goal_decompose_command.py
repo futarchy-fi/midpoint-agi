@@ -1,20 +1,23 @@
 """
-Tests for the 'goal decompose' command in goal_cli.py.
+Unit tests for the decompose command, executed from the command line.
 """
 
 import os
-import json
+import sys
 import asyncio
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+import tempfile
+import shutil
 from pathlib import Path
-import sys
+import json
+import io
+from unittest.mock import patch, MagicMock, AsyncMock
 
-# Add the src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from midpoint.agents.goal_decomposer import decompose_goal
+from tests.test_helpers import async_test
 
-# Import for patching purposes only
-import midpoint.agents.goal_decomposer
+# Import the goal decompose command
+from midpoint.goal_cli import decompose_existing_goal
 
 
 # Mock the decompose_goal function directly since we're testing it in isolation
@@ -57,6 +60,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         # Restore current directory
         os.chdir(self.orig_cwd)
     
+    @async_test
     async def test_decompose_existing_goal_success(self, mock_decompose_goal):
         """Test successful goal decomposition."""
         # Create an implementation of decompose_existing_goal that doesn't rely on importing goal_cli
@@ -111,7 +115,6 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         mock_decompose_goal.return_value = mock_result
         
         # Redirect stdout and stderr to capture output
-        import io
         stdout = sys.stdout
         stderr = sys.stderr
         sys.stdout = io.StringIO()
@@ -145,6 +148,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             sys.stdout = stdout
             sys.stderr = stderr
     
+    @async_test
     async def test_decompose_existing_goal_failure(self, mock_decompose_goal):
         """Test failed goal decomposition."""
         # Create an implementation similar to the one above
@@ -173,7 +177,6 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         mock_decompose_goal.return_value = mock_result
         
         # Redirect stdout and stderr
-        import io
         stdout = sys.stdout
         stderr = sys.stderr
         sys.stdout = io.StringIO()
@@ -195,6 +198,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             sys.stdout = stdout
             sys.stderr = stderr
     
+    @async_test
     async def test_decompose_nonexistent_goal(self, mock_decompose_goal):
         """Test decomposing a nonexistent goal."""
         # Create a simplified implementation
@@ -205,7 +209,6 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             return True
         
         # Redirect stdout and stderr
-        import io
         stdout = sys.stdout
         stderr = sys.stderr
         sys.stdout = io.StringIO()
@@ -229,6 +232,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             sys.stdout = stdout
             sys.stderr = stderr
     
+    @async_test
     async def test_decompose_with_exception(self, mock_decompose_goal):
         """Test handling of exceptions during goal decomposition."""
         # Create an implementation similar to the one above
@@ -253,7 +257,6 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         mock_decompose_goal.side_effect = Exception("Test exception")
         
         # Redirect stdout and stderr
-        import io
         stdout = sys.stdout
         stderr = sys.stderr
         sys.stdout = io.StringIO()
@@ -274,60 +277,6 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             # Restore stdout and stderr
             sys.stdout = stdout
             sys.stderr = stderr
-
-
-def run_async_test(coro):
-    """Helper function to run async tests."""
-    return asyncio.run(coro)
-
-
-# Create test cases that run the async tests
-class TestGoalDecomposeCommandSync(unittest.TestCase):
-    """Synchronous wrapper for async tests."""
-    
-    @patch('midpoint.agents.goal_decomposer.decompose_goal')
-    def test_decompose_existing_goal_success(self, mock_decompose_goal):
-        """Run the async test_decompose_existing_goal_success."""
-        test = TestGoalDecomposeCommand()
-        test.setUp()
-        try:
-            test.mock_decompose_goal = mock_decompose_goal
-            run_async_test(test.test_decompose_existing_goal_success(mock_decompose_goal))
-        finally:
-            test.cleanup()
-    
-    @patch('midpoint.agents.goal_decomposer.decompose_goal')
-    def test_decompose_existing_goal_failure(self, mock_decompose_goal):
-        """Run the async test_decompose_existing_goal_failure."""
-        test = TestGoalDecomposeCommand()
-        test.setUp()
-        try:
-            test.mock_decompose_goal = mock_decompose_goal
-            run_async_test(test.test_decompose_existing_goal_failure(mock_decompose_goal))
-        finally:
-            test.cleanup()
-    
-    @patch('midpoint.agents.goal_decomposer.decompose_goal')
-    def test_decompose_nonexistent_goal(self, mock_decompose_goal):
-        """Run the async test_decompose_nonexistent_goal."""
-        test = TestGoalDecomposeCommand()
-        test.setUp()
-        try:
-            test.mock_decompose_goal = mock_decompose_goal
-            run_async_test(test.test_decompose_nonexistent_goal(mock_decompose_goal))
-        finally:
-            test.cleanup()
-    
-    @patch('midpoint.agents.goal_decomposer.decompose_goal')
-    def test_decompose_with_exception(self, mock_decompose_goal):
-        """Run the async test_decompose_with_exception."""
-        test = TestGoalDecomposeCommand()
-        test.setUp()
-        try:
-            test.mock_decompose_goal = mock_decompose_goal
-            run_async_test(test.test_decompose_with_exception(mock_decompose_goal))
-        finally:
-            test.cleanup()
 
 
 if __name__ == "__main__":

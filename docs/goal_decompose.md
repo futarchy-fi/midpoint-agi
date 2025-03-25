@@ -5,7 +5,7 @@ The `goal decompose` command allows you to decompose an existing goal into subgo
 ## Usage
 
 ```bash
-goal decompose <goal-id> [--debug] [--quiet]
+goal decompose <goal-id> [--debug] [--quiet] [--bypass-validation]
 ```
 
 ### Arguments
@@ -16,6 +16,7 @@ goal decompose <goal-id> [--debug] [--quiet]
 
 - `--debug`: Show detailed debug output
 - `--quiet`: Only show warnings and the final result
+- `--bypass-validation`: Skip repository validation (for testing purposes only)
 
 ## Description
 

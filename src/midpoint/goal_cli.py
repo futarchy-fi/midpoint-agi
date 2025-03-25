@@ -1167,8 +1167,56 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         return False
 
 
+async def async_main(args):
+    """Async entry point for CLI commands."""
+    # Handle commands
+    if args.command == "decompose":
+        return await decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
+    
+    # All other commands are synchronous, so just call them directly
+    if args.command == "new":
+        return create_new_goal(args.description)
+    elif args.command == "sub":
+        return create_new_subgoal(args.parent_id, args.description)
+    elif args.command == "list":
+        return list_goals()
+    elif args.command == "back":
+        return go_back_commits(args.steps)
+    elif args.command == "reset":
+        return reset_to_commit(args.commit_id)
+    elif args.command == "checkpoint":
+        return create_checkpoint(args.message)
+    elif args.command == "checkpoints":
+        return list_checkpoints()
+    elif args.command == "up":
+        return go_to_parent_goal()
+    elif args.command == "down":
+        return go_to_subgoal(args.subgoal_id)
+    elif args.command == "root":
+        return go_to_root_goal()
+    elif args.command == "subs":
+        return list_subgoals()
+    elif args.command == "complete":
+        return mark_goal_complete()
+    elif args.command == "merge":
+        return merge_subgoal(args.subgoal_id)
+    elif args.command == "status":
+        return show_goal_status()
+    elif args.command == "tree":
+        return show_goal_tree()
+    elif args.command == "history":
+        return show_goal_history()
+    elif args.command == "graph":
+        return generate_graph()
+    else:
+        return None
+
+
 def main():
     """Main CLI entry point."""
+    import asyncio
+    
+    # Parse arguments
     parser = argparse.ArgumentParser(description="Goal branch management commands")
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
     
@@ -1250,47 +1298,47 @@ def main():
     
     args = parser.parse_args()
     
-    # Handle commands
-    if args.command == "new":
-        create_new_goal(args.description)
-    elif args.command == "sub":
-        create_new_subgoal(args.parent_id, args.description)
-    elif args.command == "list":
-        list_goals()
-    elif args.command == "decompose":
-        # This command is async, so we need to run it with asyncio
-        import asyncio
-        asyncio.run(decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation))
-    elif args.command == "back":
-        go_back_commits(args.steps)
-    elif args.command == "reset":
-        reset_to_commit(args.commit_id)
-    elif args.command == "checkpoint":
-        create_checkpoint(args.message)
-    elif args.command == "checkpoints":
-        list_checkpoints()
-    elif args.command == "up":
-        go_to_parent_goal()
-    elif args.command == "down":
-        go_to_subgoal(args.subgoal_id)
-    elif args.command == "root":
-        go_to_root_goal()
-    elif args.command == "subs":
-        list_subgoals()
-    elif args.command == "complete":
-        mark_goal_complete()
-    elif args.command == "merge":
-        merge_subgoal(args.subgoal_id)
-    elif args.command == "status":
-        show_goal_status()
-    elif args.command == "tree":
-        show_goal_tree()
-    elif args.command == "history":
-        show_goal_history()
-    elif args.command == "graph":
-        generate_graph()
+    # Handle async commands with a single asyncio.run call
+    if args.command == "decompose":
+        asyncio.run(async_main(args))
     else:
-        parser.print_help()
+        # Handle synchronous commands directly
+        if args.command == "new":
+            create_new_goal(args.description)
+        elif args.command == "sub":
+            create_new_subgoal(args.parent_id, args.description)
+        elif args.command == "list":
+            list_goals()
+        elif args.command == "back":
+            go_back_commits(args.steps)
+        elif args.command == "reset":
+            reset_to_commit(args.commit_id)
+        elif args.command == "checkpoint":
+            create_checkpoint(args.message)
+        elif args.command == "checkpoints":
+            list_checkpoints()
+        elif args.command == "up":
+            go_to_parent_goal()
+        elif args.command == "down":
+            go_to_subgoal(args.subgoal_id)
+        elif args.command == "root":
+            go_to_root_goal()
+        elif args.command == "subs":
+            list_subgoals()
+        elif args.command == "complete":
+            mark_goal_complete()
+        elif args.command == "merge":
+            merge_subgoal(args.subgoal_id)
+        elif args.command == "status":
+            show_goal_status()
+        elif args.command == "tree":
+            show_goal_tree()
+        elif args.command == "history":
+            show_goal_history()
+        elif args.command == "graph":
+            generate_graph()
+        else:
+            parser.print_help()
 
 
 if __name__ == "__main__":
