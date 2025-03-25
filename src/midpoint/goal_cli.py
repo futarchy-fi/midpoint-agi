@@ -915,46 +915,56 @@ def show_goal_status():
         if goal.get("complete", False):
             status = "✅"
         else:
-            # Check for completed tasks
-            completed_tasks = len(goal.get("completed_tasks", []))
-            
-            # Check if the goal has completed tasks
-            has_completed_tasks = completed_tasks > 0
-            
-            # Check if all subgoals are complete
-            # Use case-insensitive comparison
-            subgoals = {k: v for k, v in goal_files.items() 
-                       if v.get("parent_goal", "").upper() == goal_id.upper() or 
-                          v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
-            
-            if not subgoals:
-                # Check if goal has been decomposed
-                if goal.get("decomposed", False):
-                    # If requires_further_decomposition is explicitly False, it's a directly executable task
-                    if goal.get("requires_further_decomposition") is False or goal.get("is_task", False):
-                        if "execution_result" in goal and goal["execution_result"].get("success"):
-                            status = "✅"  # Completed task
-                        else:
-                            if not state_compatible:
-                                status = "🔶"  # State-incompatible task
+            # Special handling for tasks
+            if goal.get("is_task", False):
+                if "execution_result" in goal and goal["execution_result"].get("success"):
+                    status = "✅"  # Completed task
+                else:
+                    if not state_compatible:
+                        status = "🔶"  # State-incompatible task
+                    else:
+                        status = "🔷"  # Directly executable task
+            else:
+                # Check for completed tasks
+                completed_tasks = len(goal.get("completed_tasks", []))
+                
+                # Check if the goal has completed tasks
+                has_completed_tasks = completed_tasks > 0
+                
+                # Check if all subgoals are complete
+                # Use case-insensitive comparison
+                subgoals = {k: v for k, v in goal_files.items() 
+                        if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                            v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
+                
+                if not subgoals:
+                    # Check if goal has been decomposed
+                    if goal.get("decomposed", False):
+                        # If requires_further_decomposition is explicitly False, it's a directly executable task
+                        if goal.get("requires_further_decomposition") is False:
+                            if "execution_result" in goal and goal["execution_result"].get("success"):
+                                status = "✅"  # Completed task
                             else:
-                                status = "🔷"  # Directly executable task
+                                if not state_compatible:
+                                    status = "🔶"  # State-incompatible task
+                                else:
+                                    status = "🔷"  # Directly executable task
+                        else:
+                            status = "🔘"  # No subgoals (not yet decomposed)
                     else:
                         status = "🔘"  # No subgoals (not yet decomposed)
+                elif all(sg.get("complete", False) for sg in subgoals.values()):
+                    status = "⚪"  # All subgoals complete but needs explicit completion
+                elif has_completed_tasks:
+                    if not state_compatible:
+                        status = "🟣"  # Partially completed but state-incompatible
+                    else:
+                        status = "🟡"  # Partially completed (has some completed tasks)
                 else:
-                    status = "🔘"  # No subgoals (not yet decomposed)
-            elif all(sg.get("complete", False) for sg in subgoals.values()):
-                status = "⚪"  # All subgoals complete but needs explicit completion
-            elif has_completed_tasks:
-                if not state_compatible:
-                    status = "🟣"  # Partially completed but state-incompatible
-                else:
-                    status = "🟡"  # Partially completed (has some completed tasks)
-            else:
-                if not state_compatible:
-                    status = "🟤"  # Incompatible with parent state
-                else:
-                    status = "⚪"  # Some subgoals incomplete
+                    if not state_compatible:
+                        status = "🟤"  # Incompatible with parent state
+                    else:
+                        status = "⚪"  # Some subgoals incomplete
         
         # Show task count instead of progress percentage
         progress_text = ""
