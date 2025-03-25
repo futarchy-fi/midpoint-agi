@@ -471,36 +471,40 @@ def retrieve_recent_memory(memory_hash, char_limit=5000, repo_path=None):
         # Sort by modification time (newest first)
         files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         
-        # Build context string by prepending each file's content
-        context = ""
+        # Start with newest files, process until we hit the limit
+        temp_results = []  # To store results in newest-first order
         total_chars = 0
-        results = []
         
         for file in files:
-            # Get file modification time for sorting
             file_timestamp = file.stat().st_mtime
+            file_size = file.stat().st_size  # Get file size before reading
+            space_left = char_limit - total_chars
             
-            # Read file content
-            with open(file, "r") as f:
-                content = f.read()
-            
-            # Prepend this file's content to context
-            new_context = content + context
-            
-            # Check if this would exceed our limit
-            if len(new_context) > char_limit:
-                # Take the end of the context up to our limit
-                context = new_context[-char_limit:]
-                results.append((str(file.relative_to(repo_path)), context, file_timestamp))
-                total_chars = char_limit
+            if space_left <= 0:
+                # No more space left, stop processing files
                 break
+                
+            # Process the file: fully if there's space, or partially if needed
+            if file_size <= space_left:
+                # File fits completely
+                with open(file, "r") as f:
+                    content = f.read()
+                temp_results.append((str(file.relative_to(repo_path)), content, file_timestamp))
+                total_chars += len(content)
             else:
-                # Update context and continue
-                context = new_context
-                total_chars = len(context)
-                results.append((str(file.relative_to(repo_path)), content, file_timestamp))
+                # Only read the tail portion of the file that fits
+                with open(file, "r") as f:
+                    # If file is too large, seek to position where we can read the last 'space_left' characters
+                    f.seek(max(0, file_size - space_left))
+                    content = f.read(space_left)
+                temp_results.append((str(file.relative_to(repo_path)), content, file_timestamp))
+                total_chars += len(content)
+                break  # No more space, we're done
         
-        return total_chars, results
+        # Reverse the results so oldest appears first, newest last
+        temp_results.reverse()
+        
+        return total_chars, temp_results
         
     finally:
         # Restore original branch if we changed it
