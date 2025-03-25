@@ -1453,6 +1453,9 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             logs_dir=str(logs_dir)  # Store logs in project root's logs directory
         )
         
+        # Debug: Print memory-related fields in the result
+        logging.info(f"Decomposition result memory info: memory_hash={result.get('memory_hash')}, memory_document_path={result.get('memory_document_path')}, memory_timestamp={result.get('memory_timestamp')}")
+        
         if result["success"]:
             # Create the subgoal or task file based on the decomposition result
             is_task = result["is_task"]

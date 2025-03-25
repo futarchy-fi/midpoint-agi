@@ -382,7 +382,9 @@ class GoalDecomposer:
                 metadata=metadata,
                 memory_repo_path=memory_repo_path
             )
-            logging.info(f"Saved {interaction_type} to memory: {result.get('document_path', 'unknown path')}")
+            # Log more detailed information about the memory result
+            logging.info(f"Saved {interaction_type} to memory: {result}")
+            logging.info(f"Memory details - path: {result.get('path')}, hash: {result.get('memory_hash')}, category: {result.get('category')}, filename: {result.get('filename')}")
             return result
         except Exception as e:
             logging.error(f"Failed to save {interaction_type} to memory: {str(e)}")
