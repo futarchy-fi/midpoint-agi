@@ -16,7 +16,7 @@ from midpoint.goal_cli import (
     create_checkpoint,
     list_checkpoints,
     go_to_parent_goal,
-    go_to_subgoal,
+    go_to_child,
     go_to_root_goal,
     list_subgoals,
     get_goal_id_from_branch,
@@ -50,10 +50,10 @@ class GitRepoFixture:
         result = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
         self.initial_hash = result.stdout.strip()
         
-        # Create goal branches
+        # Create goal branches with flat ID format
         self._create_goal_branch("G1", "First goal")
-        self._create_goal_branch("G1-S1", "First subgoal", parent="G1")
-        self._create_goal_branch("G1-S1-S1", "Nested subgoal", parent="G1-S1")
+        self._create_goal_branch("S1", "First subgoal", parent="G1")
+        self._create_goal_branch("S2", "Nested subgoal", parent="S1")
         self._create_goal_branch("G2", "Second goal")
     
     def _create_goal_branch(self, goal_id, description, parent=None):
@@ -79,8 +79,10 @@ class GitRepoFixture:
         
         # Save hash
         result = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
-        setattr(self, f"{goal_id.replace('-', '_')}_hash", result.stdout.strip())
-        setattr(self, f"{goal_id.replace('-', '_')}_branch", branch_name)
+        # Replace dashes with underscores for attribute names
+        safe_attr = goal_id.replace('-', '_')
+        setattr(self, f"{safe_attr}_hash", result.stdout.strip())
+        setattr(self, f"{safe_attr}_branch", branch_name)
     
     def cleanup(self):
         """Clean up the test repository."""
@@ -111,7 +113,8 @@ def mock_subprocess_run():
 def test_get_goal_id_from_branch():
     """Test extracting goal ID from branch name."""
     assert get_goal_id_from_branch("goal-G1-test") == "G1"
-    assert get_goal_id_from_branch("goal-G1-S1-test") == "G1-S1"
+    assert get_goal_id_from_branch("goal-S1-test") == "S1"
+    assert get_goal_id_from_branch("goal-T1-test") == "T1"
     assert get_goal_id_from_branch("not-a-goal-branch") is None
     assert get_goal_id_from_branch("goal-invalid") is None
 
@@ -120,10 +123,10 @@ def test_get_parent_goal_id(git_repo):
     """Test getting parent goal ID."""
     with patch('midpoint.goal_cli.GOAL_DIR', git_repo.goal_dir):
         # Test with a subgoal
-        assert get_parent_goal_id("G1-S1") == "G1"
+        assert get_parent_goal_id("S1") == "G1"
         
         # Test with a nested subgoal
-        assert get_parent_goal_id("G1-S1-S1") == "G1-S1"
+        assert get_parent_goal_id("S2") == "S1"
         
         # Test with a top-level goal
         assert get_parent_goal_id("G1") == ""
@@ -136,12 +139,12 @@ def test_find_branch_for_goal(git_repo, mock_subprocess_run):
     """Test finding branch for a goal ID."""
     mock_subprocess_run.return_value.stdout = """
   goal-G1-test
-* goal-G1-S1-test
-  goal-G1-S1-S1-test
+* goal-S1-test
+  goal-S2-test
   goal-G2-test
 """
     assert find_branch_for_goal("G1") == "goal-G1-test"
-    assert find_branch_for_goal("G1-S1") == "goal-G1-S1-test"
+    assert find_branch_for_goal("S1") == "goal-S1-test"
     assert find_branch_for_goal("non-existent") is None
 
 
@@ -252,13 +255,13 @@ def test_go_to_parent_goal(git_repo, mock_subprocess_run):
                     )
 
 
-def test_go_to_subgoal(git_repo, mock_subprocess_run):
+def test_go_to_child(git_repo, mock_subprocess_run):
     """Test going to a specific subgoal."""
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
         # Mock find_branch_for_goal
         with patch('midpoint.goal_cli.find_branch_for_goal', return_value="goal-G1-S1-test"):
-            assert go_to_subgoal("G1-S1") is True
+            assert go_to_child("S1") is True
             
             # Check that git checkout was called correctly
             mock_subprocess_run.assert_called_with(
@@ -300,9 +303,9 @@ def test_list_subgoals(git_repo, capsys):
                 
                 # Check output
                 captured = capsys.readouterr()
-                assert "Subgoals for G1:" in captured.out
-                assert "G1-S1" in captured.out
+                assert "Children of G1:" in captured.out
+                assert "S1" in captured.out
                 
                 # Check returned data
                 assert len(subgoals) == 1
-                assert "G1-S1" in subgoals 
+                assert "S1" in subgoals 

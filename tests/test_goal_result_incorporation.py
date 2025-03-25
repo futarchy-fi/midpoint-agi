@@ -61,12 +61,23 @@ def test_mark_goal_complete(git_repo):
 
 def test_merge_subgoal_complete_check(git_repo, mock_subprocess_run):
     """Test that merge_subgoal checks if the subgoal is complete."""
+    # Create a subgoal file with new format
+    subgoal_data = {
+        "goal_id": "S1",
+        "description": "First subgoal",
+        "parent_goal": "G1",
+        "timestamp": "20250324_000000"
+    }
+    subgoal_file = git_repo.goal_dir / "S1.json"
+    with open(subgoal_file, 'w') as f:
+        json.dump(subgoal_data, f)
+    
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
         # Mock input to simulate user answering 'n' to the prompt
         with patch('builtins.input', return_value="n"):
             # Attempt to merge an incomplete subgoal
-            assert merge_subgoal("G1-S1", testing=True) is False
+            assert merge_subgoal("S1", testing=True) is False
             
             # Check that the merge was not attempted
             mock_subprocess_run.assert_not_called()
@@ -74,14 +85,28 @@ def test_merge_subgoal_complete_check(git_repo, mock_subprocess_run):
 
 def test_merge_subgoal_branch_check(git_repo, mock_subprocess_run):
     """Test that merge_subgoal checks if we're on the parent branch."""
-    # Mark subgoal as complete
-    subgoal_file = git_repo.goal_dir / "G1-S1.json"
-    with open(subgoal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    data["parent_goal"] = "G1"
+    # Create a subgoal file with new format
+    subgoal_data = {
+        "goal_id": "S1",
+        "description": "First subgoal",
+        "parent_goal": "G1",
+        "complete": True,
+        "timestamp": "20250324_000000"
+    }
+    subgoal_file = git_repo.goal_dir / "S1.json"
     with open(subgoal_file, 'w') as f:
-        json.dump(data, f)
+        json.dump(subgoal_data, f)
+    
+    # Create a parent goal file
+    parent_data = {
+        "goal_id": "G1",
+        "description": "First goal",
+        "parent_goal": "",
+        "timestamp": "20250324_000000"
+    }
+    parent_file = git_repo.goal_dir / "G1.json"
+    with open(parent_file, 'w') as f:
+        json.dump(parent_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -91,13 +116,13 @@ def test_merge_subgoal_branch_check(git_repo, mock_subprocess_run):
             def mock_find_branch(goal_id):
                 if goal_id == "G1":
                     return "goal-G1-test"
-                elif goal_id == "G1-S1":
-                    return "goal-G1-S1-test"
+                elif goal_id == "S1":
+                    return "goal-S1-test"
                 return None
             
             with patch('midpoint.goal_cli.find_branch_for_goal', side_effect=mock_find_branch):
                 # Attempt to merge from the wrong branch with testing=True to skip the branch check
-                assert merge_subgoal("G1-S1", testing=True) is True
+                assert merge_subgoal("S1", testing=True) is True
                 
                 # Check that merge was attempted
                 merge_calls = [call for call in mock_subprocess_run.call_args_list 
@@ -108,14 +133,28 @@ def test_merge_subgoal_branch_check(git_repo, mock_subprocess_run):
 
 def test_merge_subgoal_successful(git_repo, mock_subprocess_run):
     """Test a successful subgoal merge."""
-    # Mark subgoal as complete
-    subgoal_file = git_repo.goal_dir / "G1-S1.json"
-    with open(subgoal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    data["parent_goal"] = "G1"
+    # Create a subgoal file with new format
+    subgoal_data = {
+        "goal_id": "S1",
+        "description": "First subgoal",
+        "parent_goal": "G1",
+        "complete": True,
+        "timestamp": "20250324_000000"
+    }
+    subgoal_file = git_repo.goal_dir / "S1.json"
     with open(subgoal_file, 'w') as f:
-        json.dump(data, f)
+        json.dump(subgoal_data, f)
+    
+    # Create a parent goal file
+    parent_data = {
+        "goal_id": "G1",
+        "description": "First goal",
+        "parent_goal": "",
+        "timestamp": "20250324_000000"
+    }
+    parent_file = git_repo.goal_dir / "G1.json"
+    with open(parent_file, 'w') as f:
+        json.dump(parent_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -125,8 +164,8 @@ def test_merge_subgoal_successful(git_repo, mock_subprocess_run):
             def mock_find_branch(goal_id):
                 if goal_id == "G1":
                     return "goal-G1-test"
-                elif goal_id == "G1-S1":
-                    return "goal-G1-S1-test"
+                elif goal_id == "S1":
+                    return "goal-S1-test"
                 return None
             
             with patch('midpoint.goal_cli.find_branch_for_goal', side_effect=mock_find_branch):
@@ -137,7 +176,7 @@ def test_merge_subgoal_successful(git_repo, mock_subprocess_run):
                     mock_subprocess_run.return_value.stdout = "Already up to date."
                     
                     # Attempt to merge with testing=True
-                    assert merge_subgoal("G1-S1", testing=True) is True
+                    assert merge_subgoal("S1", testing=True) is True
                     
                     # Check that the parent goal file was updated with merge info
                     parent_file = git_repo.goal_dir / "G1.json"
@@ -146,19 +185,33 @@ def test_merge_subgoal_successful(git_repo, mock_subprocess_run):
                     
                     assert "merged_subgoals" in data
                     assert len(data["merged_subgoals"]) == 1
-                    assert data["merged_subgoals"][0]["subgoal_id"] == "G1-S1"
+                    assert data["merged_subgoals"][0]["subgoal_id"] == "S1"
 
 
 def test_merge_subgoal_with_conflicts(git_repo, mock_subprocess_run):
     """Test a merge with conflicts."""
-    # Mark subgoal as complete
-    subgoal_file = git_repo.goal_dir / "G1-S1.json"
-    with open(subgoal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    data["parent_goal"] = "G1"
+    # Create a subgoal file with new format
+    subgoal_data = {
+        "goal_id": "S1",
+        "description": "First subgoal",
+        "parent_goal": "G1",
+        "complete": True,
+        "timestamp": "20250324_000000"
+    }
+    subgoal_file = git_repo.goal_dir / "S1.json"
     with open(subgoal_file, 'w') as f:
-        json.dump(data, f)
+        json.dump(subgoal_data, f)
+    
+    # Create a parent goal file
+    parent_data = {
+        "goal_id": "G1",
+        "description": "First goal",
+        "parent_goal": "",
+        "timestamp": "20250324_000000"
+    }
+    parent_file = git_repo.goal_dir / "G1.json"
+    with open(parent_file, 'w') as f:
+        json.dump(parent_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -168,8 +221,8 @@ def test_merge_subgoal_with_conflicts(git_repo, mock_subprocess_run):
             def mock_find_branch(goal_id):
                 if goal_id == "G1":
                     return "goal-G1-test"
-                elif goal_id == "G1-S1":
-                    return "goal-G1-S1-test"
+                elif goal_id == "S1":
+                    return "goal-S1-test"
                 return None
             
             with patch('midpoint.goal_cli.find_branch_for_goal', side_effect=mock_find_branch):
@@ -193,7 +246,7 @@ def test_merge_subgoal_with_conflicts(git_repo, mock_subprocess_run):
                 mock_subprocess_run.side_effect = mock_subprocess_side_effect
                 
                 # Attempt to merge with testing=True
-                assert merge_subgoal("G1-S1", testing=True) is False
+                assert merge_subgoal("S1", testing=True) is False
                 
                 # Check that the merge --abort was called
                 merge_abort_calls = [call for call in mock_subprocess_run.call_args_list 
@@ -204,25 +257,42 @@ def test_merge_subgoal_with_conflicts(git_repo, mock_subprocess_run):
 
 def test_show_goal_status(git_repo, capsys):
     """Test showing goal status."""
-    # Mark a goal as complete
-    goal_file = git_repo.goal_dir / "G1.json"
-    with open(goal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    data["completion_time"] = "20250324_000000"
-    with open(goal_file, 'w') as f:
-        json.dump(data, f)
-    
-    # Add a merged subgoal
-    data["merged_subgoals"] = [
+    # Create files with the new flat ID format
+    test_goals = [
         {
-            "subgoal_id": "G1-S1",
-            "merge_time": "20250324_000000",
-            "merge_commit": "hash1234"
+            "goal_id": "G1", 
+            "description": "First goal", 
+            "parent_goal": "", 
+            "complete": True,
+            "completion_time": "20250324_000000",
+            "timestamp": "20250324_000000",
+            "merged_subgoals": [
+                {
+                    "subgoal_id": "S1",
+                    "merge_time": "20250324_000000",
+                    "merge_commit": "hash1234"
+                }
+            ]
+        },
+        {
+            "goal_id": "S1", 
+            "description": "First subgoal", 
+            "parent_goal": "G1",
+            "timestamp": "20250324_000000"
+        },
+        {
+            "goal_id": "G2", 
+            "description": "Second goal", 
+            "parent_goal": "",
+            "timestamp": "20250324_000000"
         }
     ]
-    with open(goal_file, 'w') as f:
-        json.dump(data, f)
+    
+    # Recreate goal files with new format
+    for goal_data in test_goals:
+        goal_file = git_repo.goal_dir / f"{goal_data['goal_id']}.json"
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -233,6 +303,6 @@ def test_show_goal_status(git_repo, capsys):
         captured = capsys.readouterr()
         assert "Goal Status:" in captured.out
         assert "✅ G1:" in captured.out  # Complete goal
-        assert "⚪ G1-S1:" in captured.out  # Incomplete subgoal
+        assert "⚪ S1:" in captured.out  # Incomplete subgoal
         assert "Completed: 20250324_000000" in captured.out
-        assert "Merged: G1-S1" in captured.out 
+        assert "Merged: S1" in captured.out 

@@ -55,12 +55,38 @@ def ensure_visualization_dir():
     return vis_path
 
 
-def generate_goal_id(parent_id=None):
-    """Generate a goal ID in format G1 or G1-S1."""
+def generate_goal_id(parent_id=None, is_task=False):
+    """Generate a goal ID in format G1, S1, or T1."""
     goal_path = ensure_goal_dir()
     
-    if not parent_id:
-        # Find next available top-level goal number by finding the maximum existing goal number
+    if is_task:
+        # Find next available task number
+        max_num = 0
+        for file_path in goal_path.glob("T*.json"):
+            # Match only files with pattern T followed by digits and .json
+            match = re.match(r"T(\d+)\.json$", file_path.name)
+            if match:
+                num = int(match.group(1))
+                max_num = max(max_num, num)
+        
+        # Next task number is one more than the maximum found
+        next_num = max_num + 1
+        return f"T{next_num}"
+    elif parent_id:
+        # This is a subgoal - find next available subgoal number
+        max_num = 0
+        for file_path in goal_path.glob("S*.json"):
+            # Match only files with pattern S followed by digits and .json
+            match = re.match(r"S(\d+)\.json$", file_path.name)
+            if match:
+                num = int(match.group(1))
+                max_num = max(max_num, num)
+        
+        # Next subgoal number is one more than the maximum found
+        next_num = max_num + 1
+        return f"S{next_num}"
+    else:
+        # This is a top-level goal - find next available goal number
         max_num = 0
         for file_path in goal_path.glob("G*.json"):
             # Match only files with pattern G followed by digits and .json
@@ -72,20 +98,6 @@ def generate_goal_id(parent_id=None):
         # Next goal number is one more than the maximum found
         next_num = max_num + 1
         return f"G{next_num}"
-    else:
-        # Find next available subgoal number for parent
-        parent_base = parent_id.split('.')[0]  # Remove .json extension if present
-        max_num = 0
-        for file_path in goal_path.glob(f"{parent_base}-S*.json"):
-            # Match files with pattern parent_id-S followed by digits and .json
-            match = re.match(rf"{parent_base}-S(\d+)\.json$", file_path.name)
-            if match:
-                num = int(match.group(1))
-                max_num = max(max_num, num)
-        
-        # Next subgoal number is one more than the maximum found
-        next_num = max_num + 1
-        return f"{parent_base}-S{next_num}"
 
 
 def create_goal_file(goal_id, description, parent_id=None):
@@ -188,6 +200,38 @@ def create_new_subgoal(parent_id, description):
     return subgoal_id
 
 
+def create_new_task(parent_id, description):
+    """Create a new directly executable task under the specified parent."""
+    # Verify parent exists
+    goal_path = ensure_goal_dir()
+    parent_file = goal_path / f"{parent_id}.json"
+    
+    if not parent_file.exists():
+        logging.error(f"Parent goal {parent_id} not found")
+        return None
+    
+    # Generate task ID
+    task_id = generate_goal_id(parent_id, is_task=True)
+    
+    # Prepare task data
+    task_data = {
+        "goal_id": task_id,
+        "description": description,
+        "parent_goal": parent_id,
+        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "is_task": True,
+        "requires_further_decomposition": False
+    }
+    
+    # Write the task file
+    task_file = goal_path / f"{task_id}.json"
+    with open(task_file, 'w') as f:
+        json.dump(task_data, f, indent=2)
+    
+    print(f"Created new task {task_id} under {parent_id}: {description}")
+    return task_id
+
+
 def get_current_hash():
     """Get the current git hash."""
     try:
@@ -220,18 +264,22 @@ def get_current_branch():
 
 def get_goal_id_from_branch(branch_name):
     """Extract goal ID from branch name."""
-    # Branch naming convention: goal-G1-S1-abcdef (goal prefix, ID, random suffix)
+    # Branch naming convention: goal-G1-abcdef, goal-S1-abcdef, or goal-T1-abcdef
     parts = branch_name.split('-')
     
     # Check if it's a goal branch
-    if len(parts) < 3 or parts[0] != "goal":
+    if len(parts) < 2 or parts[0] != "goal":
         return None
     
-    # Remove the 'goal' prefix and the random suffix
-    if parts[1].startswith('G') and parts[1][1:].isdigit():
-        if len(parts) >= 3 and parts[2].startswith('S') and parts[2][1:].isdigit():
-            return f"{parts[1]}-{parts[2]}"
-        return parts[1]
+    # Check for valid goal/subgoal/task ID
+    if len(parts) >= 2:
+        # Check if it's a valid ID
+        if parts[1].startswith('G') and parts[1][1:].isdigit():
+            return parts[1]
+        if parts[1].startswith('S') and parts[1][1:].isdigit():
+            return parts[1]
+        if parts[1].startswith('T') and parts[1][1:].isdigit():
+            return parts[1]
     
     return None
 
@@ -482,35 +530,42 @@ def go_to_parent_goal():
         return False
 
 
-def go_to_subgoal(subgoal_id):
-    """Go to a specific subgoal branch."""
-    # Verify subgoal exists
+def go_to_child(child_id):
+    """Go to a specific subgoal or task branch."""
+    # Verify child exists
     goal_path = ensure_goal_dir()
-    subgoal_file = goal_path / f"{subgoal_id}.json"
+    child_file = goal_path / f"{child_id}.json"
     
-    if not subgoal_file.exists():
-        logging.error(f"Subgoal not found: {subgoal_id}")
+    if not child_file.exists():
+        logging.error(f"Subgoal/task not found: {child_id}")
         return False
     
-    # Find the branch for the subgoal
-    subgoal_branch = find_branch_for_goal(subgoal_id)
-    if not subgoal_branch:
-        logging.error(f"No branch found for subgoal {subgoal_id}")
+    # Find the branch for the child
+    child_branch = find_branch_for_goal(child_id)
+    if not child_branch:
+        logging.error(f"No branch found for {child_id}")
         return False
     
-    # Switch to the subgoal branch
+    # Determine if it's a goal, subgoal, or task
+    child_type = "goal"
+    if child_id.startswith("S"):
+        child_type = "subgoal"
+    elif child_id.startswith("T"):
+        child_type = "task"
+    
+    # Switch to the child branch
     try:
         subprocess.run(
-            ["git", "checkout", subgoal_branch],
+            ["git", "checkout", child_branch],
             check=True,
             capture_output=True,
             text=True
         )
-        print(f"Switched to subgoal: {subgoal_id}")
-        print(f"Branch: {subgoal_branch}")
+        print(f"Switched to {child_type}: {child_id}")
+        print(f"Branch: {child_branch}")
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to switch to subgoal branch: {e}")
+        logging.error(f"Failed to switch to branch: {e}")
         return False
 
 
@@ -558,7 +613,7 @@ def go_to_root_goal():
 
 
 def list_subgoals(goal_id=None):
-    """List subgoals for a specific goal ID or current branch."""
+    """List subgoals and tasks for a specific goal ID or current branch."""
     # If no goal ID provided, use the current branch
     if not goal_id:
         current_branch = get_current_branch()
@@ -581,21 +636,34 @@ def list_subgoals(goal_id=None):
         except:
             continue
     
-    # Find direct subgoals
-    subgoals = {k: v for k, v in goal_files.items() 
+    # Find direct children (subgoals and tasks)
+    children = {k: v for k, v in goal_files.items() 
                if v.get("parent_goal") == goal_id or 
                   v.get("parent_goal") == f"{goal_id}.json"}
     
-    if not subgoals:
-        print(f"No subgoals found for goal {goal_id}")
+    if not children:
+        print(f"No subgoals or tasks found for goal {goal_id}")
         return []
     
-    print(f"Subgoals for {goal_id}:")
-    for subgoal_id in sorted(subgoals.keys()):
-        subgoal = subgoals[subgoal_id]
-        print(f"• {subgoal_id}: {subgoal['description']}")
+    print(f"Children of {goal_id}:")
     
-    return list(subgoals.keys())
+    # Display subgoals first
+    subgoals = {k: v for k, v in children.items() if k.startswith("S")}
+    if subgoals:
+        print("\nSubgoals:")
+        for subgoal_id in sorted(subgoals.keys()):
+            subgoal = subgoals[subgoal_id]
+            print(f"• {subgoal_id}: {subgoal['description']}")
+    
+    # Display tasks
+    tasks = {k: v for k, v in children.items() if k.startswith("T") or v.get("is_task", False)}
+    if tasks:
+        print("\nTasks:")
+        for task_id in sorted(tasks.keys()):
+            task = tasks[task_id]
+            print(f"• {task_id}: {task['description']}")
+    
+    return list(children.keys())
 
 
 def mark_goal_complete(goal_id=None):
@@ -839,7 +907,7 @@ def show_goal_status():
                 # Check if goal has been decomposed
                 if goal.get("decomposed", False):
                     # If requires_further_decomposition is explicitly False, it's a directly executable task
-                    if goal.get("requires_further_decomposition") is False:
+                    if goal.get("requires_further_decomposition") is False or goal.get("is_task", False):
                         status = "🔷"  # Directly executable task
                     else:
                         status = "🔘"  # No subgoals (not yet decomposed)
@@ -925,7 +993,11 @@ def show_goal_tree():
                           v.get("parent_goal") == f"{goal_id}.json"}
             
             if not subgoals:
-                status = "🔘"  # No subgoals
+                # Check if goal is a task or directly executable
+                if goal.get("is_task", False) or goal.get("requires_further_decomposition") is False:
+                    status = "🔷"  # Task/directly executable
+                else:
+                    status = "🔘"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
                 status = "🟠"  # All subgoals complete but not merged
             else:
@@ -1091,7 +1163,10 @@ def generate_graph():
                          v.get("parent_goal") == f"{goal_id}.json"}
             
             if not subgoals:
-                color = "gray"  # No subgoals
+                if goal_data.get("is_task", False) or goal_data.get("requires_further_decomposition") is False:
+                    color = "yellow"  # Task/directly executable
+                else:
+                    color = "gray"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
                 color = "orange"  # All subgoals complete but not merged
             else:
@@ -1100,8 +1175,17 @@ def generate_graph():
         # Escape special characters
         desc = goal_data.get("description", "").replace('"', '\\"')
         
+        # Determine node shape based on type
+        shape = "box"
+        if goal_id.startswith("T"):
+            shape = "ellipse"  # Tasks are ellipses
+        elif goal_id.startswith("S"):
+            shape = "box"  # Subgoals are boxes
+        elif goal_id.startswith("G"):
+            shape = "box"  # Goals are boxes (can make them rounded if preferred)
+        
         # Add node
-        dot_content.append(f'  "{goal_id}" [label="{goal_id}\\n{desc}", fillcolor={color}];')
+        dot_content.append(f'  "{goal_id}" [label="{goal_id}\\n{desc}", fillcolor={color}, shape={shape}];')
     
     # Add edges (parent-child relationships)
     for goal_id, goal_data in goal_files.items():
@@ -1197,6 +1281,37 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             # Update the goal file
             with open(goal_file, 'w') as f:
                 json.dump(goal_content, f, indent=2)
+            
+            # If any subgoals don't require further decomposition, rename them as tasks
+            if "subgoals" in result:
+                for subgoal in result["subgoals"]:
+                    subgoal_id = subgoal.get("goal_id")
+                    requires_decomp = subgoal.get("requires_further_decomposition", True)
+                    
+                    if not requires_decomp and subgoal_id:
+                        # Generate a task ID
+                        task_id = generate_goal_id(goal_id, is_task=True)
+                        
+                        # Rename the subgoal file to a task file
+                        subgoal_file = goal_path / f"{subgoal_id}.json"
+                        if subgoal_file.exists():
+                            # Read subgoal data
+                            with open(subgoal_file, 'r') as f:
+                                subgoal_data = json.load(f)
+                            
+                            # Update with task ID
+                            subgoal_data["goal_id"] = task_id
+                            subgoal_data["is_task"] = True
+                            
+                            # Write as new task file
+                            task_file = goal_path / f"{task_id}.json"
+                            with open(task_file, 'w') as f:
+                                json.dump(subgoal_data, f, indent=2)
+                            
+                            # Remove old subgoal file
+                            subgoal_file.unlink()
+                            
+                            print(f"Renamed directly executable subgoal {subgoal_id} to task {task_id}")
                 
             print(f"\nGoal {goal_id} successfully decomposed into subgoals")
             print(f"\nNext step: {result['next_step']}")
@@ -1220,6 +1335,104 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         return False
 
 
+def convert_goal_ids():
+    """Convert existing hierarchical goal IDs to the new flat ID system."""
+    goal_path = ensure_goal_dir()
+    
+    # Get all goal files
+    goal_files = {}
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goal_files[data["goal_id"]] = {
+                    "data": data, 
+                    "file_path": file_path
+                }
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    if not goal_files:
+        print("No goals found to convert.")
+        return False
+    
+    # Track conversions to update parent references
+    conversions = {}  # old_id -> new_id
+    
+    # First pass: identify hierarchical IDs and generate new IDs
+    for goal_id, info in list(goal_files.items()):
+        # Check if it's a hierarchical ID (contains dash)
+        if '-' in goal_id and goal_id[0] == 'G' and 'S' in goal_id:
+            parts = goal_id.split('-')
+            # This is a hierarchical ID like G1-S1
+            
+            # Check if it's a task (directly executable)
+            requires_decomp = info["data"].get("requires_further_decomposition", True)
+            if requires_decomp is False:
+                # Generate task ID
+                new_id = generate_goal_id(None, is_task=True)
+                info["data"]["is_task"] = True
+            else:
+                # Generate subgoal ID
+                new_id = generate_goal_id(info["data"].get("parent_goal", ""))
+            
+            # Remember the conversion
+            conversions[goal_id] = new_id
+            
+            print(f"Will convert {goal_id} to {new_id}")
+    
+    if not conversions:
+        print("No hierarchical IDs found to convert.")
+        return False
+    
+    # Confirm with user
+    print(f"\nFound {len(conversions)} hierarchical IDs to convert.")
+    response = input("Do you want to proceed with conversion? (y/N): ")
+    if response.lower() != 'y':
+        print("Conversion cancelled.")
+        return False
+    
+    # Second pass: update all files with new IDs and parent references
+    for old_id, new_id in conversions.items():
+        # Update the goal's own ID
+        info = goal_files[old_id]
+        info["data"]["goal_id"] = new_id
+        
+        # Create new file with new ID
+        new_file = goal_path / f"{new_id}.json"
+        with open(new_file, 'w') as f:
+            json.dump(info["data"], f, indent=2)
+        
+        print(f"Created new file: {new_file}")
+    
+    # Third pass: update parent references in all files
+    for goal_id, info in goal_files.items():
+        parent_id = info["data"].get("parent_goal", "")
+        if parent_id and parent_id in conversions:
+            # Update parent reference
+            info["data"]["parent_goal"] = conversions[parent_id]
+            
+            # Determine file path to update
+            file_to_update = info["file_path"]
+            if goal_id in conversions:
+                # If this goal was also converted, update the new file
+                file_to_update = goal_path / f"{conversions[goal_id]}.json"
+            
+            # Write updated file
+            with open(file_to_update, 'w') as f:
+                json.dump(info["data"], f, indent=2)
+    
+    # Fourth pass: delete old files
+    for old_id in conversions:
+        old_file = goal_path / f"{old_id}.json"
+        if old_file.exists():
+            old_file.unlink()
+            print(f"Deleted old file: {old_file}")
+    
+    print(f"\nSuccessfully converted {len(conversions)} hierarchical IDs to the new flat ID system.")
+    return True
+
+
 async def async_main(args):
     """Async entry point for CLI commands."""
     # Handle commands
@@ -1231,6 +1444,8 @@ async def async_main(args):
         return create_new_goal(args.description)
     elif args.command == "sub":
         return create_new_subgoal(args.parent_id, args.description)
+    elif args.command == "task":
+        return create_new_task(args.parent_id, args.description)
     elif args.command == "list":
         return list_goals()
     elif args.command == "back":
@@ -1244,7 +1459,7 @@ async def async_main(args):
     elif args.command == "up":
         return go_to_parent_goal()
     elif args.command == "down":
-        return go_to_subgoal(args.subgoal_id)
+        return go_to_child(args.subgoal_id)
     elif args.command == "root":
         return go_to_root_goal()
     elif args.command == "subs":
@@ -1261,6 +1476,8 @@ async def async_main(args):
         return show_goal_history()
     elif args.command == "graph":
         return generate_graph()
+    elif args.command == "convert":
+        return convert_goal_ids()
     else:
         return None
 
@@ -1283,6 +1500,11 @@ def main():
     sub_parser = subparsers.add_parser("sub", help="Create a subgoal under the specified parent")
     sub_parser.add_argument("parent_id", help="Parent goal ID")
     sub_parser.add_argument("description", help="Description of the subgoal")
+    
+    # goal task <parent-id> <description>
+    task_parser = subparsers.add_parser("task", help="Create a new directly executable task under the specified parent")
+    task_parser.add_argument("parent_id", help="Parent goal ID")
+    task_parser.add_argument("description", help="Description of the task")
     
     # goal list
     subparsers.add_parser("list", help="List all goals and subgoals in tree format")
@@ -1317,8 +1539,8 @@ def main():
     subparsers.add_parser("up", help="Go to parent goal branch")
     
     # goal down <subgoal-id>
-    down_parser = subparsers.add_parser("down", help="Go to specific subgoal branch")
-    down_parser.add_argument("subgoal_id", help="Subgoal ID to navigate to")
+    down_parser = subparsers.add_parser("down", help="Go to specific subgoal or task branch")
+    down_parser.add_argument("subgoal_id", help="Subgoal or task ID to navigate to")
     
     # goal root
     subparsers.add_parser("root", help="Go to top-level goal")
@@ -1349,6 +1571,9 @@ def main():
     # goal graph
     subparsers.add_parser("graph", help="Generate graphical visualization")
     
+    # goal convert
+    subparsers.add_parser("convert", help="Convert existing hierarchical goal IDs to the new flat ID system")
+    
     args = parser.parse_args()
     
     # Handle async commands with a single asyncio.run call
@@ -1360,6 +1585,8 @@ def main():
             create_new_goal(args.description)
         elif args.command == "sub":
             create_new_subgoal(args.parent_id, args.description)
+        elif args.command == "task":
+            create_new_task(args.parent_id, args.description)
         elif args.command == "list":
             list_goals()
         elif args.command == "back":
@@ -1373,7 +1600,7 @@ def main():
         elif args.command == "up":
             go_to_parent_goal()
         elif args.command == "down":
-            go_to_subgoal(args.subgoal_id)
+            go_to_child(args.subgoal_id)
         elif args.command == "root":
             go_to_root_goal()
         elif args.command == "subs":
@@ -1390,6 +1617,8 @@ def main():
             show_goal_history()
         elif args.command == "graph":
             generate_graph()
+        elif args.command == "convert":
+            convert_goal_ids()
         else:
             parser.print_help()
 

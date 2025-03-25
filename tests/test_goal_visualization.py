@@ -55,13 +55,19 @@ def test_ensure_visualization_dir():
 
 def test_show_goal_tree(git_repo, capsys):
     """Test showing the goal tree."""
-    # Add completion status to a goal
-    goal_file = git_repo.goal_dir / "G1.json"
-    with open(goal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    with open(goal_file, 'w') as f:
-        json.dump(data, f)
+    # Create files with the new flat ID format
+    test_goals = [
+        {"goal_id": "G1", "description": "First goal", "parent_goal": "", "complete": True},
+        {"goal_id": "S1", "description": "First subgoal", "parent_goal": "G1"},
+        {"goal_id": "S2", "description": "Second subgoal", "parent_goal": "S1"},
+        {"goal_id": "G2", "description": "Second goal", "parent_goal": ""}
+    ]
+    
+    # Recreate goal files with new format
+    for goal_data in test_goals:
+        goal_file = git_repo.goal_dir / f"{goal_data['goal_id']}.json"
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -72,29 +78,50 @@ def test_show_goal_tree(git_repo, capsys):
         captured = capsys.readouterr()
         assert "Goal Tree:" in captured.out
         assert "✅ G1:" in captured.out  # Complete goal
-        assert "G1-S1:" in captured.out  # Subgoal
-        assert "G1-S1-S1:" in captured.out  # Nested subgoal
+        assert "S1:" in captured.out  # Subgoal
+        assert "S2:" in captured.out  # Nested subgoal
         assert "G2:" in captured.out  # Another top-level goal
         assert "Status Legend:" in captured.out
 
 
 def test_show_goal_history(git_repo, capsys):
     """Test showing goal history."""
-    # Add completion and timestamp info
-    goal_file = git_repo.goal_dir / "G1.json"
-    with open(goal_file, 'r') as f:
-        data = json.load(f)
-    data["complete"] = True
-    data["completion_time"] = "20250324_000000"
-    data["merged_subgoals"] = [
+    # Create files with the new flat ID format
+    test_goals = [
         {
-            "subgoal_id": "G1-S1",
-            "merge_time": "20250324_000000",
-            "merge_commit": "hash1234"
+            "goal_id": "G1", 
+            "description": "First goal", 
+            "parent_goal": "", 
+            "complete": True,
+            "completion_time": "20250324_000000",
+            "timestamp": "20250324_000000",
+            "merged_subgoals": [
+                {
+                    "subgoal_id": "S1",
+                    "merge_time": "20250324_000000",
+                    "merge_commit": "hash1234"
+                }
+            ]
+        },
+        {
+            "goal_id": "S1", 
+            "description": "First subgoal", 
+            "parent_goal": "G1",
+            "timestamp": "20250324_000000"
+        },
+        {
+            "goal_id": "G2", 
+            "description": "Second goal", 
+            "parent_goal": "",
+            "timestamp": "20250324_000000"
         }
     ]
-    with open(goal_file, 'w') as f:
-        json.dump(data, f)
+    
+    # Recreate goal files with new format
+    for goal_data in test_goals:
+        goal_file = git_repo.goal_dir / f"{goal_data['goal_id']}.json"
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f)
     
     # Patch GOAL_DIR
     with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
@@ -105,9 +132,9 @@ def test_show_goal_history(git_repo, capsys):
         captured = capsys.readouterr()
         assert "Goal History:" in captured.out
         assert "G1: First goal" in captured.out
-        assert "G1-S1: First subgoal" in captured.out
+        assert "S1: First subgoal" in captured.out
         assert "Completed:" in captured.out
-        assert "Merged: G1-S1" in captured.out
+        assert "Merged: S1" in captured.out
         assert "Summary:" in captured.out
 
 
