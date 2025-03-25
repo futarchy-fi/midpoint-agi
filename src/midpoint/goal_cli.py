@@ -837,8 +837,12 @@ def show_goal_status():
             
             if not subgoals:
                 # Check if goal has been decomposed
-                if goal.get("decomposed", False) or goal.get("is_task", False):
-                    status = "🔷"  # Directly executable task
+                if goal.get("decomposed", False):
+                    # If requires_further_decomposition is explicitly False, it's a directly executable task
+                    if goal.get("requires_further_decomposition") is False:
+                        status = "🔷"  # Directly executable task
+                    else:
+                        status = "🔘"  # No subgoals (not yet decomposed)
                 else:
                     status = "🔘"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
@@ -1180,13 +1184,10 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         )
         
         if result["success"]:
-            # Mark the goal as decomposed
+            # Mark the goal as decomposed and copy requires_further_decomposition
             goal_content["decomposed"] = True
+            goal_content["requires_further_decomposition"] = result.get("requires_further_decomposition", True)
             
-            # If it doesn't require further decomposition, mark it as a task
-            if not result.get("requires_further_decomposition", True):
-                goal_content["is_task"] = True
-                
             # Update the goal file
             with open(goal_file, 'w') as f:
                 json.dump(goal_content, f, indent=2)
