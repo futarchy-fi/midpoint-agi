@@ -43,7 +43,7 @@ def test_generate_goal_id(goal_decomposer, tmp_path):
     
     # Test subgoal ID generation
     subgoal_id = goal_decomposer.generate_goal_id(goal_id, logs_dir=str(logs_dir))
-    assert subgoal_id == f"{goal_id}-S1"
+    assert subgoal_id == "S1"
     
     # Create a subgoal file
     subgoal_file = logs_dir / f"{subgoal_id}.json"
@@ -51,7 +51,7 @@ def test_generate_goal_id(goal_decomposer, tmp_path):
     
     # Test another subgoal ID generation
     subgoal_id2 = goal_decomposer.generate_goal_id(goal_id, logs_dir=str(logs_dir))
-    assert subgoal_id2 == f"{goal_id}-S2"
+    assert subgoal_id2 == "S2"
 
 def test_create_top_goal_file(goal_decomposer, test_context, tmp_path):
     """Test top-level goal file creation."""
@@ -85,7 +85,7 @@ def test_list_subgoal_files(goal_decomposer, tmp_path):
     # Create some test goal files
     goals = [
         {"goal_id": "G1", "next_step": "First goal", "parent_goal": "", "timestamp": "20250324_000001"},
-        {"goal_id": "G1-S1", "next_step": "First subgoal", "parent_goal": "G1.json", "timestamp": "20250324_000002"},
+        {"goal_id": "S1", "next_step": "First subgoal", "parent_goal": "G1.json", "timestamp": "20250324_000002"},
         {"goal_id": "G2", "next_step": "Second goal", "parent_goal": "", "timestamp": "20250324_000003"}
     ]
     
@@ -100,5 +100,5 @@ def test_list_subgoal_files(goal_decomposer, tmp_path):
     assert len(files) == 3
     file_ids = [f[4] for f in files]  # goal_id is the 5th element
     assert "G1" in file_ids
-    assert "G1-S1" in file_ids
+    assert "S1" in file_ids
     assert "G2" in file_ids 

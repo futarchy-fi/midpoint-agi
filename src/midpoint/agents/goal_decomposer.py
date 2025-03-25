@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import logging
 import traceback
+import re
 
 # Early initialization of logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -636,20 +637,35 @@ appropriate when the goal involves gaining knowledge or understanding without ch
         return serialized
 
     def generate_goal_id(self, parent_id=None, logs_dir="logs"):
-        """Generate a goal ID in format G1 or G1-S1"""
+        """Generate a goal ID in format G1, S1, or T1"""
         logs_path = Path(logs_dir)
         
-        # If a specific parent_id is provided, use that as the basis for the goal ID
+        # If a parent_id is provided, this is a subgoal
         if parent_id:
-            # For existing specific goal ID (like G3), use it directly for subgoals
-            parent_base = parent_id.split('.')[0]  # Remove .json extension if present
-            existing = [f for f in logs_path.glob(f"{parent_base}-S*.json")]
-            next_num = len(existing) + 1
-            return f"{parent_base}-S{next_num}"
+            # Find next available subgoal number
+            max_num = 0
+            for file_path in logs_path.glob("S*.json"):
+                # Match only files with pattern S followed by digits and .json
+                match = re.match(r"S(\d+)\.json$", file_path.name)
+                if match:
+                    num = int(match.group(1))
+                    max_num = max(max_num, num)
+            
+            # Next subgoal number is one more than the maximum found
+            next_num = max_num + 1
+            return f"S{next_num}"
         else:
             # For new top-level goals, find next available number
-            existing = [f for f in logs_path.glob("G*.json")]
-            next_num = len(existing) + 1
+            max_num = 0
+            for file_path in logs_path.glob("G*.json"):
+                # Match only files with pattern G followed by digits and .json
+                match = re.match(r"G(\d+)\.json$", file_path.name)
+                if match:
+                    num = int(match.group(1))
+                    max_num = max(max_num, num)
+            
+            # Next goal number is one more than the maximum found
+            next_num = max_num + 1
             return f"G{next_num}"
 
     def create_top_goal_file(self, context: TaskContext, logs_dir="logs") -> str:
