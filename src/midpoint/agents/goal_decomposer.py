@@ -930,7 +930,8 @@ async def decompose_goal(
             "parent_goal": parent_goal,
             "goal_id": subgoal_id,
             "timestamp": timestamp,
-            "iteration": context.iteration
+            "iteration": context.iteration,
+            "decomposed": True
         }
         
         # Ensure directory exists
