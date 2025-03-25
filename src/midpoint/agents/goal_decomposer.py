@@ -422,7 +422,6 @@ You MUST provide a structured response in JSON format with these fields:
         if not hasattr(context, 'metadata') or not context.metadata or 'parent_goal' not in context.metadata:
             # This is a top-level goal, create a goal file for it
             parent_goal_filename = self.create_top_goal_file(context)
-            logging.info(f"Created top-level goal file: {parent_goal_filename}")
         else:
             # This is a subgoal, parent is already set
             parent_goal_filename = context.metadata.get('parent_goal_file', '')
@@ -637,17 +636,19 @@ appropriate when the goal involves gaining knowledge or understanding without ch
     def generate_goal_id(self, parent_id=None, logs_dir="logs"):
         """Generate a goal ID in format G1 or G1-S1"""
         logs_path = Path(logs_dir)
-        if not parent_id:
-            # Find next available top-level goal number
-            existing = [f for f in logs_path.glob("G*.json")]
-            next_num = len(existing) + 1
-            return f"G{next_num}"
-        else:
-            # Find next available subgoal number for parent
+        
+        # If a specific parent_id is provided, use that as the basis for the goal ID
+        if parent_id:
+            # For existing specific goal ID (like G3), use it directly for subgoals
             parent_base = parent_id.split('.')[0]  # Remove .json extension if present
             existing = [f for f in logs_path.glob(f"{parent_base}-S*.json")]
             next_num = len(existing) + 1
             return f"{parent_base}-S{next_num}"
+        else:
+            # For new top-level goals, find next available number
+            existing = [f for f in logs_path.glob("G*.json")]
+            next_num = len(existing) + 1
+            return f"G{next_num}"
 
     def create_top_goal_file(self, context: TaskContext, logs_dir="logs") -> str:
         """
@@ -662,8 +663,12 @@ appropriate when the goal involves gaining knowledge or understanding without ch
         """
         logging.info("Creating top-level goal file")
         
-        # Generate a goal ID
-        goal_id = self.generate_goal_id(logs_dir=logs_dir)
+        # Use goal_id from context metadata if available, otherwise generate one
+        if hasattr(context, 'metadata') and context.metadata and 'goal_id' in context.metadata:
+            goal_id = context.metadata['goal_id']
+        else:
+            # Generate a goal ID
+            goal_id = self.generate_goal_id(logs_dir=logs_dir)
         
         # Create the output data for the top-level goal
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -867,7 +872,7 @@ async def decompose_goal(
     
     # Add metadata for parent goals and goal IDs
     if parent_goal:
-        context.metadata["parent_goal_id"] = parent_goal
+        context.metadata["parent_goal"] = parent_goal
     if goal_id:
         context.metadata["goal_id"] = goal_id
     

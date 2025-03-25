@@ -1139,7 +1139,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             repo_path=repo_path,
             goal=goal_content["description"],
             parent_goal=goal_id,
-            goal_id=None,  # Let decomposer generate the ID
+            goal_id=goal_id,  # Pass the goal_id explicitly
             debug=debug,
             quiet=quiet,
             bypass_validation=bypass_validation
