@@ -414,27 +414,19 @@ Use the store_memory_document tool to save this information with appropriate cat
                                     has_uncommitted_changes = bool(status_output.strip())
                                     
                                     if has_uncommitted_changes and task_completed:
-                                        # Check if this is a simple task like listing files that doesn't need commits
-                                        if "list" in task.lower() or "find" in task.lower() or "show" in task.lower() or "display" in task.lower():
-                                            # This is a simple informational task, ignore uncommitted changes
-                                            logger.info("Task is a simple informational task, ignoring uncommitted changes")
-                                        else:
-                                            logger.warning("Task marked as completed but uncommitted changes exist in repository")
-                                            task_completed = False
-                                            completion_reason = "Task has uncommitted changes in the repository"
+                                        # Remove the exception for informational tasks
+                                        logger.warning("Task marked as completed but uncommitted changes exist in repository")
+                                        task_completed = False
+                                        completion_reason = "Task has uncommitted changes in the repository"
                                 except Exception as e:
                                     logger.error(f"Error checking for uncommitted changes: {str(e)}")
                                 
                                 # If no memory documents and no code changes, but marked complete, it's an error
                                 if task_completed and not memory_documents and not made_code_changes:
-                                    # Check if this is a simple task like listing files that doesn't need changes
-                                    if "list" in task.lower() or "find" in task.lower() or "show" in task.lower() or "display" in task.lower():
-                                        # This is a simple informational task, keep it marked as completed
-                                        logger.info("Task is a simple informational task, marking as completed")
-                                    else:
-                                        logger.warning("Task marked as completed but no changes were made to code or memory")
-                                        task_completed = False
-                                        completion_reason = "Task did not make any changes to code or memory repositories"
+                                    # Remove the exception for informational tasks
+                                    logger.warning("Task marked as completed but no changes were made to code or memory")
+                                    task_completed = False
+                                    completion_reason = "Task did not make any changes to code or memory repositories"
                                 
                                 # Check if this is an exploratory task that's just getting started
                                 # We'll look for phrases indicating the model is still exploring
@@ -489,6 +481,32 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 else:
                                     logger.warning(f"❌ Task failed: {completion_reason}", extra=extra)
                                 
+                                # Create final state object
+                                current_hash = context.state.git_hash
+                                if made_code_changes:
+                                    # Get the latest hash if we made code changes
+                                    try:
+                                        current_hash = await get_current_hash(context.state.repository_path)
+                                    except Exception as e:
+                                        logger.error(f"Failed to get current hash: {str(e)}")
+                                
+                                # Also get current memory hash if applicable
+                                memory_hash = context.state.memory_hash
+                                if context.state.memory_repository_path:
+                                    try:
+                                        memory_hash = await get_current_hash(context.state.memory_repository_path)
+                                    except Exception as e:
+                                        logger.error(f"Failed to get memory hash: {str(e)}")
+                                
+                                # Create final state
+                                final_state = State(
+                                    git_hash=current_hash,
+                                    description=f"State after executing task: {task}",
+                                    repository_path=context.state.repository_path,
+                                    memory_hash=memory_hash,
+                                    memory_repository_path=context.state.memory_repository_path
+                                )
+                                
                                 return ExecutionResult(
                                     success=task_completed,
                                     branch_name=branch_name,
@@ -496,7 +514,8 @@ Use the store_memory_document tool to save this information with appropriate cat
                                     error_message=None if task_completed else completion_reason,
                                     execution_time=time.time() - start_time,
                                     repository_path=context.state.repository_path,
-                                    validation_results=validation_steps
+                                    validation_results=validation_steps,
+                                    final_state=final_state
                                 )
                                 
                             except asyncio.TimeoutError:

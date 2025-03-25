@@ -900,6 +900,12 @@ def show_goal_status():
         if goal.get("complete", False):
             status = "✅"
         else:
+            # Check for completed tasks and progress
+            progress = goal.get("progress", 0)
+            
+            # Check if the goal has completed tasks
+            has_completed_tasks = "completed_tasks" in goal and goal["completed_tasks"]
+            
             # Check if all subgoals are complete
             # Use case-insensitive comparison
             subgoals = {k: v for k, v in goal_files.items() 
@@ -911,22 +917,48 @@ def show_goal_status():
                 if goal.get("decomposed", False):
                     # If requires_further_decomposition is explicitly False, it's a directly executable task
                     if goal.get("requires_further_decomposition") is False or goal.get("is_task", False):
-                        status = "🔷"  # Directly executable task
+                        if "execution_result" in goal and goal["execution_result"].get("success"):
+                            status = "✅"  # Completed task
+                        else:
+                            status = "🔷"  # Directly executable task
                     else:
                         status = "🔘"  # No subgoals (not yet decomposed)
                 else:
                     status = "🔘"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
                 status = "🟠"  # All subgoals complete but not merged
+            elif has_completed_tasks or progress > 0:
+                status = "🟡"  # Partially completed (has some completed tasks)
             else:
                 status = "⚪"  # Some subgoals incomplete
         
-        print(f"{indent}{status} {goal_id}: {goal['description']}")
+        # Show progress percentage if available
+        progress_text = ""
+        if "progress" in goal and not goal.get("complete", False):
+            progress_text = f" [{goal['progress']}%]"
+        
+        print(f"{indent}{status} {goal_id}{progress_text}: {goal['description']}")
         
         # Print completion timestamp if available
         if goal.get("complete", False) and "completion_time" in goal:
             completion_time = goal["completion_time"]
             print(f"{indent}   Completed: {completion_time}")
+        
+        # Print current state if available
+        if "current_state" in goal and not goal.get("complete", False):
+            current_state = goal["current_state"]
+            last_updated = current_state.get("last_updated", "")
+            last_task = current_state.get("last_task", "")
+            if last_updated and last_task:
+                print(f"{indent}   Last updated: {last_updated} by task {last_task}")
+        
+        # Print completed tasks if available
+        if "completed_tasks" in goal and goal["completed_tasks"] and not goal.get("complete", False):
+            print(f"{indent}   Completed tasks:")
+            for task in goal["completed_tasks"]:
+                task_id = task.get("task_id", "")
+                timestamp = task.get("timestamp", "")
+                print(f"{indent}     - {task_id} at {timestamp}")
         
         # Print merged subgoals if available
         if "merged_subgoals" in goal and goal["merged_subgoals"]:
@@ -952,7 +984,8 @@ def show_goal_status():
     print("\nStatus Legend:")
     print("✅ Complete")
     print("🟠 All subgoals complete (ready to merge)")
-    print("⚪ Incomplete (some subgoals pending)")
+    print("🟡 Partially completed")
+    print("⚪ Incomplete (no tasks completed)")
     print("🔷 Directly executable task")
     print("🔘 Not yet decomposed")
 
@@ -1343,6 +1376,140 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         return False
 
 
+async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
+    """
+    Continue decomposition from the current state of a goal.
+    
+    Args:
+        goal_id: ID of the goal to continue
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and result
+        bypass_validation: Whether to bypass repository validation
+        
+    Returns:
+        Dictionary containing the decomposition result
+    """
+    logging.info(f"Continuing goal: {goal_id}")
+    
+    # Check if goal exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal file not found: {goal_file}")
+        return {
+            "success": False,
+            "error": f"Goal {goal_id} not found"
+        }
+    
+    try:
+        # Load goal data
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+        
+        # Check if goal has been decomposed
+        if not goal_data.get("decomposed", False):
+            logging.warning(f"Goal {goal_id} has not been decomposed yet. Using regular decomposition.")
+            return await decompose_existing_goal(goal_id, debug, quiet, bypass_validation)
+        
+        # Check if goal is already complete
+        if goal_data.get("complete", False):
+            logging.error(f"Goal {goal_id} is already marked as complete")
+            return {
+                "success": False,
+                "error": f"Goal {goal_id} is already complete"
+            }
+        
+        # Check if goal has current_state
+        if "current_state" not in goal_data:
+            logging.warning(f"Goal {goal_id} does not have a current state. Using regular decomposition.")
+            return await decompose_existing_goal(goal_id, debug, quiet, bypass_validation)
+        
+        # Get repository path
+        repo_path = goal_data["current_state"].get("repository_path")
+        if not repo_path:
+            logging.error(f"Goal {goal_id} current state does not have repository path")
+            return {
+                "success": False,
+                "error": f"Goal {goal_id} current state missing repository path"
+            }
+        
+        # Get current git hash
+        current_hash = goal_data["current_state"].get("git_hash")
+        if not current_hash:
+            logging.error(f"Goal {goal_id} current state does not have git hash")
+            return {
+                "success": False,
+                "error": f"Goal {goal_id} current state missing git hash"
+            }
+        
+        # Get memory repository if available
+        memory_repo = goal_data["current_state"].get("memory_repository_path")
+        memory_hash = goal_data["current_state"].get("memory_hash")
+        
+        # Get completed tasks
+        completed_tasks = goal_data.get("completed_tasks", [])
+        completed_ids = [task.get("task_id") for task in completed_tasks]
+        
+        if completed_ids:
+            logging.info(f"Found {len(completed_ids)} completed tasks: {', '.join(completed_ids)}")
+        
+        # Get progress
+        progress = goal_data.get("progress", 0)
+        if progress > 0:
+            logging.info(f"Current progress: {progress}%")
+        
+        # Add context about completed tasks to the goal description
+        goal_description = goal_data["description"]
+        if completed_ids:
+            context_addition = f"\n\nContext: The following tasks have already been completed: {', '.join(completed_ids)}."
+            if "Context:" not in goal_description:
+                goal_description += context_addition
+        
+        # Call the goal decomposer with the current state
+        result = await agent_decompose_goal(
+            repo_path=repo_path,
+            goal=goal_description,
+            parent_goal=goal_data.get("parent_goal", ""),
+            goal_id=goal_id,
+            memory_repo=memory_repo,
+            debug=debug,
+            quiet=quiet,
+            bypass_validation=bypass_validation,
+            logs_dir="logs",
+            goals_dir=GOAL_DIR
+        )
+        
+        if result["success"]:
+            logging.info(f"Successfully continued goal {goal_id}")
+            
+            # Mark the goal as having been decomposed again
+            goal_data["decomposed"] = True
+            goal_data["last_continued"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Update the goal file
+            with open(goal_file, 'w') as f:
+                json.dump(goal_data, f, indent=2)
+            
+            return {
+                "success": True,
+                "goal_id": goal_id,
+                "next_step": result["next_step"],
+                "requires_further_decomposition": result["requires_further_decomposition"],
+                "current_progress": progress
+            }
+        else:
+            logging.error(f"Failed to continue goal {goal_id}: {result.get('error', 'Unknown error')}")
+            return result
+    
+    except Exception as e:
+        logging.error(f"Error continuing goal {goal_id}: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Error continuing goal: {str(e)}"
+        }
+
+
 def convert_goal_ids():
     """Convert existing hierarchical goal IDs to the new flat ID system."""
     goal_path = ensure_goal_dir()
@@ -1637,7 +1804,34 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
     try:
         # Execute the task
         logging.info(f"Executing task: {task_description}")
+        
+        # Store initial state before execution
+        initial_state = {
+            "git_hash": context.state.git_hash,
+            "repository_path": context.state.repository_path,
+            "description": f"Initial state before executing task: {task_id}",
+            "memory_hash": context.state.memory_hash if hasattr(context.state, "memory_hash") else None,
+            "memory_repository_path": context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        }
+        
+        # Store initial state in task data
+        task_data["initial_state"] = initial_state
+        
+        # Execute the task
         result = await executor.execute_task(context, task_description)
+        
+        # Extract final state from the result
+        final_state = None
+        if hasattr(result, 'final_state') and result.final_state:
+            final_state = {
+                "git_hash": result.final_state.git_hash,
+                "repository_path": result.final_state.repository_path,
+                "description": result.final_state.description,
+                "memory_hash": result.final_state.memory_hash if hasattr(result.final_state, "memory_hash") else None,
+                "memory_repository_path": result.final_state.memory_repository_path if hasattr(result.final_state, "memory_repository_path") else None,
+                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            }
         
         # Save the result to the task file
         task_data["execution_result"] = {
@@ -1646,12 +1840,43 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
             "branch_name": result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name,
             "git_hash": result.git_hash,
             "error_message": result.error_message,
-            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "final_state": final_state
         }
         
         # Update the task file
         with open(task_file, 'w') as f:
             json.dump(task_data, f, indent=2)
+        
+        # Also save a separate task_result file in the .goal directory
+        results_dir = ensure_goal_dir() / "results"
+        results_dir.mkdir(exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_file = results_dir / f"{task_id}_result_{timestamp}.json"
+        
+        with open(result_file, 'w') as f:
+            json.dump({
+                "task_id": task_id,
+                "task": task_description,
+                "success": result.success,
+                "execution_time": result.execution_time,
+                "branch_name": result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name,
+                "git_hash": result.git_hash,
+                "error_message": result.error_message,
+                "validation_results": result.validation_results if hasattr(result, 'validation_results') else [],
+                "timestamp": timestamp,
+                "parent_goal": parent_goal_id,
+                "initial_state": initial_state,
+                "final_state": final_state
+            }, f, indent=2)
+        
+        logging.info(f"Saved execution result to: {result_file}")
+        
+        # Update parent goal's state if task was successful
+        if result.success and parent_goal_id:
+            updated_parent = update_parent_goal_state(parent_goal_id, task_id, result, final_state)
+            if updated_parent:
+                logging.info(f"Updated parent goal {parent_goal_id} state with task execution results")
         
         # Display results
         if result.success:
@@ -1688,6 +1913,117 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
         }
 
 
+def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_state):
+    """
+    Update the parent goal's state based on task execution results.
+    
+    Args:
+        parent_goal_id: ID of the parent goal
+        task_id: ID of the completed task
+        execution_result: The execution result object
+        final_state: The final state after execution
+        
+    Returns:
+        Boolean indicating whether the parent was successfully updated
+    """
+    goal_path = ensure_goal_dir()
+    parent_file = goal_path / f"{parent_goal_id}.json"
+    
+    if not parent_file.exists():
+        logging.error(f"Parent goal file not found: {parent_file}")
+        return False
+    
+    try:
+        # Load the parent goal data
+        with open(parent_file, 'r') as f:
+            parent_data = json.load(f)
+        
+        # Initialize initial_state if not present
+        if "initial_state" not in parent_data:
+            # First task completion will set the initial state of the parent goal
+            parent_data["initial_state"] = {
+                "git_hash": final_state["git_hash"],
+                "repository_path": final_state["repository_path"],
+                "description": f"Initial state recorded when first task {task_id} was completed",
+                "memory_hash": final_state.get("memory_hash"),
+                "memory_repository_path": final_state.get("memory_repository_path"),
+                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            }
+        
+        # If not tracking completed tasks yet, initialize the list
+        if "completed_tasks" not in parent_data:
+            parent_data["completed_tasks"] = []
+        
+        # Add this task to the list of completed tasks if not already there
+        task_already_recorded = False
+        for completed in parent_data["completed_tasks"]:
+            if completed.get("task_id") == task_id:
+                task_already_recorded = True
+                completed["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                completed["git_hash"] = execution_result.git_hash
+                completed["final_state"] = final_state
+                break
+                
+        if not task_already_recorded:
+            parent_data["completed_tasks"].append({
+                "task_id": task_id,
+                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "git_hash": execution_result.git_hash,
+                "final_state": final_state
+            })
+        
+        # Update the parent's current state to reflect the latest git hash
+        if "current_state" not in parent_data:
+            parent_data["current_state"] = {}
+            
+        parent_data["current_state"] = final_state
+        parent_data["current_state"]["last_updated"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        parent_data["current_state"]["last_task"] = task_id
+        
+        # Calculate completion progress if there are child tasks
+        children = get_child_tasks(parent_goal_id)
+        if children:
+            completed = sum(1 for child in children if 
+                           any(ct.get("task_id") == child["goal_id"] for ct in parent_data["completed_tasks"]))
+            parent_data["progress"] = round((completed / len(children)) * 100)
+        
+        # Save the updated parent data
+        with open(parent_file, 'w') as f:
+            json.dump(parent_data, f, indent=2)
+        
+        return True
+    except Exception as e:
+        logging.error(f"Failed to update parent goal: {str(e)}")
+        return False
+
+
+def get_child_tasks(parent_id):
+    """
+    Get all child tasks for a given parent goal.
+    
+    Args:
+        parent_id: ID of the parent goal
+        
+    Returns:
+        List of child task objects
+    """
+    goal_path = ensure_goal_dir()
+    child_tasks = []
+    
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                
+            # Check if this is a child of the parent and is a task
+            if data.get("parent_goal") == parent_id and data.get("is_task", False):
+                child_tasks.append(data)
+        except:
+            continue
+    
+    return child_tasks
+
+
 async def async_main(args):
     """Async entry point for CLI commands."""
     # Handle commands
@@ -1695,6 +2031,8 @@ async def async_main(args):
         return await decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
         return await execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+    elif args.command == "continue":
+        return await continue_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -1774,6 +2112,13 @@ def main():
     decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
     decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+    
+    # goal continue <goal-id>
+    continue_parser = subparsers.add_parser("continue", help="Continue decomposition from current state")
+    continue_parser.add_argument("goal_id", help="Goal ID to continue")
+    continue_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    continue_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    continue_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
 
     # goal execute <task-id>
     execute_parser = subparsers.add_parser("execute", help="Execute a task using the TaskExecutor")
@@ -1851,6 +2196,8 @@ def main():
     if args.command == "decompose":
         asyncio.run(async_main(args))
     elif args.command == "execute":
+        asyncio.run(async_main(args))
+    elif args.command == "continue":
         asyncio.run(async_main(args))
     else:
         # Handle synchronous commands directly
