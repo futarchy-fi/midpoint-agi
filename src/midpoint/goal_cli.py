@@ -9,6 +9,7 @@ import logging
 import datetime
 import subprocess
 import asyncio
+import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -59,28 +60,47 @@ def generate_goal_id(parent_id=None):
     goal_path = ensure_goal_dir()
     
     if not parent_id:
-        # Find next available top-level goal number
-        # Use a more specific pattern to only match top-level goal files (G1.json, G2.json, etc.)
-        # and exclude subgoal files (G1-S1.json, etc.)
-        import re
-        existing = []
+        # Find next available top-level goal number by finding the maximum existing goal number
+        max_num = 0
         for file_path in goal_path.glob("G*.json"):
             # Match only files with pattern G followed by digits and .json
-            if re.match(r"G\d+\.json$", file_path.name):
-                existing.append(file_path)
-        next_num = len(existing) + 1
+            match = re.match(r"G(\d+)\.json$", file_path.name)
+            if match:
+                num = int(match.group(1))
+                max_num = max(max_num, num)
+        
+        # Next goal number is one more than the maximum found
+        next_num = max_num + 1
         return f"G{next_num}"
     else:
         # Find next available subgoal number for parent
         parent_base = parent_id.split('.')[0]  # Remove .json extension if present
-        existing = [f for f in goal_path.glob(f"{parent_base}-S*.json")]
-        next_num = len(existing) + 1
+        max_num = 0
+        for file_path in goal_path.glob(f"{parent_base}-S*.json"):
+            # Match files with pattern parent_id-S followed by digits and .json
+            match = re.match(rf"{parent_base}-S(\d+)\.json$", file_path.name)
+            if match:
+                num = int(match.group(1))
+                max_num = max(max_num, num)
+        
+        # Next subgoal number is one more than the maximum found
+        next_num = max_num + 1
         return f"{parent_base}-S{next_num}"
 
 
 def create_goal_file(goal_id, description, parent_id=None):
     """Create a goal file with the given ID and description."""
     goal_path = ensure_goal_dir()
+    
+    # Check if file already exists to avoid overwriting
+    output_file = goal_path / f"{goal_id}.json"
+    if output_file.exists():
+        logging.warning(f"Goal file already exists: {output_file}")
+        # Generate a unique ID by appending a timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        goal_id = f"{goal_id}-{timestamp}"
+        output_file = goal_path / f"{goal_id}.json"
+        logging.info(f"Using alternative goal ID: {goal_id}")
     
     # Prepare the goal content
     goal_content = {
@@ -91,7 +111,6 @@ def create_goal_file(goal_id, description, parent_id=None):
     }
     
     # Write the goal file
-    output_file = goal_path / f"{goal_id}.json"
     with open(output_file, 'w') as f:
         json.dump(goal_content, f, indent=2)
         
