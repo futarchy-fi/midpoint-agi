@@ -10,6 +10,7 @@ import json
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+import subprocess
 
 # Add the parent directory to the Python path
 repo_root = Path(__file__).parent.parent
@@ -47,8 +48,27 @@ class TestMemoryTools(unittest.TestCase):
         with open(cross_ref_path, "w") as f:
             json.dump({}, f)
         
-        # Create a .git directory to simulate a real git repository
-        (self.memory_repo_path / ".git").mkdir(exist_ok=True)
+        # Create a .gitignore file
+        gitignore_path = self.memory_repo_path / ".gitignore"
+        with open(gitignore_path, "w") as f:
+            f.write("metadata/cross-reference.json\n")
+        
+        # Initialize a proper git repository
+        subprocess.run(["git", "init"], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "add", "."], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.memory_repo_path, check=True)
+        
+        # Get the current hash for future test use
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.repo_hash = result.stdout.strip()
         
         # Set up environment variables
         self.original_repo_path = os.environ.get("MEMORY_REPO_PATH")
@@ -98,7 +118,7 @@ class TestMemoryTools(unittest.TestCase):
         """Test that store_document creates the file and commits it."""
         # Set up the mocks
         mock_run.return_value = MagicMock(returncode=0)
-        mock_get_hash.return_value = "abcdef1234567890"
+        mock_get_hash.return_value = self.repo_hash  # Use the actual repo hash
         
         # Sample content and metadata
         content = "This is a test document"
@@ -114,7 +134,8 @@ class TestMemoryTools(unittest.TestCase):
             content=content,
             category=category,
             metadata=metadata,
-            repo_path=str(self.memory_repo_path)
+            repo_path=str(self.memory_repo_path),
+            memory_hash=self.repo_hash  # Use the actual repo hash
         )
         
         # Verify the function returned something
@@ -135,11 +156,26 @@ class TestMemoryTools(unittest.TestCase):
             with open(doc_path, "w") as f:
                 f.write(f"This is test document {i}")
         
+        # Add the new documents to git
+        subprocess.run(["git", "add", "."], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "commit", "-m", "Add test documents"], cwd=self.memory_repo_path, check=True)
+        
+        # Get the updated hash
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        docs_hash = result.stdout.strip()
+        
         # Call the function
         documents = retrieve_documents(
             category=category,
             limit=3,
-            repo_path=str(self.memory_repo_path)
+            repo_path=str(self.memory_repo_path),
+            memory_hash=docs_hash  # Use the actual hash
         )
         
         # Verify we got some results
@@ -201,6 +237,11 @@ class TestMemoryTools(unittest.TestCase):
 
     def test_get_memory_for_code_hash(self):
         """Test that get_memory_for_code_hash returns the correct hash."""
+        # First, add an empty cross-reference file to the initial commit
+        cross_ref_path = self.memory_repo_path / "metadata" / "cross-reference.json"
+        with open(cross_ref_path, "w") as f:
+            json.dump({}, f)
+        
         # Create a test cross-reference file with historical data
         code_hash = "1234567890abcdef"
         memory_hash1 = "aaaaaa1111111111"
@@ -219,14 +260,34 @@ class TestMemoryTools(unittest.TestCase):
             }
         }
         
-        cross_ref_path = self.memory_repo_path / "metadata" / "cross-reference.json"
+        # Write the updated content to the cross-reference file
         with open(cross_ref_path, "w") as f:
             json.dump(cross_ref, f)
+        
+        # Modify .gitignore to allow cross-reference.json for this test
+        gitignore_path = self.memory_repo_path / ".gitignore"
+        with open(gitignore_path, "w") as f:
+            f.write("# Allow cross-reference.json for testing\n")
+            
+        # Now commit the changes
+        subprocess.run(["git", "add", "."], cwd=self.memory_repo_path, check=True)
+        subprocess.run(["git", "commit", "-m", "Update cross-reference"], cwd=self.memory_repo_path, check=True)
+        
+        # Get the current hash
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        current_hash = result.stdout.strip()
         
         # Test getting the latest memory hash
         result = get_memory_for_code_hash(
             code_hash=code_hash,
-            repo_path=str(self.memory_repo_path)
+            repo_path=str(self.memory_repo_path),
+            memory_hash=current_hash  # Use the actual hash
         )
         
         # Verify the result is the latest memory hash
@@ -236,7 +297,8 @@ class TestMemoryTools(unittest.TestCase):
         historical_results = get_memory_for_code_hash(
             code_hash=code_hash,
             repo_path=str(self.memory_repo_path),
-            historical=True
+            historical=True,
+            memory_hash=current_hash  # Use the actual hash
         )
         
         # Verify we got both mappings
@@ -249,7 +311,8 @@ class TestMemoryTools(unittest.TestCase):
         timestamp_result = get_memory_for_code_hash(
             code_hash=code_hash,
             repo_path=str(self.memory_repo_path),
-            timestamp=past_time
+            timestamp=past_time + 10,  # Just after the first timestamp
+            memory_hash=current_hash  # Use the actual hash
         )
         
         # Verify we got the memory hash from the past
@@ -258,7 +321,8 @@ class TestMemoryTools(unittest.TestCase):
         # Test with a non-existent code hash
         non_existent = get_memory_for_code_hash(
             code_hash="nonexistentcodehashabcdef",
-            repo_path=str(self.memory_repo_path)
+            repo_path=str(self.memory_repo_path),
+            memory_hash=current_hash  # Include the memory_hash parameter
         )
         self.assertIsNone(non_existent)
 

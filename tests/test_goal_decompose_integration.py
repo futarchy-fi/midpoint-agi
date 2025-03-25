@@ -106,8 +106,13 @@ async def decompose_goal(**kwargs):
         "validation_criteria": ["Code passes tests", "Feature works as expected"],
         "requires_further_decomposition": True,
         "git_hash": "abcdef123456",
-        "memory_hash": None,
-        "goal_file": "G1-S1.json"
+        "memory_hash": "memhash123456",
+        "is_task": False,
+        "goal_file": "G1-S1.json",
+        "reasoning": "This is the reasoning for the implementation",
+        "relevant_context": "This is the relevant context for implementation",
+        "initial_memory_hash": "memhash123456",
+        "initial_git_hash": "abcdef123456"
     }
 """)
         
@@ -163,13 +168,13 @@ if __name__ == "__main__":
         
         # Expected messages in a successful execution
         expected_messages = [
-            "Goal G1 successfully decomposed into subgoals",
+            "Goal G1 successfully decomposed into a subgoal",
             "Next step: Implement feature X",
             "Validation criteria:",
             "- Code passes tests",
             "- Feature works as expected",
             "Requires further decomposition: Yes",
-            "Goal file:"
+            "Created file:"
         ]
         
         # Check for expected messages
@@ -200,7 +205,14 @@ async def decompose_goal(**kwargs):
         "next_step": "Debug step",
         "validation_criteria": ["Debug successful"],
         "requires_further_decomposition": False,
-        "goal_file": "debug.json"
+        "git_hash": "abcdef123456",
+        "memory_hash": "memhash123456",
+        "is_task": True,
+        "goal_file": "debug.json",
+        "reasoning": "This is the reasoning for the debug",
+        "relevant_context": "This is the relevant context for debugging",
+        "initial_memory_hash": "memhash123456",
+        "initial_git_hash": "abcdef123456"
     }
 """)
         

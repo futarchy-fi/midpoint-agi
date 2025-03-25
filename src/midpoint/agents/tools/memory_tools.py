@@ -190,16 +190,37 @@ class StoreMemoryDocumentTool(Tool):
                 "memory_repo_path": {
                     "type": "string",
                     "description": "Path to the memory repository (optional)"
+                },
+                "memory_hash": {
+                    "type": "string",
+                    "description": "The memory hash to operate on - must check out this hash before making changes (required)"
                 }
             },
-            "required": ["content"]
+            "required": ["content", "memory_hash"]
         }
     
-    async def execute(self, content: str, category: str = "general", metadata: Dict[str, Any] = None, memory_repo_path: str = None) -> Dict[str, Any]:
+    @property
+    def required_parameters(self) -> List[str]:
+        return ["content", "memory_hash"]
+    
+    async def execute(self, content: str, memory_hash: str, category: str = "general", metadata: Dict[str, Any] = None, memory_repo_path: str = None) -> Dict[str, Any]:
         """Store a document in the memory repository."""
         try:
-            # Call the implementation
-            document_path = system_store_document(content, category, metadata, memory_repo_path)
+            # Initialize metadata if None
+            metadata = metadata or {}
+            
+            # Always ensure memory_hash is included in metadata
+            if "memory_hash" not in metadata:
+                metadata["memory_hash"] = memory_hash
+            
+            # Call the implementation with memory_hash
+            document_path = system_store_document(
+                content=content,
+                category=category,
+                metadata=metadata,
+                repo_path=memory_repo_path,
+                memory_hash=memory_hash
+            )
             return {
                 "success": True,
                 "document_path": document_path
@@ -240,37 +261,53 @@ class RetrieveMemoryDocumentsTool(Tool):
                 "memory_repo_path": {
                     "type": "string",
                     "description": "Path to the memory repository (optional)"
+                },
+                "memory_hash": {
+                    "type": "string",
+                    "description": "The memory hash to operate on - must check out this hash before reading documents (required)"
                 }
             },
-            "required": []
+            "required": ["memory_hash"]
         }
     
-    async def execute(self, category: str = None, limit: int = 10, memory_repo_path: str = None) -> Dict[str, Any]:
+    @property
+    def required_parameters(self) -> List[str]:
+        return ["memory_hash"]
+    
+    async def execute(self, memory_hash: str, category: str = None, limit: int = 10, memory_repo_path: str = None) -> Dict[str, Any]:
         """Retrieve documents from the memory repository."""
-        # Call the implementation
-        documents = system_retrieve_documents(
-            category=category,
-            limit=limit,
-            repo_path=memory_repo_path
-        )
-        
-        # Format the results
-        result_docs = []
-        for path, content in documents:
-            # Truncate content if too long
-            truncated_content = content[:1000] + ("..." if len(content) > 1000 else "")
-            result_docs.append({
-                "path": path,
-                "content": truncated_content,
-                "full_content": content
-            })
-        
-        return {
-            "success": True,
-            "documents": result_docs,
-            "total": len(documents),
-            "message": f"Retrieved {len(documents)} documents"
-        }
+        try:
+            # Call the implementation with memory_hash
+            documents = system_retrieve_documents(
+                category=category,
+                limit=limit,
+                repo_path=memory_repo_path,
+                memory_hash=memory_hash
+            )
+            
+            # Format the results
+            result_docs = []
+            for path, content in documents:
+                # Truncate content if too long
+                truncated_content = content[:1000] + ("..." if len(content) > 1000 else "")
+                result_docs.append({
+                    "path": path,
+                    "content": truncated_content,
+                    "full_content": content
+                })
+            
+            return {
+                "success": True,
+                "documents": result_docs,
+                "total": len(documents),
+                "message": f"Retrieved {len(documents)} documents"
+            }
+        except Exception as e:
+            logging.error(f"Error retrieving documents: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
 # Instantiate and register the tools
 store_memory_document_tool = StoreMemoryDocumentTool()
@@ -280,19 +317,55 @@ ToolRegistry.register_tool(store_memory_document_tool)
 ToolRegistry.register_tool(retrieve_memory_documents_tool)
 
 # Export tool functions
-async def store_memory_document(content: str, category: str, metadata: Dict[str, Any] = None, memory_repo_path: str = None) -> Dict[str, Any]:
-    """Store a document in the memory repository."""
+async def store_memory_document(content: str, category: str, metadata: Dict[str, Any] = None, memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
+    """
+    Store a document in the memory repository.
+    
+    Args:
+        content: Content to store in the document
+        category: Category to store the document under
+        metadata: Additional metadata to store with the document
+        memory_repo_path: Path to the memory repository
+        memory_hash: REQUIRED hash to operate on - must check out this hash before making changes
+        
+    Returns:
+        Dictionary with success status and document information
+    """
+    # Validate memory_hash is present either as parameter or in metadata
+    if not memory_hash:
+        if metadata and "memory_hash" in metadata:
+            memory_hash = metadata["memory_hash"]
+        else:
+            raise ValueError("memory_hash is required - either as parameter or in metadata['memory_hash']")
+            
     return await store_memory_document_tool.execute(
         content=content,
         category=category,
         metadata=metadata,
-        memory_repo_path=memory_repo_path
+        memory_repo_path=memory_repo_path,
+        memory_hash=memory_hash
     )
 
-async def retrieve_memory_documents(category: str = None, limit: int = 10, memory_repo_path: str = None) -> Dict[str, Any]:
-    """Retrieve documents from the memory repository."""
+async def retrieve_memory_documents(category: str = None, limit: int = 10, memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
+    """
+    Retrieve documents from the memory repository.
+    
+    Args:
+        category: Category to retrieve documents from
+        limit: Maximum number of documents to retrieve
+        memory_repo_path: Path to the memory repository
+        memory_hash: REQUIRED hash to operate on - must check out this hash before reading documents
+        
+    Returns:
+        Dictionary with success status and document information
+    """
+    # Validate memory_hash is present
+    if not memory_hash:
+        raise ValueError("memory_hash is required")
+        
     return await retrieve_memory_documents_tool.execute(
         category=category,
         limit=limit,
-        memory_repo_path=memory_repo_path
+        memory_repo_path=memory_repo_path,
+        memory_hash=memory_hash
     ) 

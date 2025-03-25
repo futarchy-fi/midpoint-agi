@@ -346,7 +346,7 @@ class GoalDecomposer:
         Args:
             interaction_type: Type of interaction (e.g., 'conversation', 'reasoning', 'tool_use', 'final_output')
             content: Content of the interaction
-            metadata: Additional metadata about the interaction
+            metadata: Additional metadata about the interaction (must include memory_hash)
             memory_repo_path: Path to the memory repository (optional)
             
         Returns:
@@ -374,13 +374,22 @@ class GoalDecomposer:
         # Set the id field in metadata (used by store_document to create the filename)
         metadata["id"] = f"{timestamp}_goal_decomposer_{interaction_type}"
         
+        # Extract the memory hash from metadata - this is now REQUIRED
+        memory_hash = metadata.get("memory_hash")
+        if not memory_hash:
+            logging.error(f"Cannot save to memory: memory_hash is required in metadata")
+            return {"success": False, "error": "memory_hash is required in metadata"}
+        
+        logging.info(f"Saving to memory with hash: {memory_hash}")
+        
         # Store the document
         try:
             result = await store_memory_document(
                 content=content,
                 category=category,
                 metadata=metadata,
-                memory_repo_path=memory_repo_path
+                memory_repo_path=memory_repo_path,
+                memory_hash=memory_hash  # Explicitly pass the memory_hash
             )
             # Log more detailed information about the memory result
             logging.info(f"Saved {interaction_type} to memory: {result}")
@@ -497,6 +506,11 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         # Get memory repository path if available
         memory_repo_path = context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None
         
+        # Get memory hash if available - we'll use this to ensure we save to the correct memory state
+        memory_hash = context.state.memory_hash if hasattr(context.state, "memory_hash") else None
+        if memory_hash:
+            logging.info(f"Using existing memory hash from context state: {memory_hash}")
+        
         # Initialize messages
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -572,7 +586,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                         "goal": context.goal.description, 
                         "message_count": len(serialized_messages),
                         "next_step": final_output.next_step,
-                        "requires_further_decomposition": final_output.requires_further_decomposition
+                        "requires_further_decomposition": final_output.requires_further_decomposition,
+                        "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
                     memory_repo_path=memory_repo_path
                 )
@@ -615,7 +630,10 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 memory_result = await self._save_interaction_to_memory(
                     interaction_type="conversation",
                     content=json.dumps(conversation_data, indent=2),
-                    metadata={"timestamp": int(time.time())},
+                    metadata={
+                        "timestamp": int(time.time()),
+                        "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
+                    },
                     memory_repo_path=memory_repo_path
                 )
                 
@@ -667,7 +685,11 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             await self._save_interaction_to_memory(
                 interaction_type="error",
                 content=f"Error in determine_next_step: {str(e)}\n\n{traceback.format_exc()}",
-                metadata={"error_type": type(e).__name__, "goal": context.goal.description},
+                metadata={
+                    "error_type": type(e).__name__, 
+                    "goal": context.goal.description,
+                    "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
+                },
                 memory_repo_path=memory_repo_path
             )
             # Let the main function handle the specific error types
@@ -980,10 +1002,73 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
             context.metadata["relevant_context"] = data["relevant_context"]
             logging.info("Added relevant context from input file")
             
+        # Add memory information from current_state if available
+        if "current_state" in data:
+            current_state = data["current_state"]
+            
+            # Update git_hash from current_state
+            if "git_hash" in current_state:
+                context.state.git_hash = current_state["git_hash"]
+                logging.info(f"Using git_hash from input file: {current_state['git_hash']}")
+                
+            # Update memory_hash from current_state
+            if "memory_hash" in current_state:
+                context.state.memory_hash = current_state["memory_hash"]
+                logging.info(f"Using memory_hash from input file: {current_state['memory_hash']}")
+                
+            # Update memory_repository_path from current_state
+            if "memory_repository_path" in current_state:
+                context.state.memory_repository_path = current_state["memory_repository_path"]
+                logging.info(f"Using memory_repository_path from input file: {current_state['memory_repository_path']}")
+                
+            # Update other memory-related fields if available
+            if "memory_reference" in current_state:
+                context.state.memory_reference = current_state["memory_reference"]
+                logging.info(f"Using memory_reference from input file: {current_state['memory_reference']}")
+                
+            if "memory_document_path" in current_state:
+                context.state.memory_document_path = current_state["memory_document_path"]
+            
+            if "memory_timestamp" in current_state:
+                context.state.memory_timestamp = current_state["memory_timestamp"]
+            
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON in input file: {input_file}")
     except Exception as e:
         raise RuntimeError(f"Failed to load input file: {str(e)}")
+
+async def is_git_ancestor(repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
+    """
+    Check if one hash is an ancestor of another in a git repository.
+    
+    Args:
+        repo_path: Path to the git repository
+        ancestor_hash: The hash to check if it's an ancestor
+        descendant_hash: The hash to check if it's a descendant
+        
+    Returns:
+        True if ancestor_hash is an ancestor of descendant_hash, False otherwise
+    """
+    if ancestor_hash == descendant_hash:
+        return True
+        
+    try:
+        # Use git merge-base --is-ancestor to check if one hash is an ancestor of another
+        process = await asyncio.create_subprocess_exec(
+            "git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash,
+            cwd=repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Wait for the command to complete
+        await process.communicate()
+        
+        # The command returns 0 if it's an ancestor, 1 if not
+        return process.returncode == 0
+    except Exception as e:
+        logging.error(f"Error checking git ancestry: {str(e)}")
+        return False
 
 async def decompose_goal(
     repo_path: str,
@@ -1025,34 +1110,7 @@ async def decompose_goal(
         description="Initial state before goal decomposition"
     )
     
-    # Add memory hash and path if available
-    if memory_repo:
-        try:
-            # Get the initial memory hash (first commit) instead of current hash
-            # This ensures all goals start with the same base memory state
-            result = subprocess.run(
-                ["git", "rev-list", "--max-parents=0", "HEAD"],
-                cwd=memory_repo,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            initial_memory_hash = result.stdout.strip()
-            logging.info(f"Using initial memory repository hash: {initial_memory_hash}")
-            
-            state.memory_hash = initial_memory_hash
-            state.memory_repository_path = memory_repo
-        except Exception as e:
-            logging.warning(f"Failed to get initial memory hash: {e}")
-            # Fallback to current hash if initial hash retrieval fails
-            try:
-                memory_hash = await get_current_hash(memory_repo)
-                state.memory_hash = memory_hash
-                state.memory_repository_path = memory_repo
-                logging.warning(f"Falling back to current memory hash: {memory_hash}")
-            except Exception as e2:
-                logging.warning(f"Failed to get memory repository hash: {e2}")
-    
+    # Create context before loading input file
     context = TaskContext(
         state=state,
         goal=Goal(description=goal),
@@ -1061,15 +1119,27 @@ async def decompose_goal(
         metadata={}
     )
     
-    # Load input file if specified
+    # Load input file if specified - this will override state with values from the file
     if input_file:
         await load_input_file(input_file, context)
+    else:
+        # Only set memory_repository_path if memory_repo is provided and we don't have input file
+        # This ensures memory_repo is NEVER used when input_file is provided
+        if memory_repo:
+            logging.info(f"Setting memory repository path to: {memory_repo}")
+            state.memory_repository_path = memory_repo
+            # We don't set memory_hash here because we don't want to initialize memory
+            # without explicit instructions (this would be a new goal with no memory yet)
     
     # Add metadata for parent goals and goal IDs
     if parent_goal:
         context.metadata["parent_goal"] = parent_goal
     if goal_id:
         context.metadata["goal_id"] = goal_id
+    
+    # Store the initial memory hash and git hash for sanity checking later
+    initial_memory_hash = context.state.memory_hash
+    initial_git_hash = context.state.git_hash
     
     # Validate repository state
     if not bypass_validation:
@@ -1088,9 +1158,38 @@ async def decompose_goal(
     # Determine next step
     subgoal_plan = await decomposer.determine_next_step(context)
     
-    # Get current git hash and memory hash
+    # Get current git hash
     git_hash = await get_current_hash(repo_path)
-    memory_hash = state.memory_hash
+    
+    # Use memory_hash from context state (which was either loaded from input_file or never set)
+    memory_hash = context.state.memory_hash
+    
+    # Sanity check: Verify that the final git hash is a descendant of the initial git hash
+    if initial_git_hash and git_hash and initial_git_hash != git_hash:
+        is_descendant = await is_git_ancestor(
+            repo_path,
+            initial_git_hash,
+            git_hash
+        )
+        if not is_descendant:
+            logging.warning(f"REPO ANCESTRY CHECK FAILED: Final git hash {git_hash} is not a descendant of initial git hash {initial_git_hash}")
+            # Don't fail the operation, but log the warning
+        else:
+            logging.info(f"Repo ancestry check passed: {git_hash} is a descendant of {initial_git_hash}")
+    
+    # Sanity check: Verify that the final memory hash is a descendant of the initial memory hash
+    if initial_memory_hash and memory_hash and initial_memory_hash != memory_hash:
+        if context.state.memory_repository_path:
+            is_descendant = await is_git_ancestor(
+                context.state.memory_repository_path, 
+                initial_memory_hash, 
+                memory_hash
+            )
+            if not is_descendant:
+                logging.warning(f"MEMORY ANCESTRY CHECK FAILED: Final memory hash {memory_hash} is not a descendant of initial memory hash {initial_memory_hash}")
+                # Don't fail the operation, but log the warning
+            else:
+                logging.info(f"Memory ancestry check passed: {memory_hash} is a descendant of {initial_memory_hash}")
     
     # Return the decomposition result without creating any files
     return {
@@ -1107,7 +1206,11 @@ async def decompose_goal(
         # Include memory reference ID (preferred) and other memory information
         "memory_reference": getattr(context.state, "memory_reference", None),
         "memory_document_path": getattr(context.state, "memory_document_path", None),
-        "memory_timestamp": getattr(context.state, "memory_timestamp", None)
+        "memory_timestamp": getattr(context.state, "memory_timestamp", None),
+        # Include initial memory hash for reference
+        "initial_memory_hash": initial_memory_hash,
+        # Include initial git hash for reference
+        "initial_git_hash": initial_git_hash
     }
 
 # Create a separate async entry point for CLI to avoid nesting asyncio.run() calls

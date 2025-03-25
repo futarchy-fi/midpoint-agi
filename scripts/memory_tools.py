@@ -31,8 +31,20 @@ def get_current_hash(repo_path):
     )
     return result.stdout.strip()
 
-def store_document(content, category, metadata=None, repo_path=None):
-    """Store a document in the memory repository."""
+def store_document(content, category, metadata=None, repo_path=None, memory_hash=None):
+    """
+    Store a document in the memory repository.
+    
+    Args:
+        content: Content to store in the document
+        category: Category to store the document under
+        metadata: Additional metadata to store with the document
+        repo_path: Path to the memory repository
+        memory_hash: Required hash to operate on - must check out this hash before making changes
+        
+    Returns:
+        Dictionary with document path, memory hash, and other metadata
+    """
     # Get repository path
     repo_path = repo_path or get_repo_path()
     repo_path = Path(repo_path)
@@ -40,136 +52,375 @@ def store_document(content, category, metadata=None, repo_path=None):
     # Default metadata
     metadata = metadata or {}
     
+    # Validate there's either memory_hash parameter or in metadata
+    target_hash = memory_hash or metadata.get("memory_hash")
+    if not target_hash:
+        raise ValueError("Memory hash is required - either as parameter or in metadata['memory_hash']")
+    
     # Create a filename based on metadata
     filename = f"{metadata.get('id', 'doc')}_{int(time.time())}.md"
     doc_path = repo_path / "documents" / category / filename
     
     # Ensure directory exists
     doc_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Write content
-    with open(doc_path, "w") as f:
-        f.write(content)
-    
-    # Add to git
-    subprocess.run(["git", "add", str(doc_path)], cwd=repo_path, check=True)
-    
-    # Commit
-    message = metadata.get("commit_message", f"Add {category} document: {filename}")
-    commit_result = subprocess.run(["git", "commit", "-m", message], cwd=repo_path, capture_output=True, text=True, check=True)
-    
-    # Log the git commit output at debug level
-    if hasattr(logging, 'debug') and commit_result.stdout:
-        logging.debug(commit_result.stdout.strip())
-    
-    # Get commit hash
-    commit_hash = get_current_hash(repo_path)
-    
-    # Update cross-reference if code hash is provided
-    if "code_hash" in metadata:
-        update_cross_reference(metadata["code_hash"], commit_hash, repo_path)
-    
-    # Log storage information at debug level instead of printing
-    if hasattr(logging, 'debug'):
-        logging.debug(f"Stored document at: {doc_path}")
-        logging.debug(f"Commit hash: {commit_hash}")
-    
-    relative_path = str(doc_path.relative_to(repo_path))
-    
-    # Return comprehensive information about the stored document
-    return {
-        "path": relative_path,
-        "memory_hash": commit_hash,
-        "category": category,
-        "filename": filename
-    }
 
-def retrieve_documents(category=None, limit=10, repo_path=None):
-    """Retrieve documents from the memory repository."""
-    # Get repository path
-    repo_path = repo_path or get_repo_path()
-    repo_path = Path(repo_path)
-    
-    # Set search path
-    if category:
-        search_path = repo_path / "documents" / category
-    else:
-        search_path = repo_path / "documents"
-    
-    if not search_path.exists():
+    # Keep track of original position to restore later
+    original_branch = None
+
+    try:
+        # Save the current branch or commit we're on
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            # If symbolic-ref succeeds, we're on a branch
+            if result.returncode == 0:
+                original_branch = result.stdout.strip()
+            else:
+                # If symbolic-ref fails, we're in detached HEAD state
+                original_branch = get_current_hash(repo_path)
+            
+            logging.debug(f"Memory: Saved original position: {original_branch}")
+        except Exception as e:
+            logging.warning(f"Memory: Failed to get current branch: {str(e)}")
+            original_branch = None
+        
+        # Check if already at target_hash
+        current_hash = get_current_hash(repo_path)
+        if current_hash != target_hash:
+            # Check if the target hash exists
+            hash_check = subprocess.run(
+                ["git", "cat-file", "-t", target_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if hash_check.returncode == 0:
+                logging.debug(f"Memory: Checking out target hash: {target_hash}")
+                # Checkout the target hash
+                checkout_result = subprocess.run(
+                    ["git", "checkout", target_hash],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if checkout_result.returncode != 0:
+                    error_msg = checkout_result.stderr
+                    logging.error(f"Memory: Failed to checkout target hash: {target_hash}, error: {error_msg}")
+                    raise ValueError(f"Cannot checkout memory hash: {target_hash}. Error: {error_msg}")
+            else:
+                error_msg = hash_check.stderr
+                logging.error(f"Memory: Target hash does not exist: {target_hash}, error: {error_msg}")
+                raise ValueError(f"Memory hash does not exist: {target_hash}. Error: {error_msg}")
+        else:
+            logging.debug(f"Memory: Already at target hash: {target_hash}")
+        
+        # Write content
+        with open(doc_path, "w") as f:
+            f.write(content)
+        
+        # Add to git
+        subprocess.run(["git", "add", str(doc_path)], cwd=repo_path, check=True)
+        
+        # Commit
+        message = metadata.get("commit_message", f"Add {category} document: {filename}")
+        commit_result = subprocess.run(["git", "commit", "-m", message], cwd=repo_path, capture_output=True, text=True, check=True)
+        
+        # Log the git commit output at debug level
+        if hasattr(logging, 'debug') and commit_result.stdout:
+            logging.debug(commit_result.stdout.strip())
+        
+        # Get commit hash
+        commit_hash = get_current_hash(repo_path)
+        
+        # Update cross-reference if code hash is provided
+        if "code_hash" in metadata:
+            update_cross_reference(metadata["code_hash"], commit_hash, repo_path)
+        
+        # Log storage information at debug level instead of printing
         if hasattr(logging, 'debug'):
-            logging.debug(f"Path does not exist: {search_path}")
-        return []
-    
-    # Find all .md files
-    files = list(search_path.glob("**/*.md"))
-    
-    # Sort by modification time (newest first)
-    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    
-    # Limit results
-    files = files[:limit]
-    
-    # Read contents
-    results = []
-    for file in files:
-        with open(file, "r") as f:
-            results.append((str(file.relative_to(repo_path)), f.read()))
-    
-    return results
+            logging.debug(f"Stored document at: {doc_path}")
+            logging.debug(f"Commit hash: {commit_hash}")
+        
+        relative_path = str(doc_path.relative_to(repo_path))
+        
+        # Return comprehensive information about the stored document
+        return {
+            "path": relative_path,
+            "memory_hash": commit_hash,
+            "category": category,
+            "filename": filename
+        }
+    finally:
+        # Restore original branch if we changed it
+        if original_branch and current_hash != target_hash:
+            try:
+                logging.debug(f"Memory: Restoring original position: {original_branch}")
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as e:
+                logging.warning(f"Memory: Failed to restore original branch: {str(e)}")
 
-def update_cross_reference(code_hash, memory_hash, repo_path=None):
-    """Update the cross-reference between code and memory repositories."""
+def retrieve_documents(category=None, limit=10, repo_path=None, memory_hash=None):
+    """
+    Retrieve documents from the memory repository.
+    
+    Args:
+        category: Category to retrieve documents from
+        limit: Maximum number of documents to retrieve
+        repo_path: Path to the memory repository
+        memory_hash: Required hash to operate on - must check out this hash before reading documents
+        
+    Returns:
+        List of (path, content) tuples for documents
+    """
     # Get repository path
     repo_path = repo_path or get_repo_path()
     repo_path = Path(repo_path)
     
-    cross_ref_path = repo_path / "metadata" / "cross-reference.json"
+    # Validate memory_hash parameter
+    if not memory_hash:
+        raise ValueError("Memory hash is required")
     
-    # Ensure directory exists
-    cross_ref_path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep track of original position to restore later
+    original_branch = None
     
-    # Load existing cross-reference
-    if cross_ref_path.exists():
-        with open(cross_ref_path, "r") as f:
-            cross_ref = json.load(f)
-    else:
-        cross_ref = {
-            "mappings": [],
-            "latest": {}
-        }
-    
-    # Ensure the structure has both mappings and latest
-    if "mappings" not in cross_ref:
-        cross_ref["mappings"] = []
-    if "latest" not in cross_ref:
-        cross_ref["latest"] = {}
-    
-    # Add to mappings history with timestamp
-    mapping = {
-        "code_hash": code_hash,
-        "memory_hash": memory_hash,
-        "timestamp": int(time.time())
-    }
-    cross_ref["mappings"].append(mapping)
-    
-    # Update the latest mapping
-    cross_ref["latest"][code_hash] = memory_hash
-    
-    # Save updated cross-reference
-    with open(cross_ref_path, "w") as f:
-        json.dump(cross_ref, f, indent=2)
-    
-    # We don't add cross-reference.json to git or commit it
-    # since it's in .gitignore and is managed separately
-    
-    # Log cross-reference update at debug level instead of printing
-    if hasattr(logging, 'debug'):
-        logging.debug(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
-    else:
-        print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+    try:
+        # Save the current branch or commit we're on
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            # If symbolic-ref succeeds, we're on a branch
+            if result.returncode == 0:
+                original_branch = result.stdout.strip()
+            else:
+                # If symbolic-ref fails, we're in detached HEAD state
+                original_branch = get_current_hash(repo_path)
+            
+            logging.debug(f"Memory: Saved original position: {original_branch}")
+        except Exception as e:
+            logging.warning(f"Memory: Failed to get current branch: {str(e)}")
+            original_branch = None
+        
+        # Check if already at memory_hash
+        current_hash = get_current_hash(repo_path)
+        if current_hash != memory_hash:
+            # Check if the target hash exists
+            hash_check = subprocess.run(
+                ["git", "cat-file", "-t", memory_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if hash_check.returncode == 0:
+                logging.debug(f"Memory: Checking out memory hash: {memory_hash}")
+                # Checkout the memory hash
+                checkout_result = subprocess.run(
+                    ["git", "checkout", memory_hash],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if checkout_result.returncode != 0:
+                    error_msg = checkout_result.stderr
+                    logging.error(f"Memory: Failed to checkout memory hash: {memory_hash}, error: {error_msg}")
+                    raise ValueError(f"Cannot checkout memory hash: {memory_hash}. Error: {error_msg}")
+            else:
+                error_msg = hash_check.stderr
+                logging.error(f"Memory: Memory hash does not exist: {memory_hash}, error: {error_msg}")
+                raise ValueError(f"Memory hash does not exist: {memory_hash}. Error: {error_msg}")
+        else:
+            logging.debug(f"Memory: Already at memory hash: {memory_hash}")
+        
+        # Set search path
+        if category:
+            search_path = repo_path / "documents" / category
+        else:
+            search_path = repo_path / "documents"
+        
+        if not search_path.exists():
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Path does not exist: {search_path}")
+            return []
+        
+        # Find all .md files
+        files = list(search_path.glob("**/*.md"))
+        
+        # Sort by modification time (newest first)
+        files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        # Limit results
+        files = files[:limit]
+        
+        # Read contents
+        results = []
+        for file in files:
+            with open(file, "r") as f:
+                results.append((str(file.relative_to(repo_path)), f.read()))
+        
+        return results
+    finally:
+        # Restore original branch if we changed it
+        if original_branch and current_hash != memory_hash:
+            try:
+                logging.debug(f"Memory: Restoring original position: {original_branch}")
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as e:
+                logging.warning(f"Memory: Failed to restore original branch: {str(e)}")
 
-def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timestamp=None):
+def update_cross_reference(code_hash, memory_hash, repo_path=None, base_memory_hash=None):
+    """
+    Update the cross-reference between code and memory repositories.
+    
+    Args:
+        code_hash: The code repository commit hash
+        memory_hash: The memory repository commit hash to reference
+        repo_path: Path to the memory repository
+        base_memory_hash: Required hash to operate on - must check out this hash before updating cross-reference
+    """
+    # Get repository path
+    repo_path = repo_path or get_repo_path()
+    repo_path = Path(repo_path)
+    
+    # Validate base_memory_hash parameter
+    if not base_memory_hash:
+        base_memory_hash = memory_hash  # Default to the memory hash we're referencing
+    
+    # Keep track of original position to restore later
+    original_branch = None
+    
+    try:
+        # Save the current branch or commit we're on
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            # If symbolic-ref succeeds, we're on a branch
+            if result.returncode == 0:
+                original_branch = result.stdout.strip()
+            else:
+                # If symbolic-ref fails, we're in detached HEAD state
+                original_branch = get_current_hash(repo_path)
+            
+            logging.debug(f"Memory: Saved original position: {original_branch}")
+        except Exception as e:
+            logging.warning(f"Memory: Failed to get current branch: {str(e)}")
+            original_branch = None
+        
+        # Check if already at base_memory_hash
+        current_hash = get_current_hash(repo_path)
+        if current_hash != base_memory_hash:
+            # Check if the base hash exists
+            hash_check = subprocess.run(
+                ["git", "cat-file", "-t", base_memory_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if hash_check.returncode == 0:
+                logging.debug(f"Memory: Checking out base memory hash: {base_memory_hash}")
+                # Checkout the base memory hash
+                checkout_result = subprocess.run(
+                    ["git", "checkout", base_memory_hash],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if checkout_result.returncode != 0:
+                    error_msg = checkout_result.stderr
+                    logging.error(f"Memory: Failed to checkout base memory hash: {base_memory_hash}, error: {error_msg}")
+                    raise ValueError(f"Cannot checkout base memory hash: {base_memory_hash}. Error: {error_msg}")
+            else:
+                error_msg = hash_check.stderr
+                logging.error(f"Memory: Base memory hash does not exist: {base_memory_hash}, error: {error_msg}")
+                raise ValueError(f"Base memory hash does not exist: {base_memory_hash}. Error: {error_msg}")
+        else:
+            logging.debug(f"Memory: Already at base memory hash: {base_memory_hash}")
+        
+        cross_ref_path = repo_path / "metadata" / "cross-reference.json"
+        
+        # Ensure directory exists
+        cross_ref_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load existing cross-reference
+        if cross_ref_path.exists():
+            with open(cross_ref_path, "r") as f:
+                cross_ref = json.load(f)
+        else:
+            cross_ref = {
+                "mappings": [],
+                "latest": {}
+            }
+        
+        # Ensure the structure has both mappings and latest
+        if "mappings" not in cross_ref:
+            cross_ref["mappings"] = []
+        if "latest" not in cross_ref:
+            cross_ref["latest"] = {}
+        
+        # Add to mappings history with timestamp
+        mapping = {
+            "code_hash": code_hash,
+            "memory_hash": memory_hash,
+            "timestamp": int(time.time())
+        }
+        cross_ref["mappings"].append(mapping)
+        
+        # Update the latest mapping
+        cross_ref["latest"][code_hash] = memory_hash
+        
+        # Save updated cross-reference
+        with open(cross_ref_path, "w") as f:
+            json.dump(cross_ref, f, indent=2)
+        
+        # We don't add cross-reference.json to git or commit it
+        # since it's in .gitignore and is managed separately
+        
+        # Log cross-reference update at debug level instead of printing
+        if hasattr(logging, 'debug'):
+            logging.debug(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+        else:
+            print(f"Updated cross-reference: {code_hash[:7]} -> {memory_hash[:7]}")
+    finally:
+        # Restore original branch if we changed it
+        if original_branch and current_hash != base_memory_hash:
+            try:
+                logging.debug(f"Memory: Restoring original position: {original_branch}")
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as e:
+                logging.warning(f"Memory: Failed to restore original branch: {str(e)}")
+
+def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timestamp=None, memory_hash=None):
     """
     Get the memory hash corresponding to a code hash.
     
@@ -178,6 +429,7 @@ def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timest
         repo_path: Path to the memory repository
         historical: If True, returns all historical mappings for this code hash
         timestamp: If provided, returns the mapping closest to this timestamp
+        memory_hash: Required hash to operate on - must check out this hash before reading cross-reference
         
     Returns:
         If historical=True: List of mappings for this code hash
@@ -188,79 +440,152 @@ def get_memory_for_code_hash(code_hash, repo_path=None, historical=False, timest
     repo_path = repo_path or get_repo_path()
     repo_path = Path(repo_path)
     
-    cross_ref_path = repo_path / "metadata" / "cross-reference.json"
+    # Validate memory_hash parameter
+    if not memory_hash:
+        raise ValueError("Memory hash is required")
     
-    if not cross_ref_path.exists():
-        if hasattr(logging, 'debug'):
-            logging.debug(f"Cross-reference file not found: {cross_ref_path}")
-        else:
-            print(f"Cross-reference file not found: {cross_ref_path}")
-        return None
+    # Keep track of original position to restore later
+    original_branch = None
     
-    # Load cross-reference
-    with open(cross_ref_path, "r") as f:
-        cross_ref = json.load(f)
-    
-    # Handle old format
-    if not isinstance(cross_ref, dict) or ("mappings" not in cross_ref and "latest" not in cross_ref):
-        # Old format - convert
-        old_data = cross_ref
-        cross_ref = {
-            "mappings": [
-                {"code_hash": k, "memory_hash": v, "timestamp": int(time.time())}
-                for k, v in old_data.items()
-            ],
-            "latest": old_data
-        }
-    
-    # Return all historical mappings if requested
-    if historical:
-        historical_mappings = [
-            mapping for mapping in cross_ref.get("mappings", [])
-            if mapping["code_hash"] == code_hash
-        ]
-        if historical_mappings:
-            if hasattr(logging, 'debug'):
-                logging.debug(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+    try:
+        # Save the current branch or commit we're on
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            # If symbolic-ref succeeds, we're on a branch
+            if result.returncode == 0:
+                original_branch = result.stdout.strip()
             else:
-                print(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+                # If symbolic-ref fails, we're in detached HEAD state
+                original_branch = get_current_hash(repo_path)
+            
+            logging.debug(f"Memory: Saved original position: {original_branch}")
+        except Exception as e:
+            logging.warning(f"Memory: Failed to get current branch: {str(e)}")
+            original_branch = None
+        
+        # Check if already at memory_hash
+        current_hash = get_current_hash(repo_path)
+        if current_hash != memory_hash:
+            # Check if the memory hash exists
+            hash_check = subprocess.run(
+                ["git", "cat-file", "-t", memory_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if hash_check.returncode == 0:
+                logging.debug(f"Memory: Checking out memory hash: {memory_hash}")
+                # Checkout the memory hash
+                checkout_result = subprocess.run(
+                    ["git", "checkout", memory_hash],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if checkout_result.returncode != 0:
+                    error_msg = checkout_result.stderr
+                    logging.error(f"Memory: Failed to checkout memory hash: {memory_hash}, error: {error_msg}")
+                    raise ValueError(f"Cannot checkout memory hash: {memory_hash}. Error: {error_msg}")
+            else:
+                error_msg = hash_check.stderr
+                logging.error(f"Memory: Memory hash does not exist: {memory_hash}, error: {error_msg}")
+                raise ValueError(f"Memory hash does not exist: {memory_hash}. Error: {error_msg}")
+        else:
+            logging.debug(f"Memory: Already at memory hash: {memory_hash}")
+        
+        cross_ref_path = repo_path / "metadata" / "cross-reference.json"
+        
+        if not cross_ref_path.exists():
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Cross-reference file not found: {cross_ref_path}")
+            else:
+                print(f"Cross-reference file not found: {cross_ref_path}")
+            return None
+        
+        # Load cross-reference
+        with open(cross_ref_path, "r") as f:
+            cross_ref = json.load(f)
+        
+        # Handle old format
+        if not isinstance(cross_ref, dict) or ("mappings" not in cross_ref and "latest" not in cross_ref):
+            # Old format - convert
+            old_data = cross_ref
+            cross_ref = {
+                "mappings": [
+                    {"code_hash": k, "memory_hash": v, "timestamp": int(time.time())}
+                    for k, v in old_data.items()
+                ],
+                "latest": old_data
+            }
+        
+        # Return all historical mappings if requested
+        if historical:
+            historical_mappings = [
+                mapping for mapping in cross_ref.get("mappings", [])
+                if mapping["code_hash"] == code_hash
+            ]
+            if historical_mappings:
+                if hasattr(logging, 'debug'):
+                    logging.debug(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+                else:
+                    print(f"Found {len(historical_mappings)} historical mappings for code hash {code_hash[:7]}")
+            else:
+                if hasattr(logging, 'debug'):
+                    logging.debug(f"No historical mappings found for code hash: {code_hash[:7]}")
+                else:
+                    print(f"No historical mappings found for code hash: {code_hash[:7]}")
+            return historical_mappings
+        
+        # Return mapping closest to timestamp if provided
+        if timestamp:
+            mappings = [
+                mapping for mapping in cross_ref.get("mappings", [])
+                if mapping["code_hash"] == code_hash
+            ]
+            if mappings:
+                # Find closest mapping to timestamp
+                closest_mapping = min(mappings, key=lambda m: abs(m["timestamp"] - timestamp))
+                if hasattr(logging, 'debug'):
+                    logging.debug(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
+                else:
+                    print(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
+                return closest_mapping["memory_hash"]
+        
+        # Otherwise return latest
+        memory_hash = cross_ref.get("latest", {}).get(code_hash)
+        
+        if memory_hash:
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
+            else:
+                print(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
         else:
             if hasattr(logging, 'debug'):
-                logging.debug(f"No historical mappings found for code hash: {code_hash[:7]}")
+                logging.debug(f"No memory hash found for code hash: {code_hash[:7]}")
             else:
-                print(f"No historical mappings found for code hash: {code_hash[:7]}")
-        return historical_mappings
-    
-    # Return mapping closest to timestamp if provided
-    if timestamp:
-        mappings = [
-            mapping for mapping in cross_ref.get("mappings", [])
-            if mapping["code_hash"] == code_hash
-        ]
-        if mappings:
-            # Find closest mapping to timestamp
-            closest_mapping = min(mappings, key=lambda m: abs(m["timestamp"] - timestamp))
-            if hasattr(logging, 'debug'):
-                logging.debug(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
-            else:
-                print(f"Found memory hash from {closest_mapping['timestamp']} for code hash {code_hash[:7]}: {closest_mapping['memory_hash'][:7]}")
-            return closest_mapping["memory_hash"]
-    
-    # Otherwise return latest
-    memory_hash = cross_ref.get("latest", {}).get(code_hash)
-    
-    if memory_hash:
-        if hasattr(logging, 'debug'):
-            logging.debug(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
-        else:
-            print(f"Found latest memory hash for code hash {code_hash[:7]}: {memory_hash[:7]}")
-    else:
-        if hasattr(logging, 'debug'):
-            logging.debug(f"No memory hash found for code hash: {code_hash[:7]}")
-        else:
-            print(f"No memory hash found for code hash: {code_hash[:7]}")
-    
-    return memory_hash
+                print(f"No memory hash found for code hash: {code_hash[:7]}")
+        
+        return memory_hash
+    finally:
+        # Restore original branch if we changed it
+        if original_branch and current_hash != memory_hash:
+            try:
+                logging.debug(f"Memory: Restoring original position: {original_branch}")
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as e:
+                logging.warning(f"Memory: Failed to restore original branch: {str(e)}")
 
 def main():
     """Main function for command-line usage."""

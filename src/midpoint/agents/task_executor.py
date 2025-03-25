@@ -466,7 +466,8 @@ Use the store_memory_document tool to save this information with appropriate cat
                                             content=memory_content,
                                             category="study",
                                             metadata={"task": task, "status": "in_progress"},
-                                            memory_repo_path=context.state.memory_repository_path
+                                            memory_repo_path=context.state.memory_repository_path,
+                                            memory_hash=context.state.memory_hash
                                         )
                                         
                                         # Update the response data
@@ -483,18 +484,50 @@ Use the store_memory_document tool to save this information with appropriate cat
                                 
                                 # Create final state object
                                 current_hash = context.state.git_hash
+                                initial_git_hash = context.state.git_hash  # Store initial git hash for comparison
                                 if made_code_changes:
                                     # Get the latest hash if we made code changes
                                     try:
                                         current_hash = await get_current_hash(context.state.repository_path)
+                                        
+                                        # Sanity check: Verify the final repo hash is a descendant of the initial repo hash
+                                        if initial_git_hash and current_hash and initial_git_hash != current_hash:
+                                            # Use is_git_ancestor to check if the final hash is a descendant of the initial hash
+                                            is_descendant = await self.is_git_ancestor(
+                                                context.state.repository_path,
+                                                initial_git_hash,
+                                                current_hash
+                                            )
+                                            if not is_descendant:
+                                                logger.warning(f"REPO ANCESTRY CHECK FAILED: Final repo hash {current_hash} is not a descendant of initial repo hash {initial_git_hash}")
+                                                # Don't fail the operation, but log the warning
+                                            else:
+                                                logger.info(f"Repo ancestry check passed: {current_hash} is a descendant of {initial_git_hash}")
                                     except Exception as e:
                                         logger.error(f"Failed to get current hash: {str(e)}")
                                 
                                 # Also get current memory hash if applicable
                                 memory_hash = context.state.memory_hash
+                                initial_memory_hash = context.state.memory_hash  # Store initial hash for comparison
                                 if context.state.memory_repository_path:
                                     try:
+                                        # Get the current memory hash
                                         memory_hash = await get_current_hash(context.state.memory_repository_path)
+                                        
+                                        # Sanity check: Verify the final memory hash is a descendant of the initial memory hash
+                                        if initial_memory_hash and memory_hash and initial_memory_hash != memory_hash:
+                                            # Use is_git_ancestor to check if the final hash is a descendant of the initial hash
+                                            is_descendant = await self.is_git_ancestor(
+                                                context.state.memory_repository_path,
+                                                initial_memory_hash,
+                                                memory_hash
+                                            )
+                                            if not is_descendant:
+                                                logger.warning(f"MEMORY ANCESTRY CHECK FAILED: Final memory hash {memory_hash} is not a descendant of initial memory hash {initial_memory_hash}")
+                                                # Don't fail the operation, but log the warning
+                                            else:
+                                                logger.info(f"Memory ancestry check passed: {memory_hash} is a descendant of {initial_memory_hash}")
+                                        
                                     except Exception as e:
                                         logger.error(f"Failed to get memory hash: {str(e)}")
                                 
@@ -554,3 +587,36 @@ Use the store_memory_document tool to save this information with appropriate cat
                     execution_time=time.time() - start_time,
                     repository_path=context.state.repository_path
                 ) 
+
+    async def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
+        """
+        Check if one hash is an ancestor of another in a git repository.
+        
+        Args:
+            repo_path: Path to the git repository
+            ancestor_hash: The hash to check if it's an ancestor
+            descendant_hash: The hash to check if it's a descendant
+            
+        Returns:
+            True if ancestor_hash is an ancestor of descendant_hash, False otherwise
+        """
+        if ancestor_hash == descendant_hash:
+            return True
+        
+        try:
+            # Use git merge-base --is-ancestor to check if one hash is an ancestor of another
+            process = await asyncio.create_subprocess_exec(
+                "git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash,
+                cwd=repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Wait for the command to complete
+            await process.communicate()
+            
+            # The command returns 0 if it's an ancestor, 1 if not
+            return process.returncode == 0
+        except Exception as e:
+            logger.error(f"Error checking git ancestry: {str(e)}")
+            return False 

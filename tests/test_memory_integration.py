@@ -57,6 +57,15 @@ class TestMemoryIntegration(unittest.TestCase):
         # Create a code hash for testing
         code_hash = "1234567890abcdef"
         
+        # Get initial memory hash after repo initialization
+        initial_memory_hash = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
         # Store documents in different categories
         reasoning_doc = store_document(
             content="This is my reasoning for the current task.",
@@ -66,8 +75,12 @@ class TestMemoryIntegration(unittest.TestCase):
                 "code_hash": code_hash,
                 "commit_message": "Add reasoning document"
             },
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=initial_memory_hash
         )
+        
+        # Get the updated memory hash after first document
+        reasoning_memory_hash = reasoning_doc["memory_hash"]
         
         observation_doc = store_document(
             content="I observed that the system behavior changed when I modified this file.",
@@ -77,8 +90,12 @@ class TestMemoryIntegration(unittest.TestCase):
                 "code_hash": code_hash,
                 "commit_message": "Add observation document"
             },
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=reasoning_memory_hash
         )
+        
+        # Get the updated memory hash after second document
+        observation_memory_hash = observation_doc["memory_hash"]
         
         decision_doc = store_document(
             content="I decided to use a factory pattern for this implementation.",
@@ -88,17 +105,12 @@ class TestMemoryIntegration(unittest.TestCase):
                 "code_hash": code_hash,
                 "commit_message": "Add decision document"
             },
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=observation_memory_hash
         )
         
         # Get the current memory hash
-        memory_hash = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=self.memory_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        ).stdout.strip()
+        memory_hash = decision_doc["memory_hash"]
         
         # Update the cross-reference
         update_cross_reference(
@@ -111,19 +123,22 @@ class TestMemoryIntegration(unittest.TestCase):
         reasoning_docs = retrieve_documents(
             category="reasoning",
             limit=10,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=memory_hash
         )
         
         observation_docs = retrieve_documents(
             category="observations",
             limit=10,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=memory_hash
         )
         
         decision_docs = retrieve_documents(
             category="decisions",
             limit=10,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=memory_hash
         )
         
         # Check that there's at least one document in each category
@@ -143,7 +158,8 @@ class TestMemoryIntegration(unittest.TestCase):
         # Verify that the memory hash can be looked up using the code hash
         retrieved_memory_hash = get_memory_for_code_hash(
             code_hash=code_hash,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=memory_hash
         )
         
         self.assertEqual(retrieved_memory_hash, memory_hash)
@@ -152,6 +168,15 @@ class TestMemoryIntegration(unittest.TestCase):
         """Test updating memory with new documents."""
         # Initial setup
         code_hash = "1234567890abcdef"
+        
+        # Get initial memory hash after repo initialization
+        initial_memory_hash = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.memory_repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
         
         # Store an initial document
         initial_doc = store_document(
@@ -162,17 +187,12 @@ class TestMemoryIntegration(unittest.TestCase):
                 "code_hash": code_hash,
                 "commit_message": "Initial observation"
             },
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=initial_memory_hash
         )
         
         # Get the current memory hash
-        initial_memory_hash = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=self.memory_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        ).stdout.strip()
+        initial_memory_hash = initial_doc["memory_hash"]
         
         # Update the cross-reference
         update_cross_reference(
@@ -190,17 +210,12 @@ class TestMemoryIntegration(unittest.TestCase):
                 "code_hash": code_hash,
                 "commit_message": "Updated observation"
             },
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=initial_memory_hash
         )
         
         # Get the new memory hash
-        updated_memory_hash = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=self.memory_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        ).stdout.strip()
+        updated_memory_hash = updated_doc["memory_hash"]
         
         # Verify hashes are different
         self.assertNotEqual(initial_memory_hash, updated_memory_hash)
@@ -215,7 +230,8 @@ class TestMemoryIntegration(unittest.TestCase):
         # Verify that the most recent memory hash is returned
         retrieved_memory_hash = get_memory_for_code_hash(
             code_hash=code_hash,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=updated_memory_hash
         )
         
         self.assertEqual(retrieved_memory_hash, updated_memory_hash)
@@ -224,7 +240,8 @@ class TestMemoryIntegration(unittest.TestCase):
         observation_docs = retrieve_documents(
             category="observations",
             limit=10,
-            repo_path=self.memory_repo_path
+            repo_path=self.memory_repo_path,
+            memory_hash=updated_memory_hash
         )
         
         # Verify that both documents are present

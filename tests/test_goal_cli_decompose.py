@@ -64,7 +64,14 @@ class TestGoalCliDecompose(unittest.TestCase):
             "next_step": "Implement feature X",
             "validation_criteria": ["Test passes", "Code works"],
             "requires_further_decomposition": True,
-            "goal_file": "G1-S1.json"
+            "git_hash": "abcdef123456",
+            "memory_hash": "abcdef123456",
+            "is_task": False,
+            "goal_file": "G1-S1.json",
+            "reasoning": "This is the reasoning",
+            "relevant_context": "This is the relevant context",
+            "initial_memory_hash": "abcdef123456",
+            "initial_git_hash": "abcdef123456"
         }
         
         # Capture stdout
@@ -88,7 +95,7 @@ class TestGoalCliDecompose(unittest.TestCase):
             
             # Check the output
             output = stdout_buffer.getvalue()
-            self.assertIn(f"Goal {self.goal_id} successfully decomposed into subgoals", output)
+            self.assertIn(f"Goal {self.goal_id} successfully decomposed into a subgoal", output)
             self.assertIn("Next step: Implement feature X", output)
             self.assertIn("Validation criteria:", output)
             self.assertIn("- Test passes", output)
