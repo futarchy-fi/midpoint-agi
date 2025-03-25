@@ -1473,6 +1473,12 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 "timestamp": timestamp
             }
             
+            # Add memory document path and timestamp if available
+            if "memory_document_path" in result and result["memory_document_path"]:
+                state["memory_document_path"] = result["memory_document_path"]
+            if "memory_timestamp" in result and result["memory_timestamp"]:
+                state["memory_timestamp"] = result["memory_timestamp"]
+            
             # Create subgoal/task content
             new_content = {
                 "goal_id": new_id,
@@ -1500,6 +1506,17 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             
             # Mark the parent goal as decomposed
             goal_content["decomposed"] = True
+            
+            # Update the parent goal's current state with memory information
+            if "current_state" in goal_content:
+                if "memory_hash" in result:
+                    goal_content["current_state"]["memory_hash"] = result["memory_hash"]
+                if "memory_document_path" in result and result["memory_document_path"]:
+                    goal_content["current_state"]["memory_document_path"] = result["memory_document_path"]
+                if "memory_timestamp" in result and result["memory_timestamp"]:
+                    goal_content["current_state"]["memory_timestamp"] = result["memory_timestamp"]
+                # Update timestamp
+                goal_content["current_state"]["timestamp"] = timestamp
             
             # Update the goal file
             with open(goal_file, 'w') as f:

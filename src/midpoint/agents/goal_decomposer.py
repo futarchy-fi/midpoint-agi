@@ -592,6 +592,37 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             else:
                 logging.debug("No tool calls in final message")
 
+            # Prepare and store the conversation in memory
+            try:
+                # Prepare the conversation for memory
+                conversation_data = {
+                    "system": self.system_prompt,
+                    "user": user_prompt,
+                    "assistant": content,
+                    "tool_usage": tool_usage
+                }
+                
+                # Save the conversation to memory
+                memory_result = await self._save_interaction_to_memory(
+                    interaction_type="conversation",
+                    content=json.dumps(conversation_data, indent=2),
+                    metadata={"timestamp": int(time.time())},
+                    memory_repo_path=memory_repo_path
+                )
+                
+                # Update context state with memory information if available
+                if memory_result and "path" in memory_result:
+                    logging.info(f"Saved conversation to memory: {memory_result}")
+                    # Update memory hash and path in the context state
+                    if "memory_hash" in memory_result:
+                        context.state.memory_hash = memory_result.get("memory_hash")
+                    # Store document path
+                    context.state.memory_document_path = memory_result.get("path")
+                    # Set memory timestamp
+                    context.state.memory_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            except Exception as e:
+                logging.error(f"Failed to save conversation to memory: {str(e)}")
+                
             return final_output
             
         except Exception as e:
@@ -1016,7 +1047,10 @@ async def decompose_goal(
         "git_hash": git_hash,
         "memory_hash": memory_hash,
         "is_task": not subgoal_plan.requires_further_decomposition,
-        "goal_file": f"{goal_id or 'G1'}.json"  # Add goal_file for test compatibility with simple naming
+        "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
+        # Include memory document path and timestamp if available
+        "memory_document_path": getattr(context.state, "memory_document_path", None),
+        "memory_timestamp": getattr(context.state, "memory_timestamp", None)
     }
 
 # Create a separate async entry point for CLI to avoid nesting asyncio.run() calls
