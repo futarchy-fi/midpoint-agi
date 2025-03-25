@@ -411,19 +411,9 @@ class GoalDecomposer:
         Generate a system prompt that includes dynamically generated tool descriptions.
         
         Returns:
-            The system prompt with tool descriptions.
+            The system prompt string.
         """
-        # Generate list of available tools and their descriptions
-        tool_descriptions = []
-        for tool_schema in self.tools:
-            if tool_schema['type'] == 'function' and 'function' in tool_schema:
-                function = tool_schema['function']
-                name = function.get('name', '')
-                description = function.get('description', '')
-                tool_descriptions.append(f"- {name}: {description}")
-        
-        # Join the tool descriptions with newlines
-        tool_descriptions_text = "\n".join(tool_descriptions)
+        tool_descriptions_text = self._get_tool_descriptions()
         
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are an expert software architect and project planner.
@@ -472,6 +462,74 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         
         return system_prompt
 
+    def _get_tool_descriptions(self):
+        """
+        Generate a formatted string of tool descriptions.
+        
+        Returns:
+            A string containing formatted tool descriptions.
+        """
+        # Generate list of available tools and their descriptions
+        tool_descriptions = []
+        for tool_schema in self.tools:
+            if tool_schema['type'] == 'function' and 'function' in tool_schema:
+                function = tool_schema['function']
+                name = function.get('name', '')
+                description = function.get('description', '')
+                tool_descriptions.append(f"- {name}: {description}")
+        
+        # Join the tool descriptions with newlines
+        return "\n".join(tool_descriptions)
+
+    async def _get_recent_memory_context(self, memory_hash, memory_repo_path, limit=5):
+        """
+        Retrieve recent memory documents from the general_memory folder and format them for context.
+        
+        Args:
+            memory_hash: The memory hash to use for retrieval
+            memory_repo_path: Path to the memory repository
+            limit: Maximum number of documents to retrieve
+            
+        Returns:
+            A formatted string containing the recent memory context
+        """
+        try:
+            # Import the retrieve_documents function
+            from midpoint.agents.tools.memory_tools import retrieve_documents
+            
+            # Get recent documents from the general_memory folder
+            documents = retrieve_documents(
+                category="../general_memory",  # Path is relative to documents/ in the repo
+                limit=limit,
+                repo_path=memory_repo_path,
+                memory_hash=memory_hash
+            )
+            
+            if not documents:
+                logging.info("No recent memory documents found")
+                return ""
+            
+            # Format the documents into a context string
+            memory_context = "## RECENT MEMORY\n\n"
+            for i, (path, content) in enumerate(documents, 1):
+                # Extract filename from path
+                filename = os.path.basename(path)
+                # Try to parse timestamp from filename (format: TIMESTAMP_goal_decomposer_TYPE.md)
+                timestamp_str = filename.split('_')[0] if '_' in filename else 'unknown'
+                
+                # Format the document with timestamp and truncate content if too long
+                max_content_length = 500  # Limit content length to avoid excessive tokens
+                truncated_content = content[:max_content_length] + "..." if len(content) > max_content_length else content
+                
+                memory_context += f"### Memory Document {i}: {filename}\n"
+                memory_context += f"Timestamp: {timestamp_str}\n"
+                memory_context += f"```\n{truncated_content}\n```\n\n"
+            
+            return memory_context
+        except Exception as e:
+            logging.error(f"Error retrieving memory context: {str(e)}")
+            return ""
+
     async def determine_next_step(self, context: TaskContext, setup_logging=False, debug=False, quiet=False) -> SubgoalPlan:
         """
         Determine the next step toward achieving the goal.
@@ -513,9 +571,48 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         
         # Initialize messages
         messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "system", "content": self.system_prompt}
         ]
+        
+        # Add memory context as a separate message if available
+        if memory_hash and memory_repo_path:
+            try:
+                # Use the new memory retrieval function
+                from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+                
+                # Get approximately 10000 characters of recent memory (roughly ~2500 tokens)
+                # This is a good balance for providing context without using too much of the window
+                total_chars, memory_documents = retrieve_recent_memory(
+                    memory_hash=memory_hash,
+                    char_limit=10000,
+                    repo_path=memory_repo_path
+                )
+                
+                if memory_documents:
+                    # Format the documents into a context string
+                    memory_context = "## RECENT MEMORY\n\n"
+                    for i, (path, content, timestamp) in enumerate(memory_documents, 1):
+                        # Extract filename from path
+                        filename = os.path.basename(path)
+                        # Format timestamp
+                        from datetime import datetime
+                        timestamp_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        memory_context += f"### Memory Document {i}: {filename}\n"
+                        memory_context += f"Timestamp: {timestamp_str}\n"
+                        memory_context += f"```\n{content}\n```\n\n"
+                    
+                    # Log memory context stats
+                    logging.info(f"Adding memory context: {len(memory_documents)} documents, {total_chars} characters")
+                    
+                    # Add memory context as a separate message
+                    messages.append({"role": "user", "content": memory_context})
+                    messages.append({"role": "assistant", "content": "I've reviewed the memory documents."})
+            except Exception as e:
+                logging.error(f"Error retrieving memory context: {str(e)}")
+        
+        # Add the user prompt as the final message
+        messages.append({"role": "user", "content": user_prompt})
         
         # Track tool usage for metadata
         tool_usage = []

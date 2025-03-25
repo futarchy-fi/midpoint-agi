@@ -368,4 +368,150 @@ async def retrieve_memory_documents(category: str = None, limit: int = 10, memor
         limit=limit,
         memory_repo_path=memory_repo_path,
         memory_hash=memory_hash
-    ) 
+    )
+
+def retrieve_recent_memory(memory_hash, char_limit=5000, repo_path=None):
+    """
+    Retrieve the most recent documents from the general_memory folder up to a specified character limit.
+    
+    Args:
+        memory_hash: Required hash to operate on - must check out this hash before reading documents
+        char_limit: Maximum total number of characters to retrieve
+        repo_path: Path to the memory repository
+        
+    Returns:
+        A tuple containing (total_chars, list of (path, content, timestamp) tuples)
+    """
+    # Get repository path
+    repo_path = repo_path or get_repo_path()
+    repo_path = Path(repo_path)
+    
+    # Validate memory_hash parameter
+    if not memory_hash:
+        raise ValueError("Memory hash is required")
+    
+    # Keep track of original position to restore later
+    original_branch = None
+    current_hash = None
+    
+    try:
+        # Get current branch/hash
+        try:
+            current_hash_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if current_hash_result.returncode == 0:
+                current_hash = current_hash_result.stdout.strip()
+                
+                # Get current branch
+                branch_result = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if branch_result.returncode == 0:
+                    original_branch = branch_result.stdout.strip()
+                    logging.debug(f"Memory: Current branch: {original_branch}, hash: {current_hash}")
+            else:
+                logging.error(f"Memory: Failed to get current hash: {current_hash_result.stderr}")
+                raise ValueError(f"Failed to get current hash: {current_hash_result.stderr}")
+                
+        except Exception as e:
+            logging.error(f"Memory: Error getting current hash: {str(e)}")
+            raise ValueError(f"Error getting current hash: {str(e)}")
+        
+        # Check if we need to switch to the memory hash
+        if current_hash != memory_hash:
+            # Check if the target hash exists
+            hash_check = subprocess.run(
+                ["git", "cat-file", "-t", memory_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if hash_check.returncode == 0:
+                logging.debug(f"Memory: Checking out memory hash: {memory_hash}")
+                # Checkout the memory hash
+                checkout_result = subprocess.run(
+                    ["git", "checkout", memory_hash],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+                
+                if checkout_result.returncode != 0:
+                    error_msg = checkout_result.stderr
+                    logging.error(f"Memory: Failed to checkout memory hash: {memory_hash}, error: {error_msg}")
+                    raise ValueError(f"Cannot checkout memory hash: {memory_hash}. Error: {error_msg}")
+            else:
+                error_msg = hash_check.stderr
+                logging.error(f"Memory: Memory hash does not exist: {memory_hash}, error: {error_msg}")
+                raise ValueError(f"Memory hash does not exist: {memory_hash}. Error: {error_msg}")
+        else:
+            logging.debug(f"Memory: Already at memory hash: {memory_hash}")
+        
+        # Set search path to specifically target general_memory folder
+        search_path = repo_path / "documents" / "../general_memory"
+        
+        if not search_path.exists():
+            if hasattr(logging, 'debug'):
+                logging.debug(f"Path does not exist: {search_path}")
+            return 0, []
+        
+        # Find all .md files
+        files = list(search_path.glob("**/*.md"))
+        
+        # Sort by modification time (newest first)
+        files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        # Build context string by prepending each file's content
+        context = ""
+        total_chars = 0
+        results = []
+        
+        for file in files:
+            # Get file modification time for sorting
+            file_timestamp = file.stat().st_mtime
+            
+            # Read file content
+            with open(file, "r") as f:
+                content = f.read()
+            
+            # Prepend this file's content to context
+            new_context = content + context
+            
+            # Check if this would exceed our limit
+            if len(new_context) > char_limit:
+                # Take the end of the context up to our limit
+                context = new_context[-char_limit:]
+                results.append((str(file.relative_to(repo_path)), context, file_timestamp))
+                total_chars = char_limit
+                break
+            else:
+                # Update context and continue
+                context = new_context
+                total_chars = len(context)
+                results.append((str(file.relative_to(repo_path)), content, file_timestamp))
+        
+        return total_chars, results
+        
+    finally:
+        # Restore original branch if we changed it
+        if original_branch and current_hash != memory_hash:
+            try:
+                logging.debug(f"Memory: Restoring original position: {original_branch}")
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as e:
+                logging.warning(f"Memory: Failed to restore original branch: {str(e)}") 
