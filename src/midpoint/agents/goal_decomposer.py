@@ -737,17 +737,20 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     
     # Check if the repository has uncommitted changes
     try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
+        process = await asyncio.create_subprocess_exec(
+            "git", "status", "--porcelain",
             cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
+        stdout, stderr = await process.communicate()
         
-        if result.stdout.strip():
+        if process.returncode != 0:
+            raise ValueError(f"Failed to check git status: {stderr.decode()}")
+            
+        if stdout.decode().strip():
             raise ValueError(f"Repository has uncommitted changes: {repo_path}")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         logging.error("Failed to check git status: %s", str(e))
         raise ValueError(f"Failed to check git status: {str(e)}")
     
@@ -756,9 +759,10 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
         try:
             current_hash = await get_current_hash(repo_path)
             if current_hash != git_hash:
-                logging.warning("Repository hash mismatch: expected %s, got %s", git_hash, current_hash)
+                raise ValueError(f"Repository hash mismatch: expected {git_hash}, got {current_hash}")
         except Exception as e:
             logging.warning(f"Failed to validate repository hash: {str(e)}")
+            raise ValueError(f"Failed to validate repository hash: {str(e)}")
 
 def list_subgoal_files(logs_dir="logs"):
     """List all subgoal files in the logs directory."""
@@ -811,119 +815,133 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
     except Exception as e:
         raise RuntimeError(f"Failed to load input file: {str(e)}")
 
-async def main():
-    """Main entry point for the goal decomposer."""
-    parser = argparse.ArgumentParser(description="Decompose a goal into subgoals or tasks")
-    parser.add_argument("repo_path", help="Path to the git repository")
-    parser.add_argument("goal", help="Goal description")
-    parser.add_argument("--input-file", help="Path to input file containing goal details")
-    parser.add_argument("--parent-goal", help="Parent goal file path")
-    parser.add_argument("--goal-id", help="Goal ID to use")
-    parser.add_argument("--memory-repo", help="Path to memory repository")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--quiet", action="store_true", help="Minimize logging output")
+async def decompose_goal(
+    repo_path: str,
+    goal: str,
+    input_file: Optional[str] = None,
+    parent_goal: Optional[str] = None,
+    goal_id: Optional[str] = None,
+    memory_repo: Optional[str] = None,
+    debug: bool = False,
+    quiet: bool = False
+) -> Dict[str, Any]:
+    """
+    Asynchronous function to decompose a goal into subgoals.
     
-    args = parser.parse_args()
+    Args:
+        repo_path: Path to the target repository
+        goal: Description of the goal to achieve
+        input_file: Optional path to input file with goal context
+        parent_goal: Optional parent goal ID
+        goal_id: Optional goal ID
+        memory_repo: Optional path to memory repository
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and final result
+        
+    Returns:
+        Dictionary containing the decomposition result
+    """
+    # Configure logging
+    configure_logging(debug, quiet)
     
     # Initialize state and context
     state = State(
-        git_hash="",  # Will be updated after getting current hash
-        repository_path=args.repo_path,
-        description=f"State for goal: {args.goal}"
+        git_hash=await get_current_hash(repo_path),
+        repository_path=repo_path,
+        description="Initial state before goal decomposition"
     )
-    state.memory_repository_path = args.memory_repo
     
-    context = TaskContext(state=state, goal=Goal(description=args.goal))
-    context.repository_path = args.repo_path
+    context = TaskContext(
+        state=state,
+        goal=Goal(description=goal),
+        iteration=0,
+        execution_history=[],
+        metadata={}
+    )
     
-    # Load input file if provided
-    if args.input_file:
-        await load_input_file(args.input_file, context)
+    # Load input file if specified
+    if input_file:
+        await load_input_file(input_file, context)
     
-    # Add parent goal and goal ID if provided
-    if args.parent_goal:
-        context.metadata["parent_goal_file"] = args.parent_goal
-        logging.info(f"Added parent goal from input file: {args.parent_goal}")
-    if args.goal_id:
-        context.metadata["goal_id"] = args.goal_id
-        logging.info(f"Added goal ID from input file: {args.goal_id}")
-
-    # Validate repository state and get current hash
-    await validate_repository_state(args.repo_path, skip_clean_check=True)
-    current_hash = await get_current_hash(args.repo_path)
-    state.git_hash = current_hash
+    # Add metadata for parent goals and goal IDs
+    if parent_goal:
+        context.metadata["parent_goal_id"] = parent_goal
+    if goal_id:
+        context.metadata["goal_id"] = goal_id
     
-    # Get memory hash if not provided but memory repo path is
-    if not state.memory_hash and state.memory_repository_path:
+    # Validate repository state
+    try:
+        await validate_repository_state(repo_path)
+    except Exception as e:
+        logging.error(f"Error: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+    
+    # Get current git hash
+    git_hash = await get_current_hash(repo_path)
+    
+    # Try to get memory hash if not provided
+    memory_hash = None
+    if memory_repo:
         try:
-            memory_hash = await get_current_hash(state.memory_repository_path)
-            state.memory_hash = memory_hash
-            logging.info(f"Setting memory hash to current hash: {memory_hash[:7] if memory_hash else 'None'}")
+            memory_hash = await get_current_hash(memory_repo)
         except Exception as e:
-            logging.warning(f"Failed to get memory hash: {str(e)}")
+            logging.warning(f"Failed to get memory repository hash: {e}")
     
-    # Initialize GoalDecomposer and determine the next step
+    # Initialize goal decomposer
     decomposer = GoalDecomposer()
-    next_step = await decomposer.determine_next_step(
-        context,
-        setup_logging=True,
+    
+    # Determine next step
+    subgoal_plan = await decomposer.determine_next_step(context)
+    
+    # Create goal file
+    goal_file = decomposer.create_top_goal_file(context)
+    logging.info(f"Created goal file: {goal_file}")
+    
+    # Return result
+    return {
+        "success": True,
+        "next_step": subgoal_plan.next_step,
+        "validation_criteria": subgoal_plan.validation_criteria,
+        "requires_further_decomposition": subgoal_plan.requires_further_decomposition,
+        "relevant_context": subgoal_plan.relevant_context,
+        "git_hash": git_hash,
+        "memory_hash": memory_hash,
+        "goal_file": goal_file
+    }
+
+# Create a separate async entry point for CLI to avoid nesting asyncio.run() calls
+async def async_main():
+    """Async entry point for CLI"""
+    parser = argparse.ArgumentParser(description="Decompose a goal into subgoals")
+    parser.add_argument("repo_path", help="Path to the target repository")
+    parser.add_argument("goal", help="Description of the goal to achieve")
+    parser.add_argument("--input-file", help="Path to input file with goal context")
+    parser.add_argument("--parent-goal", help="Parent goal ID")
+    parser.add_argument("--goal-id", help="Goal ID")
+    parser.add_argument("--memory-repo", help="Path to memory repository")
+    parser.add_argument("--debug", action="store_true", help="Show debug output")
+    parser.add_argument("--quiet", action="store_true", help="Only show warnings and final result")
+    
+    args = parser.parse_args()
+    
+    # Call the async function directly
+    result = await decompose_goal(
+        repo_path=args.repo_path,
+        goal=args.goal,
+        input_file=args.input_file,
+        parent_goal=args.parent_goal,
+        goal_id=args.goal_id,
+        memory_repo=args.memory_repo,
         debug=args.debug,
         quiet=args.quiet
     )
-
-    # Get the final memory hash if it might have changed
-    final_memory_hash = None
-    if state.memory_repository_path:
-        try:
-            final_memory_hash = await get_current_hash(state.memory_repository_path)
-            
-            # Link the code and memory hashes if they've both changed
-            if state.git_hash and final_memory_hash and state.memory_hash != final_memory_hash:
-                try:
-                    update_cross_reference(state.git_hash, final_memory_hash, state.memory_repository_path)
-                    logging.debug(f"🔗 Linked code hash {state.git_hash[:7]} to memory hash {final_memory_hash[:7]}")
-                except Exception as e:
-                    logging.warning(f"Failed to link code hash to memory hash: {str(e)}")
-        except Exception as e:
-            logging.warning(f"Failed to get final memory hash: {str(e)}")
     
-    # Create the output data
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Get the goal ID from the next step metadata
-    goal_id = next_step.metadata.get("goal_id")
-    if not goal_id:
-        logging.error("No goal ID found in next step metadata")
-        sys.exit(1)
-    
-    # Create the output file
-    output_file = os.path.join("logs", f"{goal_id}.json")
-    
-    # Write the output data
-    output_data = {
-        "description": next_step.next_step,
-        "next_step": next_step.next_step,
-        "validation_criteria": next_step.validation_criteria,
-        "reasoning": next_step.reasoning,
-        "requires_further_decomposition": next_step.requires_further_decomposition,
-        "relevant_context": next_step.relevant_context,
-        "parent_goal": next_step.parent_goal,
-        "goal_id": goal_id,
-        "timestamp": timestamp,
-        "iteration": context.iteration
-    }
-    
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
-    
-    # Print summary
-    status_emoji = "🔄" if next_step.requires_further_decomposition else "✅"
-    step_type = "Next subgoal" if next_step.requires_further_decomposition else "Next task"
-    logging.info(f"\n{status_emoji} {step_type}: {next_step.next_step}")
-    logging.info(f"💾 Saved to: {output_file}")
-    logging.info(f"🔑 Goal ID: {goal_id}")
-    if next_step.parent_goal:
-        logging.info(f"👆 Parent Goal: {next_step.parent_goal}")
+    # Print result as JSON
+    print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Only use asyncio.run at the top level
+    asyncio.run(async_main()) 

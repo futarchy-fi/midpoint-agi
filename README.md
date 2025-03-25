@@ -16,6 +16,7 @@ Midpoint is an advanced AI system designed to overcome the fundamental limitatio
 - Goal Validation System
 - Repository State Management
 - Memory Management System
+- Goal Management CLI
 
 ### In Development
 - Main Orchestrator (coordination between components)
@@ -40,6 +41,8 @@ midpoint/
 │   └── memory_tools.py    # Memory system utilities
 ├── tests/                 # Test suite and development tools
 ├── docs/                  # Documentation
+│   ├── goal_cli.md        # Goal management CLI documentation
+│   └── goal_cli_visuals.md # Goal visualization guide
 └── logs/                  # Log files
 ```
 
@@ -145,6 +148,14 @@ Our test suite includes:
    - Comprehensive logging and debugging
    - Error handling and recovery
 
+4. **Goal Management CLI**:
+   - Goal/subgoal labeling system
+   - Branch management commands
+   - State navigation commands
+   - Hierarchy navigation commands
+   - Result incorporation commands
+   - Visualization tools
+
 ### 🔄 In Progress Features
 
 1. **Orchestration System**:
@@ -216,6 +227,29 @@ This will:
 1. Recursively decompose the goal into manageable subgoals
 2. Execute the most concrete subgoal using the TaskExecutor
 3. Validate the execution using the GoalValidator
+
+### Goal Management CLI
+
+Midpoint includes a powerful goal management CLI for tracking, organizing, and visualizing your development goals.
+
+```bash
+# Create a new top-level goal
+goal new "Implement authentication system"
+
+# Create subgoals
+goal sub G1 "Implement user registration"
+
+# Show the goal tree
+goal tree
+
+# Mark a goal as complete
+goal complete
+
+# Show all goals with their status
+goal status
+```
+
+See the [Goal CLI Documentation](docs/goal_cli.md) for more details on all available commands.
 
 ### Running Only the Recursive Decomposition
 

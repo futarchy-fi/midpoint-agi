@@ -333,72 +333,57 @@ class Orchestrator:
             logger.error(f"Error loading checkpoint: {str(e)}")
             return None
 
-async def main():
-    """Command-line entry point."""
-    parser = argparse.ArgumentParser(description="Run the Midpoint orchestrator")
-    parser.add_argument("repo_path", help="Path to the target repository")
-    parser.add_argument("goal", help="Description of the goal to achieve")
-    parser.add_argument("--criteria", nargs="+", required=True, help="Validation criteria for the goal")
-    parser.add_argument("--threshold", type=float, default=0.8, help="Success threshold (0.0-1.0)")
-    parser.add_argument("--iterations", type=int, default=10, help="Maximum number of iterations")
-    parser.add_argument("--checkpoint", help="Path to save checkpoints")
-    parser.add_argument("--resume", help="Resume from checkpoint file")
+async def run_orchestration(
+    repo_path: str,
+    goal: Goal,
+    max_iterations: int = 10,
+    start_iteration: int = 0,
+    checkpoint_path: Optional[str] = None
+) -> OrchestrationResult:
+    """Run the orchestration workflow."""
+    orchestrator = Orchestrator()
+    return await orchestrator.run(
+        repo_path=repo_path,
+        goal=goal,
+        max_iterations=max_iterations,
+        start_iteration=start_iteration,
+        checkpoint_path=checkpoint_path
+    )
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run orchestration")
+    parser.add_argument("repo_path", help="Path to the repository")
+    parser.add_argument("goal", help="Goal description")
+    parser.add_argument("--criteria", nargs="+", required=True, help="Validation criteria")
+    parser.add_argument("--threshold", type=float, default=0.8, help="Success threshold")
+    parser.add_argument("--iterations", type=int, default=10, help="Maximum iterations")
+    parser.add_argument("--checkpoint", help="Checkpoint path")
     
     args = parser.parse_args()
     
-    # Create checkpoint directory if specified
-    if args.checkpoint:
-        checkpoint_dir = Path(args.checkpoint).parent
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create the goal
-    goal = Goal(
+    # Create goal object
+    goal_obj = Goal(
         description=args.goal,
         validation_criteria=args.criteria,
         success_threshold=args.threshold
     )
     
-    # Initialize orchestrator
-    orchestrator = Orchestrator()
+    # Run orchestration
+    result = asyncio.run(run_orchestration(
+        repo_path=args.repo_path,
+        goal=goal_obj,
+        max_iterations=args.iterations,
+        checkpoint_path=args.checkpoint
+    ))
     
-    # Resume from checkpoint if specified
-    if args.resume:
-        checkpoint = await orchestrator.load_checkpoint(args.resume)
-        if checkpoint:
-            print(f"Resuming from checkpoint: {args.resume}")
-            result = await orchestrator.run(
-                repo_path=args.repo_path,
-                goal=checkpoint["goal"],
-                max_iterations=args.iterations,
-                start_iteration=checkpoint["iteration"],
-                checkpoint_path=args.checkpoint
-            )
-        else:
-            print(f"Failed to load checkpoint: {args.resume}")
-            return
-    else:
-        # Run new orchestration
-        result = await orchestrator.run(
-            repo_path=args.repo_path,
-            goal=goal,
-            max_iterations=args.iterations,
-            checkpoint_path=args.checkpoint
-        )
-    
-    # Print the result
-    if result.success:
-        print("\nOrchestration completed successfully!")
-        print(f"Final Git Hash: {result.final_state.git_hash}")
-    else:
-        print("\nOrchestration failed!")
-        print(f"Error: {result.error_message}")
-    
-    if result.execution_history:
-        print("\nExecution History:")
-        for i, entry in enumerate(result.execution_history, 1):
-            print(f"{i}. {entry['subgoal']}")
-            print(f"   Git Hash: {entry['git_hash']}")
-            print(f"   Validation Score: {entry['validation_score']:.2f}")
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Print result as JSON
+    print(json.dumps({
+        "success": result.success,
+        "final_state": {
+            "git_hash": result.final_state.git_hash if result.final_state else None,
+            "repository_path": result.final_state.repository_path if result.final_state else None,
+            "description": result.final_state.description if result.final_state else None
+        },
+        "error_message": result.error_message,
+        "execution_history": result.execution_history
+    }, indent=2)) 

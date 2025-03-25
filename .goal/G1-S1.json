@@ -1,0 +1,6 @@
+{
+  "goal_id": "G1-S1",
+  "description": "Test subgoal under G1",
+  "parent_goal": "G1",
+  "timestamp": "20250324_174540"
+}

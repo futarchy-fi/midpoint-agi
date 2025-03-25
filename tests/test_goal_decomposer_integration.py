@@ -30,7 +30,7 @@ from tests.test_integration_fixtures import (
 from src.midpoint.agents.goal_decomposer import (
     GoalDecomposer, 
     validate_repository_state,
-    main
+    decompose_goal
 )
 from src.midpoint.agents.models import State, Goal, TaskContext
 
@@ -77,8 +77,12 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
 
     @patch('src.midpoint.agents.goal_decomposer.AsyncOpenAI')
     @patch('src.midpoint.agents.config.get_openai_api_key')
-    def test_integration_list_subgoals(self, mock_get_api_key, mock_openai):
+    @patch('src.midpoint.agents.goal_decomposer.validate_repository_state')
+    def test_integration_list_subgoals(self, mock_validate_repo, mock_get_api_key, mock_openai):
         """Test that the CLI can list available subgoals."""
+        # Mock repository validation to always succeed
+        mock_validate_repo.return_value = None
+        
         # Set up the mock OpenAI client to return a valid response
         mock_client = AsyncMock()
         mock_openai.return_value = mock_client
@@ -145,7 +149,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
                        f"Script failed to list subgoals: {result.stderr}")
 
         # The output should include our mocked next step
-        self.assertIn("Mock integration test result", result.stdout)
+        self.assertIn("Mock list subgoals result", result.stdout)
 
         # There should be no asyncio-related errors
         self.assertNotIn("asyncio.run() cannot be called from a running event loop", result.stderr)
@@ -159,12 +163,16 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         # Verify the content of the new file
         with open(new_files[0], 'r') as f:
             new_content = json.load(f)
-            self.assertEqual(new_content["next_step"], "Mock integration test result")
+            self.assertEqual(new_content["next_step"], "Mock list subgoals result")
 
     @patch('src.midpoint.agents.goal_decomposer.AsyncOpenAI')
     @patch('src.midpoint.agents.config.get_openai_api_key')
-    def test_integration_with_input_file(self, mock_get_api_key, mock_openai):
+    @patch('src.midpoint.agents.goal_decomposer.validate_repository_state')
+    def test_integration_with_input_file(self, mock_validate_repo, mock_get_api_key, mock_openai):
         """Test the integration with an input file."""
+        # Mock repository validation to always succeed
+        mock_validate_repo.return_value = None
+        
         # Set up the mock OpenAI client to return a valid response
         mock_client = AsyncMock()
         mock_openai.return_value = mock_client

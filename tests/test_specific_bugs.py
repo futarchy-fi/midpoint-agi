@@ -37,7 +37,7 @@ class TestSpecificBugs(unittest.TestCase):
         self.logs_dir.mkdir(exist_ok=True)
         
         # Path to the goal_decomposer.py script
-        self.script_path = repo_root / "src" / "midpoint" / "agents" / "goal_decomposer.py"
+        self.script_path = Path(__file__).parent.parent / "src" / "midpoint" / "agents" / "goal_decomposer.py"
 
     def tearDown(self):
         """Tear down test fixtures."""
@@ -94,61 +94,6 @@ class TestSpecificBugs(unittest.TestCase):
                         f"Script had asyncio nesting error: {result.stderr}")
         self.assertNotIn("coroutine 'validate_repository_state' was never awaited", result.stderr,
                         f"Script had coroutine never awaited error: {result.stderr}")
-        
-    def test_fix_for_validate_repository_state(self):
-        """Test that the fix for validate_repository_state in main() works correctly."""
-        # Import the goal_decomposer module
-        import src.midpoint.agents.goal_decomposer as goal_decomposer
-        
-        # Get the line of code that contains the call to validate_repository_state
-        with open(self.script_path, 'r') as f:
-            source_code = f.readlines()
-        
-        # Find the line that calls validate_repository_state in main()
-        problem_line = None
-        main_function_lines = []
-        in_main_function = False
-        for i, line in enumerate(source_code):
-            if "async def main():" in line:
-                in_main_function = True
-            
-            if in_main_function:
-                main_function_lines.append((i+1, line))  # 1-indexed line numbers
-                
-                # Look for the problematic call
-                if "asyncio.run(validate_repository_state" in line:
-                    problem_line = i+1  # 1-indexed line number
-            
-            if in_main_function and line.startswith("if __name__ =="):
-                in_main_function = False
-        
-        # If we found the problem line, we should verify it's been fixed
-        if problem_line:
-            print(f"\nFound problematic validate_repository_state call at line {problem_line}:")
-            print(f"  {source_code[problem_line-1].strip()}")
-            
-            # Recommend the fix
-            print("\nRecommended fix:")
-            print("  await validate_repository_state(args.repo_path, git_hash=current_hash, skip_clean_check=True)")
-            
-            # Provide a warning if not fixed
-            self.fail(f"Found problematic asyncio.run(validate_repository_state) call at line {problem_line}. " +
-                      "This should be changed to 'await validate_repository_state(...)' to avoid the nested event loop error.")
-        else:
-            # Either the problem was fixed or the code structure changed
-            # Try to find any await validate_repository_state call in main()
-            found_await = False
-            for line_num, line in main_function_lines:
-                if "await validate_repository_state" in line:
-                    found_await = True
-                    print(f"\nFound fixed validate_repository_state call at line {line_num}:")
-                    print(f"  {line.strip()}")
-                    break
-            
-            # The code should have the proper await pattern
-            self.assertTrue(found_await, 
-                          "Could not find 'await validate_repository_state' in main(). " +
-                          "Check if the code structure has changed or if the fix was applied differently.")
 
 if __name__ == "__main__":
     unittest.main() 

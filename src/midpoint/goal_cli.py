@@ -23,6 +23,7 @@ logging.basicConfig(
 # Constants
 GOAL_DIR = ".goal"
 CHECKPOINT_DIR = f"{GOAL_DIR}/checkpoints"
+VISUALIZATION_DIR = f"{GOAL_DIR}/visualization"
 
 
 def ensure_goal_dir():
@@ -41,6 +42,15 @@ def ensure_checkpoint_dir():
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         logging.info(f"Created checkpoint directory: {CHECKPOINT_DIR}")
     return checkpoint_path
+
+
+def ensure_visualization_dir():
+    """Ensure the visualization directory exists."""
+    vis_path = Path(VISUALIZATION_DIR)
+    if not vis_path.exists():
+        vis_path.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Created visualization directory: {VISUALIZATION_DIR}")
+    return vis_path
 
 
 def generate_goal_id(parent_id=None):
@@ -561,6 +571,546 @@ def list_subgoals(goal_id=None):
     return list(subgoals.keys())
 
 
+def mark_goal_complete(goal_id=None):
+    """Mark a goal as complete."""
+    # If no goal ID provided, use the current branch
+    if not goal_id:
+        current_branch = get_current_branch()
+        if not current_branch:
+            return False
+        
+        goal_id = get_goal_id_from_branch(current_branch)
+        if not goal_id:
+            logging.error(f"Current branch is not a goal branch: {current_branch}")
+            return False
+    
+    # Verify goal exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal not found: {goal_id}")
+        return False
+    
+    try:
+        # Update goal file with completion status
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+        
+        # Mark as complete with timestamp
+        goal_data["complete"] = True
+        goal_data["completion_time"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save updated goal data
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+        
+        print(f"Marked goal {goal_id} as complete")
+        
+        # Get current git hash for reference
+        current_hash = get_current_hash()
+        if current_hash:
+            print(f"Current commit: {current_hash[:8]}")
+        
+        return True
+    except Exception as e:
+        logging.error(f"Failed to mark goal as complete: {e}")
+        return False
+
+
+def merge_subgoal(subgoal_id, testing=False):
+    """Merge a specific subgoal into the current goal."""
+    # Verify subgoal exists
+    goal_path = ensure_goal_dir()
+    subgoal_file = goal_path / f"{subgoal_id}.json"
+    
+    if not subgoal_file.exists():
+        logging.error(f"Subgoal not found: {subgoal_id}")
+        return False
+    
+    # Verify that the subgoal is marked as complete
+    try:
+        with open(subgoal_file, 'r') as f:
+            subgoal_data = json.load(f)
+        
+        if not subgoal_data.get("complete", False):
+            logging.warning(f"Subgoal {subgoal_id} is not marked as complete. Merging incomplete goals is not recommended.")
+            response = input("Are you sure you want to continue? (y/N): ")
+            if response.lower() != 'y':
+                print("Merge cancelled.")
+                return False
+    except Exception as e:
+        logging.error(f"Failed to read subgoal file: {e}")
+        return False
+    
+    # Get the parent goal ID
+    parent_id = subgoal_data.get("parent_goal", "")
+    if not parent_id:
+        logging.error(f"Subgoal {subgoal_id} doesn't have a parent goal")
+        return False
+    
+    if parent_id.endswith('.json'):
+        parent_id = parent_id[:-5]  # Remove .json extension
+    
+    # Get current branch and verify we're on the parent branch
+    current_branch = get_current_branch()
+    parent_branch = find_branch_for_goal(parent_id)
+    
+    if not parent_branch:
+        logging.error(f"No branch found for parent goal {parent_id}")
+        return False
+    
+    if current_branch != parent_branch and not testing:
+        logging.warning(f"Current branch ({current_branch}) is not the parent goal branch ({parent_branch})")
+        response = input("Would you like to switch to the parent branch first? (Y/n): ")
+        if response.lower() != 'n':
+            try:
+                subprocess.run(
+                    ["git", "checkout", parent_branch],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"Switched to parent branch: {parent_branch}")
+                current_branch = parent_branch
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to switch to parent branch: {e}")
+                return False
+    
+    # Find the subgoal branch
+    subgoal_branch = find_branch_for_goal(subgoal_id)
+    if not subgoal_branch:
+        logging.error(f"No branch found for subgoal {subgoal_id}")
+        return False
+    
+    # Try to merge the subgoal branch into the current (parent) branch
+    try:
+        # First, try a merge with --no-commit to see if there are conflicts
+        result = subprocess.run(
+            ["git", "merge", "--no-commit", "--no-ff", subgoal_branch],
+            capture_output=True,
+            text=True
+        )
+        
+        if "CONFLICT" in result.stderr or "CONFLICT" in result.stdout:
+            print("Merge conflicts detected:")
+            print(result.stderr)
+            print(result.stdout)
+            
+            # Abort the merge
+            subprocess.run(
+                ["git", "merge", "--abort"],
+                check=True,
+                capture_output=True
+            )
+            
+            print("Merge aborted due to conflicts.")
+            print("Please resolve conflicts manually:")
+            print(f"1. git checkout {parent_branch}")
+            print(f"2. git merge {subgoal_branch}")
+            print("3. Resolve conflicts")
+            print("4. git add <resolved-files>")
+            print("5. git commit -m 'Merge subgoal {subgoal_id}'")
+            
+            return False
+        
+        # If we got here, the merge can proceed without conflicts
+        # Abort the --no-commit merge first
+        subprocess.run(
+            ["git", "reset", "--hard", "HEAD"],
+            check=True,
+            capture_output=True
+        )
+        
+        # Now do the actual merge
+        message = f"Merge subgoal {subgoal_id} into {parent_id}"
+        subprocess.run(
+            ["git", "merge", "--no-ff", "-m", message, subgoal_branch],
+            check=True,
+            capture_output=True
+        )
+        
+        print(f"Successfully merged subgoal {subgoal_id} into {parent_id}")
+        
+        # Get the new commit hash
+        new_hash = get_current_hash()
+        if new_hash:
+            print(f"Merge commit: {new_hash[:8]}")
+        
+        # Update parent goal with completion information
+        parent_file = goal_path / f"{parent_id}.json"
+        if parent_file.exists():
+            try:
+                with open(parent_file, 'r') as f:
+                    parent_data = json.load(f)
+                
+                # Add merged subgoal to the list of merged subgoals
+                if "merged_subgoals" not in parent_data:
+                    parent_data["merged_subgoals"] = []
+                
+                merge_info = {
+                    "subgoal_id": subgoal_id,
+                    "merge_time": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    "merge_commit": new_hash
+                }
+                
+                parent_data["merged_subgoals"].append(merge_info)
+                
+                # Save updated parent data
+                with open(parent_file, 'w') as f:
+                    json.dump(parent_data, f, indent=2)
+            except Exception as e:
+                logging.error(f"Failed to update parent goal metadata: {e}")
+        
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to merge subgoal: {e}")
+        return False
+
+
+def show_goal_status():
+    """Show completion status of all goals."""
+    goal_path = ensure_goal_dir()
+    
+    # Get all goal files
+    goal_files = {}
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goal_files[data["goal_id"]] = data
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    # Find top-level goals
+    top_goals = {k: v for k, v in goal_files.items() if not v["parent_goal"]}
+    
+    if not top_goals:
+        print("No goals found.")
+        return
+    
+    print("Goal Status:")
+    
+    # Define a function to print goal status recursively
+    def print_goal_status(goal_id, depth=0):
+        if goal_id not in goal_files:
+            return
+            
+        goal = goal_files[goal_id]
+        indent = "  " * depth
+        
+        # Determine status symbol
+        if goal.get("complete", False):
+            status = "✅"
+        else:
+            # Check if all subgoals are complete
+            subgoals = {k: v for k, v in goal_files.items() 
+                       if v.get("parent_goal") == goal_id or 
+                          v.get("parent_goal") == f"{goal_id}.json"}
+            
+            if not subgoals:
+                status = "🔘"  # No subgoals
+            elif all(sg.get("complete", False) for sg in subgoals.values()):
+                status = "🟠"  # All subgoals complete but not merged
+            else:
+                status = "⚪"  # Some subgoals incomplete
+        
+        print(f"{indent}{status} {goal_id}: {goal['description']}")
+        
+        # Print completion timestamp if available
+        if goal.get("complete", False) and "completion_time" in goal:
+            completion_time = goal["completion_time"]
+            print(f"{indent}   Completed: {completion_time}")
+        
+        # Print merged subgoals if available
+        if "merged_subgoals" in goal and goal["merged_subgoals"]:
+            for merge_info in goal["merged_subgoals"]:
+                subgoal_id = merge_info.get("subgoal_id", "")
+                merge_time = merge_info.get("merge_time", "")
+                print(f"{indent}   Merged: {subgoal_id} at {merge_time}")
+        
+        # Find and print children
+        children = {k: v for k, v in goal_files.items() 
+                   if v.get("parent_goal") == goal_id or 
+                      v.get("parent_goal") == f"{goal_id}.json"}
+        
+        for child_id in sorted(children.keys()):
+            print_goal_status(child_id, depth + 1)
+    
+    # Print all top-level goals and their subgoals
+    for goal_id in sorted(top_goals.keys()):
+        print_goal_status(goal_id)
+    
+    # Print legend
+    print("\nStatus Legend:")
+    print("✅ Complete")
+    print("🟠 All subgoals complete (ready to merge)")
+    print("⚪ Incomplete (some subgoals pending)")
+    print("🔘 No subgoals")
+
+
+def show_goal_tree():
+    """Show visual representation of goal hierarchy."""
+    goal_path = ensure_goal_dir()
+    
+    # Get all goal files
+    goal_files = {}
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goal_files[data["goal_id"]] = data
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    # Find top-level goals
+    top_goals = {k: v for k, v in goal_files.items() if not v["parent_goal"]}
+    
+    if not top_goals:
+        print("No goals found.")
+        return
+    
+    print("Goal Tree:")
+    
+    # Define a function to print goal tree recursively with better formatting
+    def print_goal_tree(goal_id, prefix="", is_last=True, depth=0):
+        if goal_id not in goal_files:
+            return
+            
+        goal = goal_files[goal_id]
+        
+        # Determine status symbol
+        if goal.get("complete", False):
+            status = "✅"
+        else:
+            # Check if all subgoals are complete
+            subgoals = {k: v for k, v in goal_files.items() 
+                       if v.get("parent_goal") == goal_id or 
+                          v.get("parent_goal") == f"{goal_id}.json"}
+            
+            if not subgoals:
+                status = "🔘"  # No subgoals
+            elif all(sg.get("complete", False) for sg in subgoals.values()):
+                status = "🟠"  # All subgoals complete but not merged
+            else:
+                status = "⚪"  # Some subgoals incomplete
+        
+        # Determine branch characters
+        branch = "└── " if is_last else "├── "
+        
+        # Print the current goal
+        print(f"{prefix}{branch}{status} {goal_id}: {goal['description']}")
+        
+        # Find children
+        children = {k: v for k, v in goal_files.items() 
+                   if v.get("parent_goal") == goal_id or 
+                      v.get("parent_goal") == f"{goal_id}.json"}
+        
+        # Sort children by ID
+        sorted_children = sorted(children.keys())
+        
+        # Determine new prefix for children
+        new_prefix = prefix + ("    " if is_last else "│   ")
+        
+        # Print children
+        for i, child_id in enumerate(sorted_children):
+            is_last_child = (i == len(sorted_children) - 1)
+            print_goal_tree(child_id, new_prefix, is_last_child, depth + 1)
+    
+    # Print all top-level goals and their subgoals
+    sorted_top_goals = sorted(top_goals.keys())
+    for i, goal_id in enumerate(sorted_top_goals):
+        is_last = (i == len(sorted_top_goals) - 1)
+        print_goal_tree(goal_id, "", is_last)
+    
+    # Print legend
+    print("\nStatus Legend:")
+    print("✅ Complete")
+    print("🟠 All subgoals complete (ready to merge)")
+    print("⚪ Incomplete (some subgoals pending)")
+    print("🔘 No subgoals")
+
+
+def show_goal_history():
+    """Show timeline of goal exploration."""
+    goal_path = ensure_goal_dir()
+    
+    # Get all goal files and sort by timestamp
+    goals = []
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goals.append(data)
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    # Sort goals by timestamp
+    goals.sort(key=lambda x: x.get("timestamp", ""))
+    
+    if not goals:
+        print("No goals found.")
+        return
+    
+    print("Goal History:")
+    print("=============")
+    
+    # Print goals in chronological order
+    for goal in goals:
+        goal_id = goal.get("goal_id", "Unknown")
+        desc = goal.get("description", "No description")
+        timestamp = goal.get("timestamp", "Unknown time")
+        parent = goal.get("parent_goal", "")
+        
+        # Format timestamp
+        if len(timestamp) >= 8:
+            try:
+                timestamp = f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]} {timestamp[9:11]}:{timestamp[11:13]}:{timestamp[13:15]}"
+            except:
+                pass  # Keep original format if parsing fails
+        
+        # Print basic goal info
+        print(f"[{timestamp}] {goal_id}: {desc}")
+        
+        # Print parent info if available
+        if parent:
+            print(f"  └── Subgoal of: {parent}")
+        
+        # Print completion info if available
+        if goal.get("complete", False):
+            completion_time = goal.get("completion_time", "Unknown time")
+            if len(completion_time) >= 8:
+                try:
+                    completion_time = f"{completion_time[:4]}-{completion_time[4:6]}-{completion_time[6:8]} {completion_time[9:11]}:{completion_time[11:13]}:{completion_time[13:15]}"
+                except:
+                    pass  # Keep original format if parsing fails
+            print(f"  └── Completed: {completion_time}")
+        
+        # Print merged subgoals if available
+        if "merged_subgoals" in goal and goal["merged_subgoals"]:
+            for merge_info in goal["merged_subgoals"]:
+                subgoal_id = merge_info.get("subgoal_id", "")
+                merge_time = merge_info.get("merge_time", "")
+                if len(merge_time) >= 8:
+                    try:
+                        merge_time = f"{merge_time[:4]}-{merge_time[4:6]}-{merge_time[6:8]} {merge_time[9:11]}:{merge_time[11:13]}:{merge_time[13:15]}"
+                    except:
+                        pass  # Keep original format if parsing fails
+                print(f"  └── Merged: {subgoal_id} at {merge_time}")
+        
+        print("")  # Empty line between goals
+    
+    # Print summary
+    total_goals = len(goals)
+    complete_goals = sum(1 for g in goals if g.get("complete", False))
+    print(f"Summary: {complete_goals}/{total_goals} goals completed")
+
+
+def generate_graph():
+    """Generate a graphical visualization of the goal hierarchy."""
+    try:
+        # Check if graphviz is installed
+        subprocess.run(["dot", "-V"], check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("Error: Graphviz is not installed. Please install Graphviz to use this feature.")
+        print("Installation instructions: https://graphviz.org/download/")
+        return False
+    
+    goal_path = ensure_goal_dir()
+    visualization_path = ensure_visualization_dir()
+    
+    # Get all goal files
+    goal_files = {}
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goal_files[data["goal_id"]] = data
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    if not goal_files:
+        print("No goals found.")
+        return False
+    
+    # Create DOT file content
+    dot_content = [
+        "digraph Goals {",
+        "  rankdir=TB;",
+        "  node [shape=box, style=filled, fontname=Arial];",
+        "  edge [fontname=Arial];",
+        ""
+    ]
+    
+    # Add nodes (goals)
+    for goal_id, goal_data in goal_files.items():
+        # Determine node color based on status
+        if goal_data.get("complete", False):
+            color = "green"
+        else:
+            # Check if all subgoals are complete
+            subgoals = {k: v for k, v in goal_files.items() 
+                      if v.get("parent_goal") == goal_id or 
+                         v.get("parent_goal") == f"{goal_id}.json"}
+            
+            if not subgoals:
+                color = "gray"  # No subgoals
+            elif all(sg.get("complete", False) for sg in subgoals.values()):
+                color = "orange"  # All subgoals complete but not merged
+            else:
+                color = "lightblue"  # Some subgoals incomplete
+        
+        # Escape special characters
+        desc = goal_data.get("description", "").replace('"', '\\"')
+        
+        # Add node
+        dot_content.append(f'  "{goal_id}" [label="{goal_id}\\n{desc}", fillcolor={color}];')
+    
+    # Add edges (parent-child relationships)
+    for goal_id, goal_data in goal_files.items():
+        parent_id = goal_data.get("parent_goal", "")
+        if parent_id:
+            if parent_id.endswith('.json'):
+                parent_id = parent_id[:-5]  # Remove .json extension
+            dot_content.append(f'  "{parent_id}" -> "{goal_id}";')
+    
+    # Close the graph
+    dot_content.append("}")
+    
+    # Write DOT file
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    dot_file = visualization_path / f"goals_{timestamp}.dot"
+    pdf_file = visualization_path / f"goals_{timestamp}.pdf"
+    png_file = visualization_path / f"goals_{timestamp}.png"
+    
+    with open(dot_file, 'w') as f:
+        f.write("\n".join(dot_content))
+    
+    # Generate PDF
+    try:
+        subprocess.run(
+            ["dot", "-Tpdf", str(dot_file), "-o", str(pdf_file)],
+            check=True,
+            capture_output=True
+        )
+        print(f"PDF graph generated: {pdf_file}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to generate PDF: {e}")
+    
+    # Generate PNG
+    try:
+        subprocess.run(
+            ["dot", "-Tpng", str(dot_file), "-o", str(png_file)],
+            check=True,
+            capture_output=True
+        )
+        print(f"PNG graph generated: {png_file}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to generate PNG: {e}")
+    
+    return True
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="Goal branch management commands")
@@ -612,6 +1162,29 @@ def main():
     # goal subs
     subparsers.add_parser("subs", help="List available subgoals for current goal")
     
+    # Result Incorporation Commands
+    # ----------------------------
+    # goal complete
+    subparsers.add_parser("complete", help="Mark current goal as complete")
+    
+    # goal merge <subgoal-id>
+    merge_parser = subparsers.add_parser("merge", help="Merge specific subgoal into current goal")
+    merge_parser.add_argument("subgoal_id", help="Subgoal ID to merge")
+    
+    # goal status
+    subparsers.add_parser("status", help="Show completion status of all goals")
+    
+    # Visualization Tools
+    # ------------------
+    # goal tree
+    subparsers.add_parser("tree", help="Show visual representation of goal hierarchy")
+    
+    # goal history
+    subparsers.add_parser("history", help="Show timeline of goal exploration")
+    
+    # goal graph
+    subparsers.add_parser("graph", help="Generate graphical visualization")
+    
     args = parser.parse_args()
     
     # Handle commands
@@ -637,6 +1210,18 @@ def main():
         go_to_root_goal()
     elif args.command == "subs":
         list_subgoals()
+    elif args.command == "complete":
+        mark_goal_complete()
+    elif args.command == "merge":
+        merge_subgoal(args.subgoal_id)
+    elif args.command == "status":
+        show_goal_status()
+    elif args.command == "tree":
+        show_goal_tree()
+    elif args.command == "history":
+        show_goal_history()
+    elif args.command == "graph":
+        generate_graph()
     else:
         parser.print_help()
 
