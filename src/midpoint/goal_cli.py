@@ -1142,7 +1142,9 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             goal_id=goal_id,  # Pass the goal_id explicitly
             debug=debug,
             quiet=quiet,
-            bypass_validation=bypass_validation
+            bypass_validation=bypass_validation,
+            logs_dir="logs",  # Keep logs in the logs directory
+            goals_dir=GOAL_DIR  # Store goal files in the .goal directory
         )
         
         if result["success"]:

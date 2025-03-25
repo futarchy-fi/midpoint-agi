@@ -829,7 +829,9 @@ async def decompose_goal(
     memory_repo: Optional[str] = None,
     debug: bool = False,
     quiet: bool = False,
-    bypass_validation: bool = False
+    bypass_validation: bool = False,
+    logs_dir: str = "logs",
+    goals_dir: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Asynchronous function to decompose a goal into subgoals.
@@ -844,12 +846,14 @@ async def decompose_goal(
         debug: Whether to show debug output
         quiet: Whether to only show warnings and final result
         bypass_validation: Whether to bypass repository validation (for testing)
+        logs_dir: Directory to store log files (default: "logs")
+        goals_dir: Directory to store goal files (default: None, uses logs_dir if not specified)
         
     Returns:
         Dictionary containing the decomposition result
     """
-    # Configure logging
-    configure_logging(debug, quiet)
+    # Configure logging - always use logs_dir for actual logs
+    configure_logging(debug, quiet, logs_dir)
     
     # Initialize state and context
     state = State(
@@ -904,9 +908,10 @@ async def decompose_goal(
     # Determine next step
     subgoal_plan = await decomposer.determine_next_step(context)
     
-    # Create goal file
-    goal_file = decomposer.create_top_goal_file(context)
-    logging.info(f"Created goal file: {goal_file}")
+    # Create goal file in the specified goals directory or logs directory if goals_dir not specified
+    target_dir = goals_dir if goals_dir is not None else logs_dir
+    goal_file = decomposer.create_top_goal_file(context, logs_dir=target_dir)
+    logging.info(f"Created goal file: {goal_file} in {target_dir}")
     
     # Return result
     return {
@@ -933,6 +938,8 @@ async def async_main():
     parser.add_argument("--debug", action="store_true", help="Show debug output")
     parser.add_argument("--quiet", action="store_true", help="Only show warnings and final result")
     parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+    parser.add_argument("--logs-dir", default="logs", help="Directory to store log files")
+    parser.add_argument("--goals-dir", help="Directory to store goal files (defaults to logs-dir if not specified)")
     
     args = parser.parse_args()
     
@@ -946,7 +953,9 @@ async def async_main():
         memory_repo=args.memory_repo,
         debug=args.debug,
         quiet=args.quiet,
-        bypass_validation=args.bypass_validation
+        bypass_validation=args.bypass_validation,
+        logs_dir=args.logs_dir,
+        goals_dir=args.goals_dir
     )
     
     # Print result as JSON
