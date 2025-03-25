@@ -115,13 +115,36 @@ def create_goal_file(goal_id, description, parent_id=None):
         output_file = goal_path / f"{goal_id}.json"
         logging.info(f"Using alternative goal ID: {goal_id}")
     
+    # Get current repository information for state tracking
+    current_hash = get_current_hash()
+    repo_path = os.getcwd()
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create state object
+    state = {
+        "git_hash": current_hash,
+        "repository_path": repo_path,
+        "description": f"Initial state when goal {goal_id} was created",
+        "memory_hash": None,
+        "memory_repository_path": None,
+        "timestamp": timestamp
+    }
+    
     # Prepare the goal content
     goal_content = {
         "goal_id": goal_id,
         "description": description,
         "parent_goal": parent_id or "",
-        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        "timestamp": timestamp,
+        "initial_state": state,
+        "current_state": state.copy()
     }
+    
+    # For top-level goals, initialize completed_tasks and task counts
+    if not parent_id:
+        goal_content["completed_tasks"] = []
+        goal_content["completed_task_count"] = 0
+        goal_content["total_task_count"] = 0
     
     # Write the goal file
     with open(output_file, 'w') as f:
@@ -214,14 +237,30 @@ def create_new_task(parent_id, description):
     # Generate task ID
     task_id = generate_goal_id(parent_id, is_task=True)
     
+    # Get current repository information for state tracking
+    current_hash = get_current_hash()
+    repo_path = os.getcwd()
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create state object
+    state = {
+        "git_hash": current_hash,
+        "repository_path": repo_path,
+        "description": f"Initial state before executing task: {task_id}",
+        "memory_hash": None,
+        "memory_repository_path": None,
+        "timestamp": timestamp
+    }
+    
     # Prepare task data
     task_data = {
         "goal_id": task_id,
         "description": description,
         "parent_goal": parent_id,
-        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "timestamp": timestamp,
         "is_task": True,
-        "requires_further_decomposition": False
+        "requires_further_decomposition": False,
+        "initial_state": state
     }
     
     # Write the task file
@@ -896,8 +935,8 @@ def show_goal_status():
         goal = goal_files[goal_id]
         indent = "  " * depth
         
-        # Check for state compatibility with parent
-        state_compatible = True
+        # Check for state equality with parent
+        states_equal = True
         parent_id = goal.get("parent_goal", "")
         if parent_id in goal_files:
             parent = goal_files[parent_id]
@@ -908,8 +947,19 @@ def show_goal_status():
                 goal_initial_hash = goal.get("initial_state", {}).get("git_hash", "")
                 parent_current_hash = parent.get("current_state", {}).get("git_hash", "")
                 
-                if goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash:
-                    state_compatible = False
+                # Compare initial memory hash with parent's current memory hash
+                goal_initial_memory_hash = goal.get("initial_state", {}).get("memory_hash", "")
+                parent_current_memory_hash = parent.get("current_state", {}).get("memory_hash", "")
+                
+                # Check git hash equality
+                git_hash_equal = not (goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash)
+                
+                # Check memory hash equality
+                memory_hash_equal = not (goal_initial_memory_hash and parent_current_memory_hash 
+                                        and goal_initial_memory_hash != parent_current_memory_hash)
+                
+                # States are equal only if both git hash and memory hash are equal
+                states_equal = git_hash_equal and memory_hash_equal
         
         # Determine status symbol
         if goal.get("complete", False):
@@ -920,7 +970,7 @@ def show_goal_status():
                 if "execution_result" in goal and goal["execution_result"].get("success"):
                     status = "✅"  # Completed task
                 else:
-                    if not state_compatible:
+                    if not states_equal:
                         status = "🔺"  # Branch task
                     else:
                         status = "🔷"  # Directly executable task
@@ -945,7 +995,7 @@ def show_goal_status():
                             if "execution_result" in goal and goal["execution_result"].get("success"):
                                 status = "✅"  # Completed task
                             else:
-                                if not state_compatible:
+                                if not states_equal:
                                     status = "🔺"  # Branch task
                                 else:
                                     status = "🔷"  # Directly executable task
@@ -956,12 +1006,12 @@ def show_goal_status():
                 elif all(sg.get("complete", False) for sg in subgoals.values()):
                     status = "⚪"  # All subgoals complete but needs explicit completion
                 elif has_completed_tasks:
-                    if not state_compatible:
+                    if not states_equal:
                         status = "🔸"  # Branch subgoal
                     else:
                         status = "🟡"  # Partially completed (has some completed tasks)
                 else:
-                    if not state_compatible:
+                    if not states_equal:
                         status = "🔸"  # Branch subgoal
                     else:
                         status = "⚪"  # Some subgoals incomplete
@@ -1055,8 +1105,8 @@ def show_goal_tree():
             
         goal = goal_files[goal_id]
         
-        # Check for state compatibility with parent
-        state_compatible = True
+        # Check for state equality with parent
+        states_equal = True
         parent_id = goal.get("parent_goal", "")
         if parent_id in goal_files:
             parent = goal_files[parent_id]
@@ -1067,8 +1117,19 @@ def show_goal_tree():
                 goal_initial_hash = goal.get("initial_state", {}).get("git_hash", "")
                 parent_current_hash = parent.get("current_state", {}).get("git_hash", "")
                 
-                if goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash:
-                    state_compatible = False
+                # Compare initial memory hash with parent's current memory hash
+                goal_initial_memory_hash = goal.get("initial_state", {}).get("memory_hash", "")
+                parent_current_memory_hash = parent.get("current_state", {}).get("memory_hash", "")
+                
+                # Check git hash equality
+                git_hash_equal = not (goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash)
+                
+                # Check memory hash equality
+                memory_hash_equal = not (goal_initial_memory_hash and parent_current_memory_hash 
+                                        and goal_initial_memory_hash != parent_current_memory_hash)
+                
+                # States are equal only if both git hash and memory hash are equal
+                states_equal = git_hash_equal and memory_hash_equal
         
         # Determine status symbol
         if goal.get("complete", False):
@@ -1079,7 +1140,7 @@ def show_goal_tree():
                 if "execution_result" in goal and goal["execution_result"].get("success"):
                     status = "✅"  # Completed task
                 else:
-                    if not state_compatible:
+                    if not states_equal:
                         status = "🔺"  # Branch task
                     else:
                         status = "🔷"  # Directly executable task
@@ -1093,7 +1154,7 @@ def show_goal_tree():
                 if not subgoals:
                     # Check if goal is a task or directly executable
                     if goal.get("is_task", False) or goal.get("requires_further_decomposition") is False:
-                        if not state_compatible:
+                        if not states_equal:
                             status = "🔺"  # Branch task
                         else:
                             status = "🔷"  # Directly executable task
@@ -1102,7 +1163,7 @@ def show_goal_tree():
                 elif all(sg.get("complete", False) for sg in subgoals.values()):
                     status = "⚪"  # All subgoals complete but needs explicit completion
                 else:
-                    if not state_compatible:
+                    if not states_equal:
                         status = "🔸"  # Branch subgoal
                     else:
                         status = "⚪"  # Some subgoals incomplete
@@ -1369,6 +1430,15 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
     # Get repository path (current directory)
     repo_path = os.getcwd()
     
+    # Get memory repository path from goal state if available
+    memory_repo = None
+    if "current_state" in goal_content and goal_content["current_state"].get("memory_repository_path"):
+        memory_repo = goal_content["current_state"].get("memory_repository_path")
+    
+    # Ensure the logs directory exists at project root
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    
     # Call the goal decomposer
     try:
         result = await agent_decompose_goal(
@@ -1376,53 +1446,66 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             goal=goal_content["description"],
             parent_goal=goal_id,
             goal_id=goal_id,  # Pass the goal_id explicitly
+            memory_repo=memory_repo,
             debug=debug,
             quiet=quiet,
             bypass_validation=bypass_validation,
-            logs_dir="logs",  # Keep logs in the logs directory
-            goals_dir=GOAL_DIR  # Store goal files in the .goal directory
+            logs_dir=str(logs_dir)  # Store logs in project root's logs directory
         )
         
         if result["success"]:
-            # Mark the goal as decomposed but DON'T copy requires_further_decomposition
+            # Create the subgoal or task file based on the decomposition result
+            is_task = result["is_task"]
+            
+            # Generate appropriate ID
+            new_id = generate_goal_id(goal_id, is_task=is_task)
+            
+            # Get current timestamp
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Create state information
+            state = {
+                "git_hash": result["git_hash"],
+                "repository_path": repo_path,
+                "description": f"Initial state when {'task' if is_task else 'subgoal'} {new_id} was created",
+                "memory_hash": result["memory_hash"],
+                "memory_repository_path": memory_repo,
+                "timestamp": timestamp
+            }
+            
+            # Create subgoal/task content
+            new_content = {
+                "goal_id": new_id,
+                "description": result["next_step"],
+                "next_step": result["next_step"],
+                "validation_criteria": result["validation_criteria"],
+                "reasoning": result["reasoning"],
+                "requires_further_decomposition": result["requires_further_decomposition"],
+                "relevant_context": result["relevant_context"],
+                "parent_goal": goal_id,
+                "timestamp": timestamp,
+                "initial_state": state,
+                "current_state": state.copy(),
+                "decomposed": False
+            }
+            
+            # Add task-specific fields
+            if is_task:
+                new_content["is_task"] = True
+            
+            # Write the new file
+            new_file = goal_path / f"{new_id}.json"
+            with open(new_file, 'w') as f:
+                json.dump(new_content, f, indent=2)
+            
+            # Mark the parent goal as decomposed
             goal_content["decomposed"] = True
             
             # Update the goal file
             with open(goal_file, 'w') as f:
                 json.dump(goal_content, f, indent=2)
             
-            # If any subgoals don't require further decomposition, rename them as tasks
-            if "subgoals" in result:
-                for subgoal in result["subgoals"]:
-                    subgoal_id = subgoal.get("goal_id")
-                    requires_decomp = subgoal.get("requires_further_decomposition", True)
-                    
-                    if not requires_decomp and subgoal_id:
-                        # Generate a task ID
-                        task_id = generate_goal_id(goal_id, is_task=True)
-                        
-                        # Rename the subgoal file to a task file
-                        subgoal_file = goal_path / f"{subgoal_id}.json"
-                        if subgoal_file.exists():
-                            # Read subgoal data
-                            with open(subgoal_file, 'r') as f:
-                                subgoal_data = json.load(f)
-                            
-                            # Update with task ID
-                            subgoal_data["goal_id"] = task_id
-                            subgoal_data["is_task"] = True
-                            
-                            # Write as new task file
-                            task_file = goal_path / f"{task_id}.json"
-                            with open(task_file, 'w') as f:
-                                json.dump(subgoal_data, f, indent=2)
-                            
-                            # Remove old subgoal file
-                            subgoal_file.unlink()
-                            
-                            print(f"Renamed directly executable subgoal {subgoal_id} to task {task_id}")
-                
-            print(f"\nGoal {goal_id} successfully decomposed into subgoals")
+            print(f"\nGoal {goal_id} successfully decomposed into {'a task' if is_task else 'a subgoal'}")
             print(f"\nNext step: {result['next_step']}")
             print("\nValidation criteria:")
             for criterion in result["validation_criteria"]:
@@ -1434,13 +1517,15 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 print("\nRequires further decomposition: No")
                 print("\nThis is a directly executable task.")
             
-            print(f"\nGoal file: {result['goal_file']}")
+            print(f"\nCreated file: {new_id}.json")
             return True
         else:
             logging.error(f"Failed to decompose goal: {result.get('error', 'Unknown error')}")
             return False
     except Exception as e:
         logging.error(f"Error during goal decomposition: {str(e)}")
+        import traceback
+        logging.debug(f"Exception traceback:\n{traceback.format_exc()}")
         return False
 
 
@@ -1536,6 +1621,10 @@ async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=Fal
             if "Context:" not in goal_description:
                 goal_description += context_addition
         
+        # Create logs directory inside .goal
+        log_dir = ensure_goal_dir() / "logs"
+        log_dir.mkdir(exist_ok=True)
+        
         # Call the goal decomposer with the current state
         result = await agent_decompose_goal(
             repo_path=repo_path,
@@ -1546,8 +1635,7 @@ async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=Fal
             debug=debug,
             quiet=quiet,
             bypass_validation=bypass_validation,
-            logs_dir="logs",
-            goals_dir=GOAL_DIR
+            logs_dir=str(log_dir)  # Store logs in .goal/logs directory
         )
         
         if result["success"]:
@@ -1743,10 +1831,10 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
     """
     logging.info(f"Executing task: {task_id}")
     
-    # Configure logging
-    log_dir = ensure_goal_dir() / "logs"
-    log_dir.mkdir(exist_ok=True)
-    configure_executor_logging(debug=debug, quiet=quiet, log_dir_path=str(log_dir))
+    # Configure logging - use project-level logs directory
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    configure_executor_logging(debug=debug, quiet=quiet, log_dir_path=str(logs_dir))
     
     # Check if task exists
     goal_path = ensure_goal_dir()

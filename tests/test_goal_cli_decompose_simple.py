@@ -81,7 +81,11 @@ class TestGoalDecomposeSimple(unittest.TestCase):
             "validation_criteria": ["Test criteria"],
             "requires_further_decomposition": True,
             "git_hash": "abc123",
-            "goal_file": "G1-S1.json"
+            "goal_file": "G1.json",
+            "is_task": False,
+            "memory_hash": None,
+            "reasoning": "Test reasoning for implementing feature X",
+            "relevant_context": {}
         }
         mock_decompose_goal.return_value = mock_result
         
@@ -112,7 +116,7 @@ class TestGoalDecomposeSimple(unittest.TestCase):
             
             # Verify output
             output = stdout_buffer.getvalue()
-            self.assertIn("Goal G1 successfully decomposed into subgoals", output)
+            self.assertIn("Goal G1 successfully decomposed into a subgoal", output)
             self.assertIn("Next step: Implement feature X", output)
             self.assertIn("Validation criteria:", output)
             self.assertIn("- Test criteria", output)
