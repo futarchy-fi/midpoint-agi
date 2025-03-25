@@ -45,7 +45,7 @@ class TestGoalDecompose(unittest.TestCase):
         """Test basic goal decomposition with validation bypassed."""
         # Setup mocks
         mock_get_hash.return_value = "abc123"
-        mock_create_file.return_value = "G1-S1.json"
+        mock_create_file.return_value = "G1.json"
         
         # Create a mock subgoal plan
         from midpoint.agents.models import SubgoalPlan
@@ -78,7 +78,7 @@ class TestGoalDecompose(unittest.TestCase):
         self.assertEqual(result["validation_criteria"], ["Test passes", "Feature works"])
         self.assertTrue(result["requires_further_decomposition"])
         self.assertEqual(result["git_hash"], "abc123")
-        self.assertEqual(result["goal_file"], "G1-S1.json")
+        self.assertEqual(result["goal_file"], "G1.json")
     
     @patch('midpoint.agents.goal_decomposer.validate_repository_state')
     @patch('midpoint.agents.goal_decomposer.get_current_hash')
