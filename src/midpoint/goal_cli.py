@@ -1166,6 +1166,12 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         logging.error(f"Failed to read goal file: {e}")
         return False
     
+    # Check if the goal requires further decomposition
+    if goal_content.get("requires_further_decomposition") is False:
+        print(f"\nError: Goal {goal_id} is a directly executable task and doesn't require further decomposition.")
+        print("It should be executed with the task-executor instead of being decomposed.")
+        return False
+    
     # Get repository path (current directory)
     repo_path = os.getcwd()
     
