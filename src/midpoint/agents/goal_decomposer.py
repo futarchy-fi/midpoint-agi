@@ -823,7 +823,8 @@ async def decompose_goal(
     goal_id: Optional[str] = None,
     memory_repo: Optional[str] = None,
     debug: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    bypass_validation: bool = False
 ) -> Dict[str, Any]:
     """
     Asynchronous function to decompose a goal into subgoals.
@@ -837,6 +838,7 @@ async def decompose_goal(
         memory_repo: Optional path to memory repository
         debug: Whether to show debug output
         quiet: Whether to only show warnings and final result
+        bypass_validation: Whether to bypass repository validation (for testing)
         
     Returns:
         Dictionary containing the decomposition result
@@ -870,14 +872,15 @@ async def decompose_goal(
         context.metadata["goal_id"] = goal_id
     
     # Validate repository state
-    try:
-        await validate_repository_state(repo_path)
-    except Exception as e:
-        logging.error(f"Error: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+    if not bypass_validation:
+        try:
+            await validate_repository_state(repo_path)
+        except Exception as e:
+            logging.error(f"Error: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
     
     # Get current git hash
     git_hash = await get_current_hash(repo_path)
@@ -924,6 +927,7 @@ async def async_main():
     parser.add_argument("--memory-repo", help="Path to memory repository")
     parser.add_argument("--debug", action="store_true", help="Show debug output")
     parser.add_argument("--quiet", action="store_true", help="Only show warnings and final result")
+    parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     
     args = parser.parse_args()
     
@@ -936,7 +940,8 @@ async def async_main():
         goal_id=args.goal_id,
         memory_repo=args.memory_repo,
         debug=args.debug,
-        quiet=args.quiet
+        quiet=args.quiet,
+        bypass_validation=args.bypass_validation
     )
     
     # Print result as JSON

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from .agents.models import Goal, SubgoalPlan
+from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
 
 # Configure basic logging
 logging.basicConfig(
@@ -1111,6 +1112,61 @@ def generate_graph():
     return True
 
 
+async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
+    """Decompose an existing goal into subgoals using the GoalDecomposer."""
+    # Verify goal exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal {goal_id} not found")
+        return False
+    
+    # Load goal content
+    try:
+        with open(goal_file, 'r') as f:
+            goal_content = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read goal file: {e}")
+        return False
+    
+    # Get repository path (current directory)
+    repo_path = os.getcwd()
+    
+    # Call the goal decomposer
+    try:
+        result = await agent_decompose_goal(
+            repo_path=repo_path,
+            goal=goal_content["description"],
+            parent_goal=goal_id,
+            goal_id=None,  # Let decomposer generate the ID
+            debug=debug,
+            quiet=quiet,
+            bypass_validation=bypass_validation
+        )
+        
+        if result["success"]:
+            print(f"\nGoal {goal_id} successfully decomposed into subgoals")
+            print(f"\nNext step: {result['next_step']}")
+            print("\nValidation criteria:")
+            for criterion in result["validation_criteria"]:
+                print(f"- {criterion}")
+            
+            if result["requires_further_decomposition"]:
+                print("\nRequires further decomposition: Yes")
+            else:
+                print("\nRequires further decomposition: No")
+            
+            print(f"\nGoal file: {result['goal_file']}")
+            return True
+        else:
+            logging.error(f"Failed to decompose goal: {result.get('error', 'Unknown error')}")
+            return False
+    except Exception as e:
+        logging.error(f"Error during goal decomposition: {str(e)}")
+        return False
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="Goal branch management commands")
@@ -1129,6 +1185,13 @@ def main():
     
     # goal list
     subparsers.add_parser("list", help="List all goals and subgoals in tree format")
+    
+    # goal decompose <goal-id>
+    decompose_parser = subparsers.add_parser("decompose", help="Decompose a goal into subgoals")
+    decompose_parser.add_argument("goal_id", help="Goal ID to decompose")
+    decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     
     # State Navigation Commands
     # ------------------------
@@ -1194,6 +1257,10 @@ def main():
         create_new_subgoal(args.parent_id, args.description)
     elif args.command == "list":
         list_goals()
+    elif args.command == "decompose":
+        # This command is async, so we need to run it with asyncio
+        import asyncio
+        asyncio.run(decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation))
     elif args.command == "back":
         go_back_commits(args.steps)
     elif args.command == "reset":
