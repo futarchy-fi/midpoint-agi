@@ -13,8 +13,9 @@ import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-from .agents.models import Goal, SubgoalPlan
+from .agents.models import Goal, SubgoalPlan, TaskContext, ExecutionResult, MemoryState, State
 from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
+from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
 
 # Configure basic logging
 logging.basicConfig(
@@ -1487,11 +1488,213 @@ def normalize_goal_relationships():
     return True
 
 
+async def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
+    """
+    Execute a task using the TaskExecutor.
+    
+    Args:
+        task_id: ID of the task to execute
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and result
+        bypass_validation: Whether to bypass repository validation
+        no_commit: Whether to prevent automatic commits
+        memory_repo: Path to memory repository
+        
+    Returns:
+        Dictionary containing the execution result
+    """
+    logging.info(f"Executing task: {task_id}")
+    
+    # Configure logging
+    log_dir = ensure_goal_dir() / "logs"
+    log_dir.mkdir(exist_ok=True)
+    configure_executor_logging(debug=debug, quiet=quiet, log_dir_path=str(log_dir))
+    
+    # Check if task exists
+    goal_path = ensure_goal_dir()
+    task_file = goal_path / f"{task_id}.json"
+    
+    if not task_file.exists():
+        logging.error(f"Task file not found: {task_file}")
+        return {
+            "success": False,
+            "error": f"Task {task_id} not found"
+        }
+    
+    # Load task data
+    try:
+        with open(task_file, 'r') as f:
+            task_data = json.load(f)
+            
+        if not task_data.get("is_task", False):
+            logging.error(f"{task_id} is not a task (is_task flag not set)")
+            return {
+                "success": False,
+                "error": f"{task_id} is not a task. Cannot execute non-task goals."
+            }
+            
+        # Get task description
+        task_description = task_data.get("next_step")
+        if not task_description:
+            logging.error("Task does not contain a next_step field")
+            return {
+                "success": False,
+                "error": "Task does not contain a next_step field"
+            }
+            
+        # Get validation criteria
+        validation_criteria = task_data.get("validation_criteria", [])
+        
+        # Get parent goal if any
+        parent_goal_id = task_data.get("parent_goal", "")
+        
+    except json.JSONDecodeError:
+        logging.error(f"Failed to parse task file: {task_file}")
+        return {
+            "success": False,
+            "error": f"Failed to parse task file: {task_file}"
+        }
+    except Exception as e:
+        logging.error(f"Error loading task: {str(e)}")
+        return {
+            "success": False, 
+            "error": f"Error loading task: {str(e)}"
+        }
+    
+    # Get the current repository path and git info
+    try:
+        repo_path = os.getcwd()  # Use current directory as repo path
+        git_hash = get_current_hash()
+        branch = get_current_branch()
+        
+        if not git_hash or not branch:
+            if not bypass_validation:
+                logging.error("Failed to get git info. Make sure you're in a git repository.")
+                return {
+                    "success": False,
+                    "error": "Failed to get git info. Make sure you're in a git repository."
+                }
+    except Exception as e:
+        if not bypass_validation:
+            logging.error(f"Error accessing git repository: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Error accessing git repository: {str(e)}"
+            }
+    
+    # Handle memory repository integration
+    memory_state = None
+    if memory_repo:
+        logging.info(f"Using memory repository at {memory_repo}")
+        try:
+            # Get current memory hash
+            from .agents.tools.git_tools import get_current_hash as get_git_hash
+            memory_hash = await get_git_hash(memory_repo)
+            
+            memory_state = MemoryState(
+                memory_hash=memory_hash,
+                repository_path=memory_repo
+            )
+        except Exception as e:
+            logging.warning(f"Failed to get memory repository hash: {e}")
+            # Continue without memory if there's an error
+    
+    # Create goal
+    goal = Goal(
+        description=task_description,
+        validation_criteria=validation_criteria,
+        success_threshold=0.8
+    )
+    
+    # Create initial state
+    state = State(
+        git_hash=git_hash if 'git_hash' in locals() else "",
+        description=f"Repository state on branch {branch if 'branch' in locals() else 'unknown'}",
+        repository_path=repo_path,
+        branch_name=branch if 'branch' in locals() else "",
+        memory_hash=memory_state.memory_hash if memory_state else None,
+        memory_repository_path=memory_repo
+    )
+    
+    # Create task context
+    context = TaskContext(
+        state=state,
+        goal=goal,
+        iteration=0,
+        execution_history=[],
+        metadata={
+            "task_id": task_id,
+            "parent_goal": parent_goal_id,
+            "no_commit": no_commit
+        },
+        memory_state=memory_state
+    )
+    
+    # Initialize task executor
+    logging.info("Initializing TaskExecutor")
+    executor = TaskExecutor()
+    
+    try:
+        # Execute the task
+        logging.info(f"Executing task: {task_description}")
+        result = await executor.execute_task(context, task_description)
+        
+        # Save the result to the task file
+        task_data["execution_result"] = {
+            "success": result.success,
+            "execution_time": result.execution_time,
+            "branch_name": result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name,
+            "git_hash": result.git_hash,
+            "error_message": result.error_message,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        }
+        
+        # Update the task file
+        with open(task_file, 'w') as f:
+            json.dump(task_data, f, indent=2)
+        
+        # Display results
+        if result.success:
+            logging.info(f"✅ Task completed successfully in {result.execution_time:.2f} seconds")
+            branch_display = result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name
+            logging.info(f"Branch: {branch_display}")
+            logging.info(f"Final commit: {result.git_hash[:8] if result.git_hash else 'None'}")
+            
+            # Display validation results if any
+            if hasattr(result, 'validation_results') and result.validation_results:
+                logging.info("Validation Results:")
+                for validation in result.validation_results:
+                    logging.info(f"- {validation}")
+        else:
+            logging.error(f"❌ Task execution failed in {result.execution_time:.2f} seconds")
+            logging.error(f"Error: {result.error_message}")
+        
+        return {
+            "success": result.success,
+            "task_id": task_id,
+            "branch_name": result.branch_name,
+            "git_hash": result.git_hash,
+            "execution_time": result.execution_time,
+            "error_message": result.error_message
+        }
+        
+    except Exception as e:
+        logging.error(f"Error during task execution: {str(e)}")
+        import traceback
+        logging.debug(f"Exception traceback:\n{traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": f"Error during task execution: {str(e)}"
+        }
+
+
 async def async_main(args):
     """Async entry point for CLI commands."""
     # Handle commands
     if args.command == "decompose":
         return await decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
+    elif args.command == "execute":
+        return await execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -1571,6 +1774,15 @@ def main():
     decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
     decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+
+    # goal execute <task-id>
+    execute_parser = subparsers.add_parser("execute", help="Execute a task using the TaskExecutor")
+    execute_parser.add_argument("task_id", help="Task ID to execute")
+    execute_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    execute_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+    execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
+    execute_parser.add_argument("--memory-repo", help="Path to memory repository")
     
     # goal normalize
     subparsers.add_parser("normalize", help="Normalize case in goal IDs and relationships")
@@ -1637,6 +1849,8 @@ def main():
     
     # Handle async commands with a single asyncio.run call
     if args.command == "decompose":
+        asyncio.run(async_main(args))
+    elif args.command == "execute":
         asyncio.run(async_main(args))
     else:
         # Handle synchronous commands directly
