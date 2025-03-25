@@ -637,9 +637,10 @@ def list_subgoals(goal_id=None):
             continue
     
     # Find direct children (subgoals and tasks)
+    # Use case-insensitive comparison
     children = {k: v for k, v in goal_files.items() 
-               if v.get("parent_goal") == goal_id or 
-                  v.get("parent_goal") == f"{goal_id}.json"}
+               if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                  v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
     
     if not children:
         print(f"No subgoals or tasks found for goal {goal_id}")
@@ -899,9 +900,10 @@ def show_goal_status():
             status = "✅"
         else:
             # Check if all subgoals are complete
+            # Use case-insensitive comparison
             subgoals = {k: v for k, v in goal_files.items() 
-                       if v.get("parent_goal") == goal_id or 
-                          v.get("parent_goal") == f"{goal_id}.json"}
+                       if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                          v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
             
             if not subgoals:
                 # Check if goal has been decomposed
@@ -933,9 +935,10 @@ def show_goal_status():
                 print(f"{indent}   Merged: {subgoal_id} at {merge_time}")
         
         # Find and print children
+        # Use case-insensitive comparison
         children = {k: v for k, v in goal_files.items() 
-                   if v.get("parent_goal") == goal_id or 
-                      v.get("parent_goal") == f"{goal_id}.json"}
+                   if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                      v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
         
         for child_id in sorted(children.keys()):
             print_goal_status(child_id, depth + 1)
@@ -988,9 +991,10 @@ def show_goal_tree():
             status = "✅"
         else:
             # Check if all subgoals are complete
+            # Use case-insensitive comparison
             subgoals = {k: v for k, v in goal_files.items() 
-                       if v.get("parent_goal") == goal_id or 
-                          v.get("parent_goal") == f"{goal_id}.json"}
+                       if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                          v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
             
             if not subgoals:
                 # Check if goal is a task or directly executable
@@ -1010,9 +1014,10 @@ def show_goal_tree():
         print(f"{prefix}{branch}{status} {goal_id}: {goal['description']}")
         
         # Find children
+        # Use case-insensitive comparison
         children = {k: v for k, v in goal_files.items() 
-                   if v.get("parent_goal") == goal_id or 
-                      v.get("parent_goal") == f"{goal_id}.json"}
+                   if v.get("parent_goal", "").upper() == goal_id.upper() or 
+                      v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
         
         # Sort children by ID
         sorted_children = sorted(children.keys())
@@ -1234,6 +1239,9 @@ def generate_graph():
 
 async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
     """Decompose an existing goal into subgoals using the GoalDecomposer."""
+    # Normalize goal_id to uppercase at the start of the function
+    goal_id = goal_id.upper() if goal_id.lower().startswith(('g', 's', 't')) else goal_id
+    
     # Verify goal exists
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
@@ -1274,9 +1282,8 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         )
         
         if result["success"]:
-            # Mark the goal as decomposed and copy requires_further_decomposition
+            # Mark the goal as decomposed but DON'T copy requires_further_decomposition
             goal_content["decomposed"] = True
-            goal_content["requires_further_decomposition"] = result.get("requires_further_decomposition", True)
             
             # Update the goal file
             with open(goal_file, 'w') as f:
@@ -1433,6 +1440,53 @@ def convert_goal_ids():
     return True
 
 
+def normalize_goal_relationships():
+    """Normalize case in all goal relationships."""
+    goal_path = ensure_goal_dir()
+    
+    # Read all goal files
+    goal_files = {}
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                goal_files[file_path] = data
+        except:
+            logging.warning(f"Failed to read goal file: {file_path}")
+    
+    fixed_count = 0
+    # Update parent_goal references
+    for file_path, data in goal_files.items():
+        modified = False
+        
+        # Get current goal_id and normalize
+        goal_id = data.get("goal_id", "")
+        if goal_id and goal_id[0].lower() in ('g', 's', 't'):
+            normalized_goal_id = goal_id[0].upper() + goal_id[1:]
+            if normalized_goal_id != goal_id:
+                data["goal_id"] = normalized_goal_id
+                modified = True
+                logging.info(f"Normalized goal_id: {goal_id} -> {normalized_goal_id}")
+        
+        # Normalize parent_goal if present
+        parent_goal = data.get("parent_goal", "")
+        if parent_goal and len(parent_goal) > 0 and parent_goal[0].lower() in ('g', 's', 't'):
+            normalized_parent = parent_goal[0].upper() + parent_goal[1:]
+            if normalized_parent != parent_goal:
+                data["parent_goal"] = normalized_parent
+                modified = True
+                logging.info(f"Normalized parent_goal: {parent_goal} -> {normalized_parent}")
+        
+        # Save if modified
+        if modified:
+            with open(file_path, 'w') as f:
+                json.dump(data, f, indent=2)
+            fixed_count += 1
+    
+    print(f"Normalized {fixed_count} goal files")
+    return True
+
+
 async def async_main(args):
     """Async entry point for CLI commands."""
     # Handle commands
@@ -1478,6 +1532,8 @@ async def async_main(args):
         return generate_graph()
     elif args.command == "convert":
         return convert_goal_ids()
+    elif args.command == "normalize":
+        return normalize_goal_relationships()
     else:
         return None
 
@@ -1515,6 +1571,9 @@ def main():
     decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
     decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+    
+    # goal normalize
+    subparsers.add_parser("normalize", help="Normalize case in goal IDs and relationships")
     
     # State Navigation Commands
     # ------------------------
@@ -1619,6 +1678,8 @@ def main():
             generate_graph()
         elif args.command == "convert":
             convert_goal_ids()
+        elif args.command == "normalize":
+            normalize_goal_relationships()
         else:
             parser.print_help()
 
