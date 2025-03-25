@@ -629,20 +629,34 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                         # Update memory hash from the document_path dictionary
                         if "memory_hash" in doc_path_info:
                             context.state.memory_hash = doc_path_info.get("memory_hash")
-                        # Store document path from the document_path dictionary
-                        if "path" in doc_path_info:
-                            context.state.memory_document_path = doc_path_info.get("path")
+                        
+                        # Extract filename from path to create a memory reference ID
+                        if "filename" in doc_path_info:
+                            # Use the filename as a clean memory reference
+                            context.state.memory_reference = doc_path_info.get("filename")
+                        elif "path" in doc_path_info:
+                            # Extract just the filename from the path as fallback
+                            from pathlib import Path
+                            path = doc_path_info.get("path")
+                            context.state.memory_reference = Path(path).name
+                            # Still store the full path in memory_document_path for backward compatibility
+                            context.state.memory_document_path = path
                     # Handle the case where the fields are directly in memory_result
                     else:
                         # Update memory hash if available at top level
                         if "memory_hash" in memory_result:
                             context.state.memory_hash = memory_result.get("memory_hash")
-                        # Store document path if available at top level
+                        
+                        # Extract filename from path to create a memory reference ID
                         if "path" in memory_result:
-                            context.state.memory_document_path = memory_result.get("path")
-                    
-                    # Set memory timestamp
-                    context.state.memory_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            from pathlib import Path
+                            path = memory_result.get("path")
+                            context.state.memory_reference = Path(path).name
+                            # Still store the full path for backward compatibility
+                            context.state.memory_document_path = path
+                        
+                        # Set memory timestamp
+                        context.state.memory_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             except Exception as e:
                 logging.error(f"Failed to save conversation to memory: {str(e)}")
                 
@@ -1014,11 +1028,30 @@ async def decompose_goal(
     # Add memory hash and path if available
     if memory_repo:
         try:
-            memory_hash = await get_current_hash(memory_repo)
-            state.memory_hash = memory_hash
+            # Get the initial memory hash (first commit) instead of current hash
+            # This ensures all goals start with the same base memory state
+            result = subprocess.run(
+                ["git", "rev-list", "--max-parents=0", "HEAD"],
+                cwd=memory_repo,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            initial_memory_hash = result.stdout.strip()
+            logging.info(f"Using initial memory repository hash: {initial_memory_hash}")
+            
+            state.memory_hash = initial_memory_hash
             state.memory_repository_path = memory_repo
         except Exception as e:
-            logging.warning(f"Failed to get memory repository hash: {e}")
+            logging.warning(f"Failed to get initial memory hash: {e}")
+            # Fallback to current hash if initial hash retrieval fails
+            try:
+                memory_hash = await get_current_hash(memory_repo)
+                state.memory_hash = memory_hash
+                state.memory_repository_path = memory_repo
+                logging.warning(f"Falling back to current memory hash: {memory_hash}")
+            except Exception as e2:
+                logging.warning(f"Failed to get memory repository hash: {e2}")
     
     context = TaskContext(
         state=state,
@@ -1071,7 +1104,8 @@ async def decompose_goal(
         "memory_hash": memory_hash,
         "is_task": not subgoal_plan.requires_further_decomposition,
         "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-        # Include memory document path and timestamp if available
+        # Include memory reference ID (preferred) and other memory information
+        "memory_reference": getattr(context.state, "memory_reference", None),
         "memory_document_path": getattr(context.state, "memory_document_path", None),
         "memory_timestamp": getattr(context.state, "memory_timestamp", None)
     }
