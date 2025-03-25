@@ -54,16 +54,20 @@ def test_generate_goal_id(goal_dir):
     goal_id2 = generate_goal_id()
     assert goal_id2 == "G2"
     
-    # Test subgoal ID
+    # Test subgoal ID (now returns S1 instead of G1-S1)
     subgoal_id = generate_goal_id(goal_id)
-    assert subgoal_id == f"{goal_id}-S1"
+    assert subgoal_id == "S1"
     
     # Create a subgoal file
     (goal_dir / f"{subgoal_id}.json").write_text("{}")
     
     # Test another subgoal ID
     subgoal_id2 = generate_goal_id(goal_id)
-    assert subgoal_id2 == f"{goal_id}-S2"
+    assert subgoal_id2 == "S2"
+    
+    # Test task ID
+    task_id = generate_goal_id(goal_id, is_task=True)
+    assert task_id == "T1"
 
 
 def test_create_goal_file(goal_dir):
