@@ -60,7 +60,14 @@ def generate_goal_id(parent_id=None):
     
     if not parent_id:
         # Find next available top-level goal number
-        existing = [f for f in goal_path.glob("G*.json")]
+        # Use a more specific pattern to only match top-level goal files (G1.json, G2.json, etc.)
+        # and exclude subgoal files (G1-S1.json, etc.)
+        import re
+        existing = []
+        for file_path in goal_path.glob("G*.json"):
+            # Match only files with pattern G followed by digits and .json
+            if re.match(r"G\d+\.json$", file_path.name):
+                existing.append(file_path)
         next_num = len(existing) + 1
         return f"G{next_num}"
     else:
