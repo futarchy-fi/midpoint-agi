@@ -836,7 +836,11 @@ def show_goal_status():
                           v.get("parent_goal") == f"{goal_id}.json"}
             
             if not subgoals:
-                status = "🔘"  # No subgoals
+                # Check if goal has been decomposed
+                if goal.get("decomposed", False) or goal.get("is_task", False):
+                    status = "🔷"  # Directly executable task
+                else:
+                    status = "🔘"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
                 status = "🟠"  # All subgoals complete but not merged
             else:
@@ -873,7 +877,8 @@ def show_goal_status():
     print("✅ Complete")
     print("🟠 All subgoals complete (ready to merge)")
     print("⚪ Incomplete (some subgoals pending)")
-    print("🔘 No subgoals")
+    print("🔷 Directly executable task")
+    print("🔘 Not yet decomposed")
 
 
 def show_goal_tree():
@@ -955,7 +960,8 @@ def show_goal_tree():
     print("✅ Complete")
     print("🟠 All subgoals complete (ready to merge)")
     print("⚪ Incomplete (some subgoals pending)")
-    print("🔘 No subgoals")
+    print("🔷 Directly executable task")
+    print("🔘 Not yet decomposed")
 
 
 def show_goal_history():
@@ -1174,6 +1180,17 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         )
         
         if result["success"]:
+            # Mark the goal as decomposed
+            goal_content["decomposed"] = True
+            
+            # If it doesn't require further decomposition, mark it as a task
+            if not result.get("requires_further_decomposition", True):
+                goal_content["is_task"] = True
+                
+            # Update the goal file
+            with open(goal_file, 'w') as f:
+                json.dump(goal_content, f, indent=2)
+                
             print(f"\nGoal {goal_id} successfully decomposed into subgoals")
             print(f"\nNext step: {result['next_step']}")
             print("\nValidation criteria:")
@@ -1184,6 +1201,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 print("\nRequires further decomposition: Yes")
             else:
                 print("\nRequires further decomposition: No")
+                print("\nThis is a directly executable task.")
             
             print(f"\nGoal file: {result['goal_file']}")
             return True
