@@ -385,7 +385,9 @@ You MUST provide a structured response in JSON format with these fields:
 - validation_criteria: List of measurable criteria to validate this step's completion
 - reasoning: Explanation of why this is the most promising next action
 - requires_further_decomposition: Boolean indicating if this step needs further breakdown (true) or can be directly executed (false)
-- relevant_context: Object containing relevant information to pass to child subgoals"""
+- relevant_context: Object containing relevant information to pass to child subgoals
+
+IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting."""
         
         return system_prompt
 
@@ -443,7 +445,8 @@ You MUST provide a structured response in JSON format with these fields:
             # Get the next step from the model
             message, tool_calls = await self.tool_processor.run_llm_with_tools(
                 messages,
-                model=self.model
+                model=self.model,
+                validate_json_format=True
             )
             
             # Process tool calls and update tool usage

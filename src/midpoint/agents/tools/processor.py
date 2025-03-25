@@ -139,6 +139,14 @@ class ToolProcessor:
                 # Get the assistant's message
                 assistant_message = response.choices[0].message
                 
+                # Log the raw content for debugging (truncated if too long)
+                raw_content = assistant_message.content or ""
+                if len(raw_content) > 500:
+                    log_content = raw_content[:500] + "..."
+                else:
+                    log_content = raw_content
+                logging.debug(f"Raw LLM response content: {log_content}")
+                
                 # Create a serializable copy of the message for our message history
                 assistant_message_dict = {
                     "role": "assistant",
@@ -182,35 +190,30 @@ class ToolProcessor:
                     # Only validate JSON format if requested
                     if validate_json_format:
                         try:
-                            # Try to parse the content as JSON
-                            content = assistant_message.content.strip()
+                            # Extract potential JSON from the response
+                            content = self._extract_json_from_response(assistant_message.content)
                             
-                            # Check if the JSON is valid, and if not, ask for valid JSON
-                            try:
-                                # If JSON is embedded in code blocks, extract it
-                                if "```json" in content:
-                                    parts = content.split("```json")
-                                    if len(parts) > 1:
-                                        json_part = parts[1].split("```")[0].strip()
-                                        json.loads(json_part)  # Just testing if it's valid
-                                elif "```" in content:
-                                    parts = content.split("```")
-                                    if len(parts) > 1:
-                                        json_part = parts[1].strip()
-                                        json.loads(json_part)  # Just testing if it's valid
-                                else:
-                                    # Try parsing directly
-                                    json.loads(content)
-                                    
-                                # If we got here, the JSON is valid, set as final response
-                                final_response = assistant_message
-                            except json.JSONDecodeError:
-                                # This was not a valid JSON, ask for a valid JSON
+                            # If extraction was successful, set as final response
+                            if content:
+                                # Create a custom response with the extracted content
+                                class ExtractedResponse:
+                                    def __init__(self, original_message, extracted_content):
+                                        # Keep original message properties
+                                        for attr in dir(original_message):
+                                            if not attr.startswith('_') and attr != 'content':
+                                                setattr(self, attr, getattr(original_message, attr, None))
+                                        # Set content to extracted JSON
+                                        self.content = extracted_content
+                                
+                                final_response = ExtractedResponse(assistant_message, content)
+                                logging.info("Successfully extracted valid JSON from model response")
+                            else:
+                                # Ask for properly formatted JSON
                                 if current_iteration < max_iterations:
                                     logging.warning(f"Invalid JSON response on iteration {current_iteration}, asking for valid JSON")
                                     current_messages.append({
                                         "role": "user",
-                                        "content": "Please provide your response in valid JSON format with fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
+                                        "content": "Please provide your response in valid JSON format with fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context. Do not include any markdown formatting, code blocks, or explanatory text. Just provide the raw JSON object."
                                     })
                                 else:
                                     # If we've reached max iterations, just return what we have
@@ -240,4 +243,83 @@ class ToolProcessor:
                     final_response = LastMessage(msg.get("content", ""))
                     break
         
-        return final_response, tool_usage 
+        return final_response, tool_usage
+        
+    def _extract_json_from_response(self, content: str) -> Optional[str]:
+        """
+        Extract valid JSON from various response formats.
+        
+        Handles:
+        1. Raw JSON
+        2. JSON in code blocks (both with and without language specifiers)
+        3. Partially valid JSON that can be repaired
+        
+        Returns:
+            Valid JSON string if successful, None otherwise
+        """
+        if not content or not isinstance(content, str):
+            return None
+            
+        content = content.strip()
+        
+        # Try direct parsing first
+        try:
+            json.loads(content)
+            return content  # Already valid JSON
+        except json.JSONDecodeError:
+            pass
+        
+        # Try extracting from code blocks
+        # Case 1: ```json ... ```
+        if "```json" in content:
+            try:
+                json_blocks = content.split("```json")
+                if len(json_blocks) > 1:
+                    for block in json_blocks[1:]:
+                        if "```" in block:
+                            potential_json = block.split("```")[0].strip()
+                            try:
+                                json.loads(potential_json)
+                                return potential_json
+                            except json.JSONDecodeError:
+                                pass
+            except Exception:
+                pass
+        
+        # Case 2: ``` ... ``` (generic code block)
+        if "```" in content:
+            try:
+                blocks = content.split("```")
+                for i in range(1, len(blocks), 2):  # Check blocks inside backticks (odd indexes)
+                    potential_json = blocks[i].strip()
+                    # Skip language identifiers like 'json' at the start
+                    lines = potential_json.split('\n', 1)
+                    if len(lines) > 1 and not lines[0].strip().startswith('{'):
+                        potential_json = lines[1].strip()
+                    
+                    try:
+                        json.loads(potential_json)
+                        return potential_json
+                    except json.JSONDecodeError:
+                        pass
+            except Exception:
+                pass
+        
+        # Case 3: Look for json-like structures with curly braces
+        try:
+            start_idx = content.find('{')
+            end_idx = content.rfind('}')
+            
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                potential_json = content[start_idx:end_idx+1].strip()
+                try:
+                    json.loads(potential_json)
+                    return potential_json
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+            
+        # If all extraction methods failed, log the content for debugging
+        logging.debug(f"Failed to extract JSON from response: {content[:200]}...")
+        return None 
