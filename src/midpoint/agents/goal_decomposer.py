@@ -636,24 +636,38 @@ appropriate when the goal involves gaining knowledge or understanding without ch
         
         return serialized
 
-    def generate_goal_id(self, parent_id=None, logs_dir="logs"):
+    def generate_goal_id(self, parent_id=None, logs_dir="logs", is_task=False):
         """Generate a goal ID in format G1, S1, or T1"""
         logs_path = Path(logs_dir)
         
-        # If a parent_id is provided, this is a subgoal
+        # If a parent_id is provided, this is a subgoal or task
         if parent_id:
-            # Find next available subgoal number
-            max_num = 0
-            for file_path in logs_path.glob("S*.json"):
-                # Match only files with pattern S followed by digits and .json
-                match = re.match(r"S(\d+)\.json$", file_path.name)
-                if match:
-                    num = int(match.group(1))
-                    max_num = max(max_num, num)
-            
-            # Next subgoal number is one more than the maximum found
-            next_num = max_num + 1
-            return f"S{next_num}"
+            if is_task:
+                # Find next available task number
+                max_num = 0
+                for file_path in logs_path.glob("T*.json"):
+                    # Match only files with pattern T followed by digits and .json
+                    match = re.match(r"T(\d+)\.json$", file_path.name)
+                    if match:
+                        num = int(match.group(1))
+                        max_num = max(max_num, num)
+                
+                # Next task number is one more than the maximum found
+                next_num = max_num + 1
+                return f"T{next_num}"
+            else:
+                # Find next available subgoal number
+                max_num = 0
+                for file_path in logs_path.glob("S*.json"):
+                    # Match only files with pattern S followed by digits and .json
+                    match = re.match(r"S(\d+)\.json$", file_path.name)
+                    if match:
+                        num = int(match.group(1))
+                        max_num = max(max_num, num)
+                
+                # Next subgoal number is one more than the maximum found
+                next_num = max_num + 1
+                return f"S{next_num}"
         else:
             # For new top-level goals, find next available number
             max_num = 0
@@ -931,8 +945,9 @@ async def decompose_goal(
     
     # If we have a parent_goal, create a subgoal file instead of overwriting the parent
     if parent_goal:
-        # Generate subgoal ID based on parent_goal
-        subgoal_id = decomposer.generate_goal_id(parent_goal, logs_dir=target_dir)
+        # Generate subgoal ID based on parent_goal - use task ID if it's directly executable
+        is_task = not subgoal_plan.requires_further_decomposition
+        subgoal_id = decomposer.generate_goal_id(parent_goal, logs_dir=target_dir, is_task=is_task)
         
         # Build the subgoal file data
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -949,6 +964,10 @@ async def decompose_goal(
             "iteration": context.iteration,
             "decomposed": True
         }
+        
+        # Add is_task flag for tasks
+        if is_task:
+            subgoal_content["is_task"] = True
         
         # Ensure directory exists
         Path(target_dir).mkdir(exist_ok=True)
