@@ -32,7 +32,10 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["midpoint", "midpoint.agents", "midpoint.testing"]
+packages = ["midpoint", "midpoint.agents", "midpoint.testing", "midpoint.utils", "midpoint.scripts"]
+
+[project.scripts]
+goal = "midpoint.goal_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

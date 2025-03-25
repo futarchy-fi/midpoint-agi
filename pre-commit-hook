@@ -12,6 +12,10 @@ echo -e "${YELLOW}Running goal ID system tests...${NC}"
 python -m pytest tests/test_goal_id_system.py -v
 GOAL_ID_RESULT=$?
 
+echo -e "${YELLOW}Running goal CLI tests...${NC}"
+python -m pytest tests/test_goal_cli.py -v
+GOAL_CLI_RESULT=$?
+
 echo -e "${YELLOW}Running memory tests...${NC}"
 python -m pytest tests/test_memory_*.py -v
 MEMORY_RESULT=$?
@@ -21,13 +25,14 @@ python -m pytest tests/test_goal_decomposer_integration.py -v
 GOAL_DECOMPOSER_RESULT=$?
 
 # Check if all tests passed
-if [ $GOAL_ID_RESULT -eq 0 ] && [ $MEMORY_RESULT -eq 0 ] && [ $GOAL_DECOMPOSER_RESULT -eq 0 ]; then
+if [ $GOAL_ID_RESULT -eq 0 ] && [ $GOAL_CLI_RESULT -eq 0 ] && [ $MEMORY_RESULT -eq 0 ] && [ $GOAL_DECOMPOSER_RESULT -eq 0 ]; then
     echo -e "${GREEN}All critical tests passed! Proceeding with commit.${NC}"
     exit 0
 else
     echo -e "${RED}Some tests failed! Please fix the tests before committing.${NC}"
     echo -e "${YELLOW}Failed tests:${NC}"
     [ $GOAL_ID_RESULT -ne 0 ] && echo "- Goal ID system tests"
+    [ $GOAL_CLI_RESULT -ne 0 ] && echo "- Goal CLI tests"
     [ $MEMORY_RESULT -ne 0 ] && echo "- Memory tests"
     [ $GOAL_DECOMPOSER_RESULT -ne 0 ] && echo "- Goal decomposer integration tests"
     exit 1
