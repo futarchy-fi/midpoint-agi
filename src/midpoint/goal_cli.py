@@ -896,15 +896,30 @@ def show_goal_status():
         goal = goal_files[goal_id]
         indent = "  " * depth
         
+        # Check for state compatibility with parent
+        state_compatible = True
+        parent_id = goal.get("parent_goal", "")
+        if parent_id in goal_files:
+            parent = goal_files[parent_id]
+            
+            # Check if this goal or task has an initial_state
+            if "initial_state" in goal and "current_state" in parent:
+                # Compare initial git hash with parent's current git hash
+                goal_initial_hash = goal.get("initial_state", {}).get("git_hash", "")
+                parent_current_hash = parent.get("current_state", {}).get("git_hash", "")
+                
+                if goal_initial_hash and parent_current_hash and goal_initial_hash != parent_current_hash:
+                    state_compatible = False
+        
         # Determine status symbol
         if goal.get("complete", False):
             status = "✅"
         else:
-            # Check for completed tasks and progress
-            progress = goal.get("progress", 0)
+            # Check for completed tasks
+            completed_tasks = len(goal.get("completed_tasks", []))
             
             # Check if the goal has completed tasks
-            has_completed_tasks = "completed_tasks" in goal and goal["completed_tasks"]
+            has_completed_tasks = completed_tasks > 0
             
             # Check if all subgoals are complete
             # Use case-insensitive comparison
@@ -920,22 +935,31 @@ def show_goal_status():
                         if "execution_result" in goal and goal["execution_result"].get("success"):
                             status = "✅"  # Completed task
                         else:
-                            status = "🔷"  # Directly executable task
+                            if not state_compatible:
+                                status = "🔶"  # State-incompatible task
+                            else:
+                                status = "🔷"  # Directly executable task
                     else:
                         status = "🔘"  # No subgoals (not yet decomposed)
                 else:
                     status = "🔘"  # No subgoals (not yet decomposed)
             elif all(sg.get("complete", False) for sg in subgoals.values()):
-                status = "🟠"  # All subgoals complete but not merged
-            elif has_completed_tasks or progress > 0:
-                status = "🟡"  # Partially completed (has some completed tasks)
+                status = "⚪"  # All subgoals complete but needs explicit completion
+            elif has_completed_tasks:
+                if not state_compatible:
+                    status = "🟣"  # Partially completed but state-incompatible
+                else:
+                    status = "🟡"  # Partially completed (has some completed tasks)
             else:
-                status = "⚪"  # Some subgoals incomplete
+                if not state_compatible:
+                    status = "🟤"  # Incompatible with parent state
+                else:
+                    status = "⚪"  # Some subgoals incomplete
         
-        # Show progress percentage if available
+        # Show task count instead of progress percentage
         progress_text = ""
-        if "progress" in goal and not goal.get("complete", False):
-            progress_text = f" [{goal['progress']}%]"
+        if "completed_task_count" in goal and "total_task_count" in goal and not goal.get("complete", False):
+            progress_text = f" [{goal['completed_task_count']}/{goal['total_task_count']} tasks]"
         
         print(f"{indent}{status} {goal_id}{progress_text}: {goal['description']}")
         
@@ -983,11 +1007,13 @@ def show_goal_status():
     # Print legend
     print("\nStatus Legend:")
     print("✅ Complete")
-    print("🟠 All subgoals complete (ready to merge)")
     print("🟡 Partially completed")
     print("⚪ Incomplete (no tasks completed)")
     print("🔷 Directly executable task")
     print("🔘 Not yet decomposed")
+    print("🔶 Task with state mismatch")
+    print("🟣 Partially completed with state mismatch")
+    print("🟤 Incompatible with parent state")
 
 
 def show_goal_tree():
@@ -1454,10 +1480,12 @@ async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=Fal
         if completed_ids:
             logging.info(f"Found {len(completed_ids)} completed tasks: {', '.join(completed_ids)}")
         
-        # Get progress
-        progress = goal_data.get("progress", 0)
-        if progress > 0:
-            logging.info(f"Current progress: {progress}%")
+        # Get task counts
+        completed_count = len(completed_tasks)
+        total_count = goal_data.get("total_task_count", 0)
+        
+        if completed_count > 0 and total_count > 0:
+            logging.info(f"Current progress: {completed_count}/{total_count} tasks completed")
         
         # Add context about completed tasks to the goal description
         goal_description = goal_data["description"]
@@ -1496,7 +1524,8 @@ async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=Fal
                 "goal_id": goal_id,
                 "next_step": result["next_step"],
                 "requires_further_decomposition": result["requires_further_decomposition"],
-                "current_progress": progress
+                "completed_tasks": completed_count,
+                "total_tasks": total_count
             }
         else:
             logging.error(f"Failed to continue goal {goal_id}: {result.get('error', 'Unknown error')}")
@@ -1985,7 +2014,9 @@ def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_st
         if children:
             completed = sum(1 for child in children if 
                            any(ct.get("task_id") == child["goal_id"] for ct in parent_data["completed_tasks"]))
-            parent_data["progress"] = round((completed / len(children)) * 100)
+            # We're removing percentage-based progress
+            parent_data["completed_task_count"] = completed
+            parent_data["total_task_count"] = len(children)
         
         # Save the updated parent data
         with open(parent_file, 'w') as f:
@@ -2198,7 +2229,18 @@ def main():
     elif args.command == "execute":
         asyncio.run(async_main(args))
     elif args.command == "continue":
-        asyncio.run(async_main(args))
+        # Run continue_goal and handle results
+        result = asyncio.run(continue_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation))
+        if result.get('success'):
+            print(f"Goal {args.goal_id} continued successfully.")
+            if result.get('completed_tasks') and result.get('total_tasks'):
+                print(f"Current progress: {result.get('completed_tasks')}/{result.get('total_tasks')} tasks completed")
+            if result.get('requires_further_decomposition'):
+                print(f"Next step requires further decomposition. Use 'goal decompose {result['goal_id']}' to continue.")
+            else:
+                print(f"Next step is directly executable. Use 'goal execute {result['goal_id']}' to execute it.")
+        else:
+            print(f"Error: {result.get('error', 'Unknown error')}")
     else:
         # Handle synchronous commands directly
         if args.command == "new":
