@@ -335,76 +335,125 @@ class GoalDecomposer:
         # Generate system prompt with dynamic tool descriptions
         self.system_prompt = self._generate_system_prompt()
         
-    async def _save_interaction_to_memory(self, 
-                                        interaction_type: str, 
-                                        content: str, 
-                                        metadata: Dict[str, Any] = None, 
-                                        memory_repo_path: str = None) -> Dict[str, Any]:
-        """
-        Save an interaction to the memory system.
+    def _save_interaction_to_memory(
+            self,
+            interaction_type: str,
+            content: str,
+            metadata: Optional[Dict[str, Any]] = None,
+            memory_hash: Optional[str] = None,
+            repo_path: Optional[str] = None
+        ) -> Optional[str]:
+        """Save interaction to memory repository.
         
         Args:
-            interaction_type: Type of interaction (e.g., 'conversation', 'reasoning', 'tool_use', 'final_output')
-            content: Content of the interaction
-            metadata: Additional metadata about the interaction (must include memory_hash)
-            memory_repo_path: Path to the memory repository (optional)
+            interaction_type: Type of interaction (e.g., 'goal_decomposition')
+            content: Content to save
+            metadata: Optional metadata
+            memory_hash: Optional memory hash to use
+            repo_path: Optional repository path
             
         Returns:
-            Result of the memory storage operation
+            Optional[str]: Path of saved document if successful, None otherwise
         """
-        # Create a timestamped filename
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save directly to general_memory folder without creating subfolders
-        category = "../general_memory"
-        
-        # Create metadata if not provided
-        if metadata is None:
-            metadata = {}
-        
-        # Add timestamp and interaction type to metadata
-        metadata["timestamp"] = timestamp
-        metadata["interaction_type"] = interaction_type
-        metadata["agent_type"] = "goal_decomposer"
-        
-        # Create a custom filename with format: TIMESTAMP_goal_decomposer_TYPE.md
-        filename = f"{timestamp}_goal_decomposer_{interaction_type}.md"
-        
-        # Set the id field in metadata (used by store_document to create the filename)
-        metadata["id"] = f"{timestamp}_goal_decomposer_{interaction_type}"
-        
-        # Extract the memory hash from metadata - this is now REQUIRED
-        memory_hash = metadata.get("memory_hash")
-        if not memory_hash:
-            logging.error(f"Cannot save to memory: memory_hash is required in metadata")
-            return {"success": False, "error": "memory_hash is required in metadata"}
-        
-        logging.info(f"Saving to memory with hash: {memory_hash}")
-        
-        # Store the document
         try:
-            result = await store_memory_document(
-                content=content,
-                category=category,
-                metadata=metadata,
-                memory_repo_path=memory_repo_path,
-                memory_hash=memory_hash  # Explicitly pass the memory_hash
+            # Get memory repository path
+            if not repo_path:
+                repo_path = get_repo_path()
+            
+            # Get current memory hash
+            if not memory_hash:
+                memory_hash = get_current_hash()
+            
+            # Create timestamped filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{interaction_type}_{timestamp}.md"
+            
+            # Create document content
+            doc_content = f"""# {interaction_type.title()}
+
+Timestamp: {timestamp}
+
+{content}
+"""
+            
+            # Add metadata if provided
+            if metadata:
+                doc_content += "\n## Metadata\n\n"
+                for key, value in metadata.items():
+                    doc_content += f"- {key}: {value}\n"
+            
+            # Store document
+            doc_path = store_document(
+                content=doc_content,
+                category="goal_decomposition",
+                metadata={
+                    "interaction_type": interaction_type,
+                    "timestamp": timestamp,
+                    **(metadata or {})
+                },
+                memory_hash=memory_hash,
+                repo_path=repo_path
             )
-            # Log more detailed information about the memory result
-            logging.info(f"Saved {interaction_type} to memory: {result}")
             
-            # Handle the nested document_path structure if present
-            doc_path_info = result.get("document_path", {})
-            if isinstance(doc_path_info, dict):
-                logging.info(f"Memory details from document_path - path: {doc_path_info.get('path')}, hash: {doc_path_info.get('memory_hash')}, category: {doc_path_info.get('category')}, filename: {doc_path_info.get('filename')}")
+            if doc_path:
+                logging.info(f"Saved {interaction_type} to memory: {doc_path}")
+                return doc_path
             else:
-                logging.info(f"Memory details (direct) - path: {result.get('path')}, hash: {result.get('memory_hash')}, category: {result.get('category')}, filename: {result.get('filename')}")
-            
-            return result
+                logging.error(f"Failed to save {interaction_type} to memory")
+                return None
+                
         except Exception as e:
-            logging.error(f"Failed to save {interaction_type} to memory: {str(e)}")
-            return {"success": False, "error": str(e)}
+            logging.error(f"Error saving {interaction_type} to memory: {str(e)}")
+            return None
+
+    def _save_conversation_to_memory(
+        self,
+        messages: List[Dict[str, str]],
+        metadata: Optional[Dict[str, Any]] = None,
+        memory_hash: Optional[str] = None,
+        repo_path: Optional[str] = None
+    ) -> Optional[str]:
+        """Save conversation to memory, excluding memory messages.
+        
+        Args:
+            messages: List of message dictionaries
+            metadata: Optional metadata
+            memory_hash: Optional memory hash to use
+            repo_path: Optional repository path
+            
+        Returns:
+            Optional[str]: Path of saved document if successful, None otherwise
+        """
+        try:
+            # Filter out memory messages and system prompt
+            filtered_messages = [
+                msg for msg in messages 
+                if msg["role"] not in ["memory", "system"]
+            ]
+            
+            # Format conversation content
+            content = "## Conversation\n\n"
+            for msg in filtered_messages:
+                content += f"### {msg['role'].title()}\n\n{msg['content']}\n\n"
+            
+            # Add metadata if provided
+            if metadata:
+                content += "## Metadata\n\n"
+                for key, value in metadata.items():
+                    content += f"- {key}: {value}\n"
+            
+            # Save to memory
+            return self._save_interaction_to_memory(
+                interaction_type="goal_decomposition",
+                content=content,
+                metadata=metadata,
+                memory_hash=memory_hash,
+                repo_path=repo_path
+            )
+            
+        except Exception as e:
+            logging.error(f"Error saving conversation to memory: {str(e)}")
+            return None
 
     def _generate_system_prompt(self) -> str:
         """
@@ -574,14 +623,13 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             {"role": "system", "content": self.system_prompt}
         ]
         
-        # Add memory context as a separate message if available
+        # Add memory context as separate messages if available
         if memory_hash and memory_repo_path:
             try:
                 # Use the new memory retrieval function
                 from midpoint.agents.tools.memory_tools import retrieve_recent_memory
                 
-                # Get approximately 10000 characters of recent memory (roughly ~2500 tokens)
-                # This is a good balance for providing context without using too much of the window
+                # Get approximately 10000 characters of recent memory
                 total_chars, memory_documents = retrieve_recent_memory(
                     memory_hash=memory_hash,
                     char_limit=10000,
@@ -589,25 +637,23 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 )
                 
                 if memory_documents:
-                    # Format the documents into a context string
-                    memory_context = "## RECENT MEMORY\n\n"
-                    for i, (path, content, timestamp) in enumerate(memory_documents, 1):
-                        # Extract filename from path
+                    # Add each memory document as a separate message
+                    for path, content, timestamp in memory_documents:
                         filename = os.path.basename(path)
-                        # Format timestamp
-                        from datetime import datetime
                         timestamp_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
                         
-                        memory_context += f"### Memory Document {i}: {filename}\n"
-                        memory_context += f"Timestamp: {timestamp_str}\n"
-                        memory_context += f"```\n{content}\n```\n\n"
+                        messages.append({
+                            "role": "memory",
+                            "content": content,
+                            "metadata": {
+                                "filename": filename,
+                                "timestamp": timestamp_str,
+                                "path": path
+                            }
+                        })
                     
                     # Log memory context stats
-                    logging.info(f"Adding memory context: {len(memory_documents)} documents, {total_chars} characters")
-                    
-                    # Add memory context as a separate message
-                    messages.append({"role": "user", "content": memory_context})
-                    messages.append({"role": "assistant", "content": "I've reviewed the memory documents."})
+                    logging.info(f"Added {len(memory_documents)} memory documents to conversation")
             except Exception as e:
                 logging.error(f"Error retrieving memory context: {str(e)}")
         
@@ -677,9 +723,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 logging.debug("API call history: %s", json.dumps(serialized_messages, indent=2))
                 
                 # Save only the complete conversation to memory
-                await self._save_interaction_to_memory(
-                    interaction_type="conversation",
-                    content=json.dumps(serialized_messages, indent=2),
+                await self._save_conversation_to_memory(
+                    messages,
                     metadata={
                         "goal": context.goal.description, 
                         "message_count": len(serialized_messages),
@@ -687,7 +732,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                         "requires_further_decomposition": final_output.requires_further_decomposition,
                         "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
-                    memory_repo_path=memory_repo_path
+                    memory_hash=memory_hash,
+                    repo_path=memory_repo_path
                 )
             except Exception as e:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
@@ -725,14 +771,14 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 }
                 
                 # Save the conversation to memory
-                memory_result = await self._save_interaction_to_memory(
-                    interaction_type="conversation",
-                    content=json.dumps(conversation_data, indent=2),
+                memory_result = await self._save_conversation_to_memory(
+                    messages,
                     metadata={
                         "timestamp": int(time.time()),
                         "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
-                    memory_repo_path=memory_repo_path
+                    memory_hash=memory_hash,
+                    repo_path=memory_repo_path
                 )
                 
                 # Update context state with memory information if available
@@ -780,15 +826,15 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             
         except Exception as e:
             # Log the error to memory
-            await self._save_interaction_to_memory(
-                interaction_type="error",
-                content=f"Error in determine_next_step: {str(e)}\n\n{traceback.format_exc()}",
+            await self._save_conversation_to_memory(
+                messages,
                 metadata={
                     "error_type": type(e).__name__, 
                     "goal": context.goal.description,
                     "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                 },
-                memory_repo_path=memory_repo_path
+                memory_hash=memory_hash,
+                repo_path=memory_repo_path
             )
             # Let the main function handle the specific error types
             raise

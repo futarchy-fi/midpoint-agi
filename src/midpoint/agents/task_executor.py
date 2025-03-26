@@ -139,7 +139,68 @@ class TaskExecutor:
         # Generate system prompt after tool registry is initialized
         self.system_prompt = self._generate_system_prompt()
         
+        # Initialize conversation buffer for memory storage
+        self.conversation_buffer = []
+        
         logger.info("TaskExecutor initialized successfully")
+
+    async def _save_interaction_to_memory(self, context: TaskContext):
+        """
+        Save the conversation to memory, excluding memory messages and system prompts.
+        """
+        if not context.state.memory_repository_path or not context.state.memory_hash:
+            logger.info("No memory repo or hash available, skipping _save_interaction_to_memory")
+            return
+
+        try:
+            # Format conversation content
+            content = "## Task Execution Conversation\n\n"
+            
+            # Add each relevant entry from the conversation buffer
+            for entry in self.conversation_buffer:
+                entry_type = entry.get("type", "unknown")
+                
+                # Skip tool usage entries as they're already reflected in the conversation
+                if entry_type == "tool_usage":
+                    continue
+                    
+                content += f"### {entry_type.title()}\n\n"
+                
+                if "user_prompt" in entry:
+                    content += f"User:\n{entry['user_prompt']}\n\n"
+                if "partial_response" in entry:
+                    content += f"Assistant:\n{entry['partial_response']}\n\n"
+                if "final_content" in entry:
+                    content += f"Final Response:\n{entry['final_content']}\n\n"
+            
+            # Add metadata
+            content += "## Metadata\n\n"
+            content += f"- Task ID: {context.metadata.get('task_id', 'unknown')}\n"
+            content += f"- Parent Goal: {context.metadata.get('parent_goal', 'none')}\n"
+            content += f"- Repository: {context.state.repository_path}\n"
+            content += f"- Branch: {context.state.branch_name}\n"
+            content += f"- Git Hash: {context.state.git_hash}\n"
+            content += f"- Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            
+            # Store in memory
+            await store_memory_document(
+                content=content,
+                category="task_execution",
+                metadata={
+                    "task_id": context.metadata.get("task_id"),
+                    "parent_goal": context.metadata.get("parent_goal"),
+                    "repository": context.state.repository_path,
+                    "branch": context.state.branch_name,
+                    "git_hash": context.state.git_hash,
+                    "timestamp": datetime.datetime.now().isoformat()
+                },
+                memory_repo_path=context.state.memory_repository_path,
+                memory_hash=context.state.memory_hash
+            )
+            logger.info("Successfully saved task execution conversation to memory", extra={'memory': True})
+            
+        except Exception as e:
+            logger.error(f"Failed to store conversation to memory: {str(e)}")
 
     def _generate_system_prompt(self) -> str:
         """
@@ -295,11 +356,53 @@ Use the store_memory_document tool to save this information with appropriate cat
 
                 logger.debug(f"User prompt: {user_prompt}")
 
+                # Store the initial user prompt
+                self.conversation_buffer.append({
+                    "type": "initial",
+                    "user_prompt": user_prompt
+                })
+
                 # Initialize messages
                 messages = [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "system", "content": self.system_prompt}
                 ]
+                
+                # Add memory context as separate messages if available
+                if context.state.memory_hash and context.state.memory_repository_path:
+                    try:
+                        # Use the new memory retrieval function
+                        from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+                        
+                        # Get approximately 10000 characters of recent memory
+                        total_chars, memory_documents = retrieve_recent_memory(
+                            memory_hash=context.state.memory_hash,
+                            char_limit=10000,
+                            repo_path=context.state.memory_repository_path
+                        )
+                        
+                        if memory_documents:
+                            # Add each memory document as a separate message
+                            for path, content, timestamp in memory_documents:
+                                filename = os.path.basename(path)
+                                timestamp_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                                
+                                messages.append({
+                                    "role": "memory",
+                                    "content": content,
+                                    "metadata": {
+                                        "filename": filename,
+                                        "timestamp": timestamp_str,
+                                        "path": path
+                                    }
+                                })
+                            
+                            # Log memory context stats
+                            logger.info(f"Added {len(memory_documents)} memory documents to conversation", extra={'memory': True})
+                    except Exception as e:
+                        logger.error(f"Error retrieving memory context: {str(e)}")
+
+                # Add the user prompt as the final message
+                messages.append({"role": "user", "content": user_prompt})
                 
                 # Maximum retries for LLM interactions
                 max_retries = 3
@@ -329,10 +432,25 @@ Use the store_memory_document tool to save this information with appropriate cat
                                     logger.info(f"Model used {len(tool_usage)} tools during execution", extra=extra)
                                     for tool in tool_usage:
                                         logger.debug(f"Used tool: {tool['tool']} with args: {tool['args']}")
+                                        
+                                    # Store tool usage in conversation buffer
+                                    self.conversation_buffer.append({
+                                        "type": "tool_usage",
+                                        "tool_usage": tool_usage
+                                    })
                                 
                                 # Get the content from the final message
                                 content = final_message.content
                                 logger.debug(f"LLM final response received (length: {len(content)})")
+                                
+                                # Store the final response
+                                self.conversation_buffer.append({
+                                    "type": "final",
+                                    "final_content": content
+                                })
+                                
+                                # Save the interaction to memory
+                                await self._save_interaction_to_memory(context)
                                 
                                 # Analyze the content to determine task status and outcomes
                                 # This is in free-form text now, not structured JSON

@@ -108,11 +108,24 @@ class ToolProcessor:
                                model: str = "gpt-4",
                                temperature: float = 0.1,
                                max_tokens: int = 4000,
-                               validate_json_format: bool = False) -> Tuple[Any, List[Dict[str, Any]]]:
-        """Run LLM with tools until a final response is generated."""
+                               validate_json_format: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Run LLM with tools until a final response is generated.
+        
+        Args:
+            messages: Initial messages (system prompt, user prompt, etc.)
+            model: The LLM model to use
+            temperature: Temperature for LLM generation
+            max_tokens: Maximum tokens for LLM generation
+            validate_json_format: Whether to validate JSON in responses
+            
+        Returns:
+            Tuple of:
+            - message_history: Complete list of all messages (system, user, assistant, tool results)
+            - tool_usage: List of tool calls and their results
+        """
         current_messages = messages.copy()
         tool_usage = []
-        final_response = None
         
         # Make sure we have initialized tools
         if not ToolRegistry._initialized:
@@ -123,18 +136,22 @@ class ToolProcessor:
         max_iterations = 10
         current_iteration = 0
         
-        while final_response is None and current_iteration < max_iterations:
+        while current_iteration < max_iterations:
             current_iteration += 1
             try:
                 # Call the LLM
-                response = await self.client.chat.completions.create(
-                    model=model,
-                    messages=current_messages,
-                    tools=ToolRegistry.get_tool_schemas(),
-                    tool_choice="auto",
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=model,
+                        messages=current_messages,
+                        tools=ToolRegistry.get_tool_schemas(),
+                        tool_choice="auto",
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                except Exception as e:
+                    logging.error(f"Error in LLM API call: {str(e)}")
+                    raise
                 
                 # Get the assistant's message
                 assistant_message = response.choices[0].message
@@ -198,52 +215,25 @@ class ToolProcessor:
                                 # Create a custom response with the extracted content
                                 class ExtractedResponse:
                                     def __init__(self, original_message, extracted_content):
-                                        # Keep original message properties
-                                        for attr in dir(original_message):
-                                            if not attr.startswith('_') and attr != 'content':
-                                                setattr(self, attr, getattr(original_message, attr, None))
-                                        # Set content to extracted JSON
-                                        self.content = extracted_content
+                                        self.content = json.dumps(extracted_content)
+                                        self.tool_calls = original_message.tool_calls
                                 
                                 final_response = ExtractedResponse(assistant_message, content)
-                                logging.info("Successfully extracted valid JSON from model response")
                             else:
-                                # Ask for properly formatted JSON
-                                if current_iteration < max_iterations:
-                                    logging.warning(f"Invalid JSON response on iteration {current_iteration}, asking for valid JSON")
-                                    current_messages.append({
-                                        "role": "user",
-                                        "content": "Please provide your response in valid JSON format with fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context. Do not include any markdown formatting, code blocks, or explanatory text. Just provide the raw JSON object."
-                                    })
-                                else:
-                                    # If we've reached max iterations, just return what we have
-                                    logging.warning("Max iterations reached, returning whatever we have")
-                                    final_response = assistant_message
-                        except Exception as e:
-                            logging.error(f"Error processing final response: {str(e)}")
+                                final_response = assistant_message
+                        except json.JSONDecodeError:
+                            # If JSON extraction fails, use the original response
                             final_response = assistant_message
                     else:
-                        # Skip JSON validation, just use the response as is
                         final_response = assistant_message
-            
+                    
+                    # Break the loop since we have our final response
+                    break
             except Exception as e:
                 logging.error(f"Error in LLM tool processing: {str(e)}")
                 raise
-                
-        # If we somehow didn't get a final response, return the last message
-        if final_response is None and current_messages:
-            for msg in reversed(current_messages):
-                if msg.get("role") == "assistant":
-                    logging.warning("No final response set, using last assistant message")
-                    # Create a basic object with content from the last message
-                    class LastMessage:
-                        def __init__(self, content):
-                            self.content = content
-                    
-                    final_response = LastMessage(msg.get("content", ""))
-                    break
         
-        return final_response, tool_usage
+        return current_messages, tool_usage
         
     def _extract_json_from_response(self, content: str) -> Optional[str]:
         """
@@ -323,3 +313,17 @@ class ToolProcessor:
         # If all extraction methods failed, log the content for debugging
         logging.debug(f"Failed to extract JSON from response: {content[:200]}...")
         return None 
+
+    async def _handle_tool_invocation(self, data: Dict[str, Any]):
+        """Handle tool invocation events from the ToolProcessor."""
+        self.conversation_buffer.append({
+            "type": "tool_invocation",
+            "tool_invocation": data
+        })
+
+    async def _handle_intermediate_response(self, data: Dict[str, Any]):
+        """Handle intermediate response events from the ToolProcessor."""
+        self.conversation_buffer.append({
+            "type": "intermediate_response",
+            "partial_response": data["content"]
+        }) 
