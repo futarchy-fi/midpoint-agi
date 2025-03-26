@@ -679,7 +679,12 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             
             # Parse the model's response
             try:
-                content = message.get('content') if isinstance(message, dict) else message.content
+                if isinstance(message, list):
+                    # If message is a list, get the last message's content
+                    content = message[-1].get('content', '')
+                else:
+                    # If message is a dict or object, get its content
+                    content = message.get('content') if isinstance(message, dict) else message.content
                 output_data = json.loads(content)
             except json.JSONDecodeError:
                 logging.error("Failed to parse model response as JSON")
