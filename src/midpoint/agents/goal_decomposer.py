@@ -305,7 +305,7 @@ class GoalDecomposer:
     This agent is responsible for determining the next step toward achieving a complex goal.
     """
     
-    def __init__(self, model: str = "gpt-4", max_history_entries: int = 5):
+    def __init__(self, model: str = "gpt-4-turbo-preview", max_history_entries: int = 5):
         """
         Initialize the goal decomposer.
         
@@ -622,7 +622,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             message, tool_calls = await self.tool_processor.run_llm_with_tools(
                 messages,
                 model=self.model,
-                validate_json_format=True
+                validate_json_format=True,
+                max_tokens=3000
             )
             
             # Process tool calls and update tool usage
