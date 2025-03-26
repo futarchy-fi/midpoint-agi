@@ -2116,18 +2116,15 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
         # Execute the task
         logging.info(f"Executing task: {task_description}")
         
-        # Store initial state before execution
-        initial_state = {
+        # Store execution state before task execution (but don't overwrite initial_state)
+        execution_state = {
             "git_hash": context.state.git_hash,
             "repository_path": context.state.repository_path,
-            "description": f"Initial state before executing task: {task_id}",
+            "description": f"State before executing task: {task_id}",
             "memory_hash": context.state.memory_hash if hasattr(context.state, "memory_hash") else None,
             "memory_repository_path": context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None,
             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         }
-        
-        # Store initial state in task data
-        task_data["initial_state"] = initial_state
         
         # Execute the task
         result = await executor.execute_task(context, task_description)
@@ -2177,7 +2174,7 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
                 "validation_results": result.validation_results if hasattr(result, 'validation_results') else [],
                 "timestamp": timestamp,
                 "parent_goal": parent_goal_id,
-                "initial_state": initial_state,
+                "execution_state": execution_state,
                 "final_state": final_state
             }, f, indent=2)
         
