@@ -6,7 +6,7 @@ import os
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from midpoint.goal_cli import (
     ensure_goal_dir,
@@ -14,8 +14,10 @@ from midpoint.goal_cli import (
     create_goal_file,
     create_new_goal,
     create_new_subgoal,
-    list_goals
+    list_goals,
+    execute_task
 )
+from midpoint.agents.models import ExecutionResult
 
 @pytest.fixture
 def goal_dir(tmp_path):
@@ -92,16 +94,45 @@ def test_create_new_goal(goal_dir, capsys):
     """Test creating a new goal."""
     description = "Test new goal"
     
-    with patch('midpoint.goal_cli.generate_goal_id', return_value="G1"):
-        goal_id = create_new_goal(description)
+    # Test with uncommitted changes
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "M test.txt"  # Simulate uncommitted changes
+        with patch('logging.error') as mock_logging:
+            goal_id = create_new_goal(description)
+            assert goal_id is None
+            mock_logging.assert_called_once_with("Cannot create new goal: You have uncommitted changes. Please commit or stash them first.")
     
-    # Check output
-    captured = capsys.readouterr()
-    assert f"Created new goal {goal_id}" in captured.out
-    
-    # Check file exists
-    goal_file = goal_dir / f"{goal_id}.json"
-    assert goal_file.exists()
+    # Test successful creation
+    with patch('subprocess.run') as mock_run:
+        # Mock git status to show no changes
+        mock_run.side_effect = [
+            # git status
+            type('Result', (), {'stdout': '', 'returncode': 0}),
+            # git rev-parse HEAD
+            type('Result', (), {'stdout': 'abcdef123456\n', 'returncode': 0}),
+            # git checkout -b
+            type('Result', (), {'stdout': 'Switched to a new branch', 'returncode': 0})
+        ]
+        
+        with patch('midpoint.goal_cli.generate_goal_id', return_value="G1"):
+            goal_id = create_new_goal(description)
+        
+        # Check output
+        captured = capsys.readouterr()
+        assert f"Created new goal {goal_id}" in captured.out
+        assert "Created branch: goal-G1" in captured.out
+        
+        # Check file exists
+        goal_file = goal_dir / f"{goal_id}.json"
+        assert goal_file.exists()
+        
+        # Check file contents
+        data = json.loads(goal_file.read_text())
+        assert data["goal_id"] == goal_id
+        assert data["description"] == description
+        assert data["branch_name"] == "goal-G1"
+        assert data["is_task"] is False
+        assert data["requires_further_decomposition"] is True
 
 
 def test_create_new_subgoal(goal_dir, capsys):
@@ -152,4 +183,90 @@ def test_list_goals(goal_dir, capsys):
     assert "Goal Tree:" in captured.out
     assert "• G1: First goal" in captured.out
     assert "  • G1-S1: First subgoal" in captured.out
-    assert "• G2: Second goal" in captured.out 
+    assert "• G2: Second goal" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_execute_task(goal_dir, capsys):
+    """Test executing a task."""
+    # Create test task file
+    task_id = "G1-S1-T1"
+    task_file = goal_dir / f"{task_id}.json"
+    
+    # Create top-level goal file
+    top_level_id = "G1"
+    top_level_file = goal_dir / f"{top_level_id}.json"
+    
+    # Write test data
+    with open(task_file, 'w') as f:
+        json.dump({
+            "goal_id": task_id,
+            "description": "Test task",
+            "parent_goal": "G1-S1",
+            "timestamp": "20250324_000000",
+            "is_task": True,
+            "requires_further_decomposition": False,
+            "initial_state": {
+                "git_hash": "abcdef123456",
+                "repository_path": "/test/repo",
+                "description": "Initial state",
+                "timestamp": "20250324_000000"
+            }
+        }, f)
+    
+    with open(top_level_file, 'w') as f:
+        json.dump({
+            "goal_id": top_level_id,
+            "description": "Test goal",
+            "branch_name": "goal-G1",
+            "timestamp": "20250324_000000"
+        }, f)
+    
+    # Mock git commands
+    with patch('subprocess.run') as mock_run, patch('midpoint.goal_cli.get_current_branch') as mock_get_branch:
+        # Mock current branch
+        mock_get_branch.return_value = "main"
+        
+        # Mock git status to show no changes
+        mock_run.side_effect = [
+            # git status
+            type('Result', (), {'stdout': '', 'returncode': 0}),
+            # git checkout goal-G1
+            type('Result', (), {'stdout': 'Switched to branch goal-G1', 'returncode': 0}),
+            # git checkout original branch
+            type('Result', (), {'stdout': 'Switched to branch main', 'returncode': 0})
+        ]
+        
+        # Mock TaskExecutor
+        with patch('midpoint.goal_cli.TaskExecutor') as mock_executor:
+            # Setup mock executor
+            mock_executor_instance = AsyncMock()
+            mock_executor.return_value = mock_executor_instance
+            mock_result = ExecutionResult(
+                success=True,
+                branch_name="goal-G1",
+                git_hash="abcdef123456",
+                error_message=None,
+                execution_time=0.5,
+                repository_path="/test/repo",
+                validation_results=["Task completed successfully"]
+            )
+            mock_executor_instance.execute_task.return_value = mock_result
+
+            # Run the function
+            result = await execute_task(task_id)
+            
+            # Assertions
+            assert result is True
+            mock_executor_instance.execute_task.assert_called_once()
+            
+            # Check that git commands were called correctly
+            assert mock_run.call_count == 3
+            assert mock_run.call_args_list[0][0][0] == ["git", "status", "--porcelain"]
+            assert mock_run.call_args_list[1][0][0] == ["git", "checkout", "goal-G1"]
+            assert mock_run.call_args_list[2][0][0] == ["git", "checkout", "main"]
+            
+            # Check output
+            captured = capsys.readouterr()
+            assert "Task G1-S1-T1 executed successfully" in captured.out
+            assert "Task completed successfully" in captured.out 

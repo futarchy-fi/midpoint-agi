@@ -11,6 +11,8 @@ from pathlib import Path
 import sys
 import tempfile
 import shutil
+import subprocess
+import pytest
 
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -36,9 +38,9 @@ class TestGoalDecomposeSimple(unittest.TestCase):
         self.goal_file = self.goal_dir / f"{self.goal_id}.json"
         self.goal_content = {
             "goal_id": self.goal_id,
-            "description": "Test goal description",
-            "parent_goal": "",
-            "timestamp": "20250101_000000"
+            "description": "Test goal",
+            "branch_name": "goal-G1",
+            "timestamp": "20250324_000000"
         }
         
         with open(self.goal_file, 'w') as f:
@@ -71,8 +73,11 @@ class TestGoalDecomposeSimple(unittest.TestCase):
         logging.getLogger().removeHandler(self.log_handler)
         logging.getLogger().setLevel(self.original_log_level)
     
+    @pytest.mark.asyncio
     @patch('midpoint.goal_cli.agent_decompose_goal')
-    def test_decompose_command_success(self, mock_decompose_goal):
+    @patch('midpoint.goal_cli.get_current_branch')
+    @patch('subprocess.run')
+    async def test_decompose_command_success(self, mock_run, mock_get_branch, mock_decompose_goal, capsys):
         """Test successful goal decomposition."""
         # Setup mock result
         mock_result = {
@@ -88,51 +93,42 @@ class TestGoalDecomposeSimple(unittest.TestCase):
             "relevant_context": {}
         }
         mock_decompose_goal.return_value = mock_result
+        mock_get_branch.return_value = "main"
+        mock_run.return_value = type('Result', (), {'stdout': '', 'returncode': 0})
         
-        # Set up arguments for the command
-        sys.argv = ["goal_cli.py", "decompose", self.goal_id, "--bypass-validation"]
+        # Reset log capture
+        self.log_capture.truncate(0)
+        self.log_capture.seek(0)
         
-        # Capture stdout
-        import io
-        stdout_buffer = io.StringIO()
-        orig_stdout = sys.stdout
-        sys.stdout = stdout_buffer
+        # Run the command
+        result = await midpoint.goal_cli.decompose_existing_goal(
+            self.goal_id,
+            debug=False,
+            quiet=False,
+            bypass_validation=True
+        )
         
-        try:
-            # Run the command through a small script that mimics calling the function directly
-            import asyncio
-            async def run_command():
-                return await midpoint.goal_cli.decompose_existing_goal(
-                    self.goal_id, 
-                    debug=False, 
-                    quiet=False, 
-                    bypass_validation=True
-                )
-            
-            result = asyncio.run(run_command())
-            
-            # Verify success
-            self.assertTrue(result)
-            
-            # Verify output
-            output = stdout_buffer.getvalue()
-            self.assertIn("Goal G1 successfully decomposed into a subgoal", output)
-            self.assertIn("Next step: Implement feature X", output)
-            self.assertIn("Validation criteria:", output)
-            self.assertIn("- Test criteria", output)
-            
-            # Verify the mock was called with the right parameters
-            mock_decompose_goal.assert_called_once()
-            args, kwargs = mock_decompose_goal.call_args
-            self.assertEqual(kwargs["goal"], "Test goal description")
-            self.assertEqual(kwargs["parent_goal"], self.goal_id)
-            self.assertTrue(kwargs["bypass_validation"])
-        finally:
-            # Restore stdout
-            sys.stdout = orig_stdout
+        # Verify success
+        assert result is True
+        
+        # Verify output
+        captured = capsys.readouterr()
+        assert "Goal G1 successfully decomposed into subgoals" in captured.out
+        assert "Next step: Implement feature X" in captured.out
+        assert "Test criteria" in captured.out
+        
+        # Verify the mock was called with the right parameters
+        mock_decompose_goal.assert_called_once()
+        args, kwargs = mock_decompose_goal.call_args
+        self.assertEqual(kwargs["goal"], "Test goal")
+        self.assertEqual(kwargs["parent_goal"], self.goal_id)
+        self.assertTrue(kwargs["bypass_validation"])
     
+    @pytest.mark.asyncio
     @patch('midpoint.goal_cli.agent_decompose_goal')
-    def test_decompose_command_failure(self, mock_decompose_goal):
+    @patch('midpoint.goal_cli.get_current_branch')
+    @patch('subprocess.run')
+    async def test_decompose_command_failure(self, mock_run, mock_get_branch, mock_decompose_goal, capsys):
         """Test failed goal decomposition."""
         # Setup mock result for failure
         mock_result = {
@@ -140,29 +136,28 @@ class TestGoalDecomposeSimple(unittest.TestCase):
             "error": "Decomposition failed"
         }
         mock_decompose_goal.return_value = mock_result
+        mock_get_branch.return_value = "main"
+        mock_run.return_value = type('Result', (), {'stdout': '', 'returncode': 0})
         
         # Reset log capture
         self.log_capture.truncate(0)
         self.log_capture.seek(0)
         
-        # Run the command through a small script
-        import asyncio
-        async def run_command():
-            return await midpoint.goal_cli.decompose_existing_goal(
-                self.goal_id, 
-                debug=False, 
-                quiet=False, 
-                bypass_validation=True
-            )
-        
-        result = asyncio.run(run_command())
+        # Run the command
+        result = await midpoint.goal_cli.decompose_existing_goal(
+            self.goal_id,
+            debug=False,
+            quiet=False,
+            bypass_validation=True
+        )
         
         # Verify failure
-        self.assertFalse(result)
+        assert result is False
         
-        # Verify error output was logged
-        log_output = self.log_capture.getvalue()
-        self.assertIn("Failed to decompose goal", log_output)
+        # Verify error output
+        captured = capsys.readouterr()
+        assert "Failed to decompose goal" in captured.err
+        assert "Decomposition failed" in captured.err
     
     def test_decompose_nonexistent_goal(self):
         """Test decomposing a nonexistent goal."""

@@ -103,136 +103,39 @@ def generate_goal_id(parent_id=None, is_task=False):
         return f"G{next_num}"
 
 
-def create_goal_file(goal_id, description, parent_id=None):
-    """Create a goal file with the given ID, description, and optional parent ID."""
-    
+def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
+    """Create a goal file with the given information."""
     goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
     
-    # Get current git hash from repository
-    git_hash = get_current_hash()
-    
-    # Get current timestamp
+    # Get current repository information
+    current_hash = get_current_hash()
+    repo_path = os.getcwd()
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Get memory repository path from environment
-    memory_repo_path = None
-    try:
-        # Try relative import first
-        from ..agents.tools.memory_tools import system_get_repo_path
-        memory_repo_path = system_get_repo_path()
-    except (ImportError, ValueError):
-        try:
-            # Fallback to absolute import for tests
-            from midpoint.agents.tools.memory_tools import system_get_repo_path
-            memory_repo_path = system_get_repo_path()
-        except (ImportError, ValueError):
-            # Set a default path for tests
-            memory_repo_path = os.path.expanduser("~/.midpoint/memory")
-    
-    # Check if memory repository exists, initialize if needed
-    from pathlib import Path
-    memory_path = Path(memory_repo_path)
-    if not (memory_path / ".git").exists():
-        try:
-            # Import memory initialization function
-            logging.info(f"Memory repository not found at {memory_repo_path}, initializing...")
-            try:
-                from scripts.init_memory_repo import init_memory_repo
-            except (ImportError, ValueError):
-                # For testing environment
-                init_memory_repo = lambda path: {"path": path, "branch": "main"}
-                logging.info("Using mock init_memory_repo for tests")
-                
-            init_memory_repo(memory_repo_path)
-            logging.info(f"Memory repository initialized at {memory_repo_path}")
-        except Exception as e:
-            logging.warning(f"Failed to initialize memory repository: {e}")
-    
-    # Check for untracked files in memory repository
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=memory_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        if result.stdout.strip():
-            # Check specifically for untracked files (lines starting with ??)
-            has_untracked = any(line.startswith("??") for line in result.stdout.splitlines())
-            if has_untracked:
-                error_msg = "Memory repository has untracked files. Please commit or remove them before creating a new goal."
-                logging.error(error_msg)
-                raise RuntimeError(error_msg)
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Failed to check memory repository status: {e}"
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-    
-    # Get the initial commit hash (this will be the base memory state)
-    memory_hash = None
-    try:
-        # Find the first commit in the memory repository
-        # This ensures we always use the same initial hash regardless of current state
-        result = subprocess.run(
-            ["git", "rev-list", "--max-parents=0", "HEAD"],
-            cwd=memory_repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        memory_hash = result.stdout.strip()
-        logging.info(f"Using initial memory repository hash: {memory_hash}")
-    except Exception as e:
-        # If this is a test environment, use a mock hash
-        if "pytest" in sys.modules:
-            memory_hash = "initial_test_hash_123456789"
-            logging.info(f"Using mock initial memory hash for tests: {memory_hash}")
-        else:
-            logging.warning(f"Failed to get initial memory hash: {e}")
-    
-    # Create state with timestamp, git hash, and memory information
-    state = {
-        "git_hash": git_hash,
-        "repository_path": os.getcwd(),
-        "description": f"Initial state when goal {goal_id} was created",
-        "memory_hash": memory_hash,
-        "memory_repository_path": memory_repo_path,
-        "timestamp": timestamp
-    }
-    
-    # Create goal content
-    goal_content = {
+    # Prepare goal data
+    goal_data = {
         "goal_id": goal_id,
         "description": description,
         "parent_goal": parent_id or "",
         "timestamp": timestamp,
-        "initial_state": state,
-        "current_state": state.copy()
+        "is_task": False,
+        "requires_further_decomposition": True,
+        "branch_name": branch_name,
+        "initial_state": {
+            "git_hash": current_hash,
+            "repository_path": repo_path,
+            "description": f"Initial state before creating goal: {goal_id}",
+            "timestamp": timestamp
+        }
     }
     
-    # Check if file already exists to avoid overwriting
-    output_file = goal_path / f"{goal_id}.json"
-    if output_file.exists():
-        logging.warning(f"Goal file already exists: {output_file}")
-        # Generate a unique ID by appending a timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        goal_id = f"{goal_id}-{timestamp}"
-        output_file = goal_path / f"{goal_id}.json"
-        logging.info(f"Using alternative goal ID: {goal_id}")
-    
-    # For top-level goals, initialize completed_tasks and task counts
-    if not parent_id:
-        goal_content["completed_tasks"] = []
-        goal_content["completed_task_count"] = 0
-        goal_content["total_task_count"] = 0
-    
     # Write the goal file
-    with open(output_file, 'w') as f:
-        json.dump(goal_content, f, indent=2)
-        
-    logging.info(f"Created goal file: {output_file}")
-    return str(output_file)
+    with open(goal_file, 'w') as f:
+        json.dump(goal_data, f, indent=2)
+    
+    logging.info(f"Created goal file: {goal_file}")
+    return str(goal_file)
 
 
 def list_goals():
@@ -280,9 +183,52 @@ def list_goals():
 
 def create_new_goal(description):
     """Create a new top-level goal."""
+    # Check for uncommitted changes
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout.strip():
+            logging.error("Cannot create new goal: You have uncommitted changes. Please commit or stash them first.")
+            return None
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to check git status: {e}")
+        return None
+
+    # Generate goal ID
     goal_id = generate_goal_id()
-    create_goal_file(goal_id, description)
+    
+    # Create a branch name from the description
+    branch_name = f"goal-{goal_id}"
+    
+    # Create and checkout the branch
+    try:
+        subprocess.run(
+            ["git", "checkout", "-b", branch_name],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to create branch: {e}")
+        return None
+    
+    # Create goal file with branch information
+    goal_data = {
+        "goal_id": goal_id,
+        "description": description,
+        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "branch_name": branch_name,
+        "is_task": False,
+        "requires_further_decomposition": True
+    }
+    
+    create_goal_file(goal_id, description, branch_name=branch_name)
     print(f"Created new goal {goal_id}: {description}")
+    print(f"Created branch: {branch_name}")
     return goal_id
 
 
@@ -315,57 +261,23 @@ def create_new_task(parent_id, description):
         logging.error(f"Parent goal {parent_id} not found")
         return None
     
-    # Load parent goal to get its current memory state
-    parent_goal_data = None
-    try:
-        with open(parent_file, 'r') as f:
-            parent_goal_data = json.load(f)
-    except Exception as e:
-        logging.error(f"Failed to read parent goal file: {e}")
-        return None
-    
     # Generate task ID
     task_id = generate_goal_id(parent_id, is_task=True)
     
-    # Get current repository information for state tracking
-    current_hash = get_current_hash()
-    repo_path = os.getcwd()
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Get memory information from parent goal's current state
-    memory_hash = None
-    memory_repo_path = None
-    memory_reference = None
-    
-    if "current_state" in parent_goal_data:
-        parent_state = parent_goal_data["current_state"]
-        memory_hash = parent_state.get("memory_hash")
-        memory_repo_path = parent_state.get("memory_repository_path")
-        memory_reference = parent_state.get("memory_reference")
-    
-    # Create state object
-    state = {
-        "git_hash": current_hash,
-        "repository_path": repo_path,
-        "description": f"Initial state before executing task: {task_id}",
-        "memory_hash": memory_hash,
-        "memory_repository_path": memory_repo_path,
-        "timestamp": timestamp
-    }
-    
-    # Add memory_reference if available
-    if memory_reference:
-        state["memory_reference"] = memory_reference
-    
-    # Prepare task data
+    # Create task file with the expected structure
     task_data = {
         "goal_id": task_id,
         "description": description,
         "parent_goal": parent_id,
-        "timestamp": timestamp,
+        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         "is_task": True,
         "requires_further_decomposition": False,
-        "initial_state": state
+        "initial_state": {
+            "git_hash": get_current_hash(),
+            "repository_path": os.getcwd(),
+            "description": f"Initial state before executing task: {task_id}",
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        }
     }
     
     # Write the task file
@@ -1506,11 +1418,8 @@ def generate_graph():
 
 
 async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
-    """Decompose an existing goal into subgoals using the GoalDecomposer."""
-    # Normalize goal_id to uppercase at the start of the function
-    goal_id = goal_id.upper() if goal_id.lower().startswith(('g', 's', 't')) else goal_id
-    
-    # Verify goal exists
+    """Decompose an existing goal into subgoals."""
+    # Get the goal file path
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
     
@@ -1518,146 +1427,92 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         logging.error(f"Goal {goal_id} not found")
         return False
     
-    # Load goal content
+    # Load the goal data
     try:
         with open(goal_file, 'r') as f:
-            goal_content = json.load(f)
+            goal_data = json.load(f)
     except Exception as e:
         logging.error(f"Failed to read goal file: {e}")
         return False
     
-    # Check if the goal requires further decomposition
-    if goal_content.get("requires_further_decomposition") is False:
-        print(f"\nError: Goal {goal_id} is a directly executable task and doesn't require further decomposition.")
-        print("It should be executed with the task-executor instead of being decomposed.")
+    # Get the top-level goal ID and its branch
+    top_level_id = goal_id.split('-')[0]
+    top_level_file = goal_path / f"{top_level_id}.json"
+    
+    if not top_level_file.exists():
+        logging.error(f"Top-level goal {top_level_id} not found")
         return False
     
-    # Get repository path (current directory)
-    repo_path = os.getcwd()
-    
-    # Get memory repository path from goal state if available
-    memory_repo = None
-    if "current_state" in goal_content and goal_content["current_state"].get("memory_repository_path"):
-        memory_repo = goal_content["current_state"].get("memory_repository_path")
-    
-    # Ensure the logs directory exists at project root
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-    
-    # Call the goal decomposer
     try:
+        with open(top_level_file, 'r') as f:
+            top_level_data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read top-level goal file: {e}")
+        return False
+    
+    top_level_branch = top_level_data.get('branch_name')
+    if not top_level_branch:
+        logging.error(f"Failed to decompose goal: Top-level goal {top_level_id} has no associated branch")
+        return False
+    
+    # Save current branch and check for changes
+    current_branch = get_current_branch()
+    if not current_branch:
+        logging.error("Failed to get current branch")
+        return False
+    
+    has_changes = False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        has_changes = bool(result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to check git status: {e}")
+        return False
+    
+    # Stash changes if needed
+    if has_changes:
+        try:
+            subprocess.run(
+                ["git", "stash", "push", "-m", f"Stashing changes before decomposing goal {goal_id}"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to stash changes: {e}")
+            return False
+    
+    try:
+        # Switch to the top-level goal's branch
+        try:
+            subprocess.run(
+                ["git", "checkout", top_level_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to checkout branch {top_level_branch}: {e}")
+            return False
+        
+        # Call the goal decomposer
         result = await agent_decompose_goal(
-            repo_path=repo_path,
-            goal=goal_content["description"],
+            repo_path=os.getcwd(),
+            goal=goal_data["description"],
             parent_goal=goal_id,
-            goal_id=goal_id,  # Pass the goal_id explicitly
-            memory_repo=memory_repo,
+            goal_id=None,
             debug=debug,
             quiet=quiet,
-            bypass_validation=bypass_validation,
-            logs_dir=str(logs_dir)  # Store logs in project root's logs directory
+            bypass_validation=bypass_validation
         )
         
-        # Debug: Print memory-related fields in the result
-        logging.info(f"Decomposition result memory info: memory_hash={result.get('memory_hash')}, memory_document_path={result.get('memory_document_path')}, memory_timestamp={result.get('memory_timestamp')}")
-        
         if result["success"]:
-            # Create the subgoal or task file based on the decomposition result
-            is_task = result["is_task"]
-            
-            # Generate appropriate ID
-            new_id = generate_goal_id(goal_id, is_task=is_task)
-            
-            # Get current timestamp
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Create state information
-            state = {
-                "git_hash": result["git_hash"],
-                "repository_path": repo_path,
-                "description": f"Initial state when {'task' if is_task else 'subgoal'} {new_id} was created",
-                "memory_hash": result["memory_hash"],
-                "memory_repository_path": memory_repo,
-                "timestamp": timestamp
-            }
-            
-            # Add memory document path and timestamp if available
-            if "memory_document_path" in result and result["memory_document_path"]:
-                state["memory_document_path"] = result["memory_document_path"]
-            if "memory_timestamp" in result and result["memory_timestamp"]:
-                state["memory_timestamp"] = result["memory_timestamp"]
-            
-            # Add memory reference ID (preferred) and other memory information if available
-            if "memory_reference" in result and result["memory_reference"]:
-                state["memory_reference"] = result["memory_reference"]
-            elif "memory_document_path" in result and result["memory_document_path"]:
-                # For backward compatibility
-                state["memory_document_path"] = result["memory_document_path"]
-            if "memory_timestamp" in result and result["memory_timestamp"]:
-                state["memory_timestamp"] = result["memory_timestamp"]
-            
-            # Create subgoal/task content
-            new_content = {
-                "goal_id": new_id,
-                "description": result["next_step"],
-                "next_step": result["next_step"],
-                "validation_criteria": result["validation_criteria"],
-                "reasoning": result["reasoning"],
-                "requires_further_decomposition": result["requires_further_decomposition"],
-                "relevant_context": result["relevant_context"],
-                "parent_goal": goal_id,
-                "timestamp": timestamp,
-                "initial_state": state,
-                "current_state": state.copy(),
-                "decomposed": False
-            }
-            
-            # Add task-specific fields
-            if is_task:
-                new_content["is_task"] = True
-            
-            # Write the new file
-            new_file = goal_path / f"{new_id}.json"
-            with open(new_file, 'w') as f:
-                json.dump(new_content, f, indent=2)
-            
-            # Mark the parent goal as decomposed
-            goal_content["decomposed"] = True
-            
-            # Update the parent goal's current state with memory information
-            if "current_state" in goal_content:
-                if "memory_hash" in result:
-                    goal_content["current_state"]["memory_hash"] = result["memory_hash"]
-                if "memory_document_path" in result and result["memory_document_path"]:
-                    goal_content["current_state"]["memory_document_path"] = result["memory_document_path"]
-                if "memory_timestamp" in result and result["memory_timestamp"]:
-                    goal_content["current_state"]["memory_timestamp"] = result["memory_timestamp"]
-                # Update timestamp
-                goal_content["current_state"]["timestamp"] = timestamp
-            
-            # Update the parent goal's current state with memory information
-            if "current_state" in goal_content:
-                if "memory_hash" in result:
-                    goal_content["current_state"]["memory_hash"] = result["memory_hash"]
-                
-                # Add memory reference (preferred) to parent goal state
-                if "memory_reference" in result and result["memory_reference"]:
-                    goal_content["current_state"]["memory_reference"] = result["memory_reference"]
-                elif "memory_document_path" in result and result["memory_document_path"]:
-                    # Keep memory_document_path for backward compatibility
-                    goal_content["current_state"]["memory_document_path"] = result["memory_document_path"]
-                
-                if "memory_timestamp" in result and result["memory_timestamp"]:
-                    goal_content["current_state"]["memory_timestamp"] = result["memory_timestamp"]
-                
-                # Update timestamp
-                goal_content["current_state"]["timestamp"] = timestamp
-            
-            # Update the goal file
-            with open(goal_file, 'w') as f:
-                json.dump(goal_content, f, indent=2)
-            
-            print(f"\nGoal {goal_id} successfully decomposed into {'a task' if is_task else 'a subgoal'}")
+            print(f"\nGoal {goal_id} successfully decomposed into subgoals")
             print(f"\nNext step: {result['next_step']}")
             print("\nValidation criteria:")
             for criterion in result["validation_criteria"]:
@@ -1667,18 +1522,37 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 print("\nRequires further decomposition: Yes")
             else:
                 print("\nRequires further decomposition: No")
-                print("\nThis is a directly executable task.")
             
-            print(f"\nCreated file: {new_id}.json")
+            print(f"\nGoal file: {result['goal_file']}")
             return True
         else:
-            logging.error(f"Failed to decompose goal: {result.get('error', 'Unknown error')}")
+            print(f"Failed to decompose goal: {result.get('error', 'Unknown error')}", file=sys.stderr)
             return False
-    except Exception as e:
-        logging.error(f"Error during goal decomposition: {str(e)}")
-        import traceback
-        logging.debug(f"Exception traceback:\n{traceback.format_exc()}")
-        return False
+            
+    finally:
+        # Always restore the original branch and unstash changes
+        try:
+            # Switch back to original branch
+            subprocess.run(
+                ["git", "checkout", current_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            # Unstash changes if we stashed them
+            if has_changes:
+                subprocess.run(
+                    ["git", "stash", "pop"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to restore original state: {e}")
+            # Don't raise here as we're in a finally block
+    
+    return False
 
 
 async def continue_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
@@ -1967,258 +1841,143 @@ def normalize_goal_relationships():
 
 
 async def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
-    """
-    Execute a task using the TaskExecutor.
-    
-    Args:
-        task_id: ID of the task to execute
-        debug: Whether to show debug output
-        quiet: Whether to only show warnings and result
-        bypass_validation: Whether to bypass repository validation
-        no_commit: Whether to prevent automatic commits
-        memory_repo: Path to memory repository
-        
-    Returns:
-        Dictionary containing the execution result
-    """
-    logging.info(f"Executing task: {task_id}")
-    
-    # Configure logging - use project-level logs directory
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-    configure_executor_logging(debug=debug, quiet=quiet, log_dir_path=str(logs_dir))
-    
-    # Check if task exists
+    """Execute a task using the TaskExecutor."""
+    # Get the task file path
     goal_path = ensure_goal_dir()
     task_file = goal_path / f"{task_id}.json"
     
     if not task_file.exists():
-        logging.error(f"Task file not found: {task_file}")
-        return {
-            "success": False,
-            "error": f"Task {task_id} not found"
-        }
+        logging.error(f"Task {task_id} not found")
+        return False
     
-    # Load task data
+    # Load the task data
     try:
         with open(task_file, 'r') as f:
             task_data = json.load(f)
-            
-        if not task_data.get("is_task", False):
-            logging.error(f"{task_id} is not a task (is_task flag not set)")
-            return {
-                "success": False,
-                "error": f"{task_id} is not a task. Cannot execute non-task goals."
-            }
-            
-        # Get task description
-        task_description = task_data.get("next_step")
-        if not task_description:
-            logging.error("Task does not contain a next_step field")
-            return {
-                "success": False,
-                "error": "Task does not contain a next_step field"
-            }
-            
-        # Get validation criteria
-        validation_criteria = task_data.get("validation_criteria", [])
-        
-        # Get parent goal if any
-        parent_goal_id = task_data.get("parent_goal", "")
-        
-    except json.JSONDecodeError:
-        logging.error(f"Failed to parse task file: {task_file}")
-        return {
-            "success": False,
-            "error": f"Failed to parse task file: {task_file}"
-        }
     except Exception as e:
-        logging.error(f"Error loading task: {str(e)}")
-        return {
-            "success": False, 
-            "error": f"Error loading task: {str(e)}"
-        }
+        logging.error(f"Failed to read task file: {e}")
+        return False
     
-    # Get the current repository path and git info
+    # Get the top-level goal ID and its branch
+    top_level_id = task_id.split('-')[0]
+    top_level_file = goal_path / f"{top_level_id}.json"
+    
+    if not top_level_file.exists():
+        logging.error(f"Top-level goal {top_level_id} not found")
+        return False
+    
     try:
-        repo_path = os.getcwd()  # Use current directory as repo path
-        git_hash = get_current_hash()
-        branch = get_current_branch()
-        
-        if not git_hash or not branch:
-            if not bypass_validation:
-                logging.error("Failed to get git info. Make sure you're in a git repository.")
-                return {
-                    "success": False,
-                    "error": "Failed to get git info. Make sure you're in a git repository."
-                }
+        with open(top_level_file, 'r') as f:
+            top_level_data = json.load(f)
     except Exception as e:
-        if not bypass_validation:
-            logging.error(f"Error accessing git repository: {str(e)}")
-            return {
-                "success": False,
-                "error": f"Error accessing git repository: {str(e)}"
-            }
+        logging.error(f"Failed to read top-level goal file: {e}")
+        return False
     
-    # Handle memory repository integration
-    memory_state = None
-    if memory_repo:
-        logging.info(f"Using memory repository at {memory_repo}")
+    top_level_branch = top_level_data.get('branch_name')
+    if not top_level_branch:
+        logging.error(f"Top-level goal {top_level_id} has no associated branch")
+        return False
+    
+    # Save current branch and check for changes
+    current_branch = get_current_branch()
+    if not current_branch:
+        logging.error("Failed to get current branch")
+        return False
+    
+    has_changes = False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        has_changes = bool(result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to check git status: {e}")
+        return False
+    
+    # Stash changes if needed
+    if has_changes:
         try:
-            # Get current memory hash
-            from .agents.tools.git_tools import get_current_hash as get_git_hash
-            memory_hash = await get_git_hash(memory_repo)
-            
-            memory_state = MemoryState(
-                memory_hash=memory_hash,
-                repository_path=memory_repo
+            subprocess.run(
+                ["git", "stash", "push", "-m", f"Stashing changes before executing task {task_id}"],
+                check=True,
+                capture_output=True,
+                text=True
             )
-        except Exception as e:
-            logging.warning(f"Failed to get memory repository hash: {e}")
-            # Continue without memory if there's an error
-    
-    # Create goal
-    goal = Goal(
-        description=task_description,
-        validation_criteria=validation_criteria,
-        success_threshold=0.8
-    )
-    
-    # Create initial state
-    state = State(
-        git_hash=git_hash if 'git_hash' in locals() else "",
-        description=f"Repository state on branch {branch if 'branch' in locals() else 'unknown'}",
-        repository_path=repo_path,
-        branch_name=branch if 'branch' in locals() else "",
-        memory_hash=memory_state.memory_hash if memory_state else None,
-        memory_repository_path=memory_repo
-    )
-    
-    # Create task context
-    context = TaskContext(
-        state=state,
-        goal=goal,
-        iteration=0,
-        execution_history=[],
-        metadata={
-            "task_id": task_id,
-            "parent_goal": parent_goal_id,
-            "no_commit": no_commit
-        },
-        memory_state=memory_state
-    )
-    
-    # Initialize task executor
-    logging.info("Initializing TaskExecutor")
-    executor = TaskExecutor()
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to stash changes: {e}")
+            return False
     
     try:
-        # Execute the task
-        logging.info(f"Executing task: {task_description}")
+        # Switch to the top-level goal's branch
+        try:
+            subprocess.run(
+                ["git", "checkout", top_level_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to checkout branch {top_level_branch}: {e}")
+            return False
         
-        # Store execution state before task execution (but don't overwrite initial_state)
-        execution_state = {
-            "git_hash": context.state.git_hash,
-            "repository_path": context.state.repository_path,
-            "description": f"State before executing task: {task_id}",
-            "memory_hash": context.state.memory_hash if hasattr(context.state, "memory_hash") else None,
-            "memory_repository_path": context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None,
-            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        }
+        # Create task context
+        context = TaskContext(
+            state=State(
+                git_hash=task_data["initial_state"]["git_hash"],
+                repository_path=task_data["initial_state"]["repository_path"],
+                description=task_data["initial_state"]["description"],
+                branch_name=top_level_branch
+            ),
+            goal=Goal(
+                description=task_data["description"],
+                validation_criteria=[]
+            ),
+            iteration=0,
+            execution_history=[]
+        )
         
-        # Execute the task
-        result = await executor.execute_task(context, task_description)
+        # Configure logging
+        configure_executor_logging(debug, quiet)
         
-        # Extract final state from the result
-        final_state = None
-        if hasattr(result, 'final_state') and result.final_state:
-            final_state = {
-                "git_hash": result.final_state.git_hash,
-                "repository_path": result.final_state.repository_path,
-                "description": result.final_state.description,
-                "memory_hash": result.final_state.memory_hash if hasattr(result.final_state, "memory_hash") else None,
-                "memory_repository_path": result.final_state.memory_repository_path if hasattr(result.final_state, "memory_repository_path") else None,
-                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            }
+        # Create and run the executor
+        executor = TaskExecutor()
+        result = await executor.execute_task(context, task_data["description"])
         
-        # Save the result to the task file
-        task_data["execution_result"] = {
-            "success": result.success,
-            "execution_time": result.execution_time,
-            "branch_name": result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name,
-            "git_hash": result.git_hash,
-            "error_message": result.error_message,
-            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-            "final_state": final_state
-        }
-        
-        # Update the task file
-        with open(task_file, 'w') as f:
-            json.dump(task_data, f, indent=2)
-        
-        # Also save a separate task_result file in the .goal directory
-        results_dir = ensure_goal_dir() / "results"
-        results_dir.mkdir(exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        result_file = results_dir / f"{task_id}_result_{timestamp}.json"
-        
-        with open(result_file, 'w') as f:
-            json.dump({
-                "task_id": task_id,
-                "task": task_description,
-                "success": result.success,
-                "execution_time": result.execution_time,
-                "branch_name": result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name,
-                "git_hash": result.git_hash,
-                "error_message": result.error_message,
-                "validation_results": result.validation_results if hasattr(result, 'validation_results') else [],
-                "timestamp": timestamp,
-                "parent_goal": parent_goal_id,
-                "execution_state": execution_state,
-                "final_state": final_state
-            }, f, indent=2)
-        
-        logging.info(f"Saved execution result to: {result_file}")
-        
-        # Update parent goal's state if task was successful
-        if result.success and parent_goal_id:
-            updated_parent = update_parent_goal_state(parent_goal_id, task_id, result, final_state)
-            if updated_parent:
-                logging.info(f"Updated parent goal {parent_goal_id} state with task execution results")
-        
-        # Display results
         if result.success:
-            logging.info(f"✅ Task completed successfully in {result.execution_time:.2f} seconds")
-            branch_display = result.branch_name.get('branch_name') if isinstance(result.branch_name, dict) else result.branch_name
-            logging.info(f"Branch: {branch_display}")
-            logging.info(f"Final commit: {result.git_hash[:8] if result.git_hash else 'None'}")
-            
-            # Display validation results if any
-            if hasattr(result, 'validation_results') and result.validation_results:
-                logging.info("Validation Results:")
-                for validation in result.validation_results:
-                    logging.info(f"- {validation}")
+            print(f"\nTask {task_id} executed successfully")
+            print(f"Result: {result.validation_results}")
+            return True
         else:
-            logging.error(f"❌ Task execution failed in {result.execution_time:.2f} seconds")
-            logging.error(f"Error: {result.error_message}")
-        
-        return {
-            "success": result.success,
-            "task_id": task_id,
-            "branch_name": result.branch_name,
-            "git_hash": result.git_hash,
-            "execution_time": result.execution_time,
-            "error_message": result.error_message
-        }
-        
-    except Exception as e:
-        logging.error(f"Error during task execution: {str(e)}")
-        import traceback
-        logging.debug(f"Exception traceback:\n{traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": f"Error during task execution: {str(e)}"
-        }
+            print(f"Failed to execute task: {result.error_message}", file=sys.stderr)
+            return False
+            
+    finally:
+        # Always restore the original branch and unstash changes
+        try:
+            # Switch back to original branch
+            subprocess.run(
+                ["git", "checkout", current_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            # Unstash changes if we stashed them
+            if has_changes:
+                subprocess.run(
+                    ["git", "stash", "pop"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to restore original state: {e}")
+            # Don't raise here as we're in a finally block
+    
+    return False
 
 
 def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_state):

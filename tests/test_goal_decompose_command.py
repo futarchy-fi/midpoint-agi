@@ -17,7 +17,7 @@ from midpoint.agents.goal_decomposer import decompose_goal
 from tests.test_helpers import async_test
 
 # Import the goal decompose command
-from midpoint.goal_cli import decompose_existing_goal
+from midpoint.goal_cli import decompose_existing_goal, agent_decompose_goal, ensure_goal_dir, GOAL_DIR
 
 
 # Mock the decompose_goal function directly since we're testing it in isolation
@@ -27,9 +27,18 @@ class TestGoalDecomposeCommand(unittest.TestCase):
     
     def setUp(self):
         """Set up the test environment."""
-        # Create a temporary goal directory
-        self.test_dir = Path("test_goal_dir")
-        self.test_dir.mkdir(exist_ok=True)
+        global GOAL_DIR
+        
+        # Create a temporary directory for test files
+        self.test_dir = Path(tempfile.mkdtemp()) / ".goal"
+        self.test_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save original GOAL_DIR
+        self.original_goal_dir = GOAL_DIR
+        
+        # Set up the goal directory
+        os.environ["MIDPOINT_GOAL_DIR"] = str(self.test_dir.parent)
+        GOAL_DIR = str(self.test_dir)
         
         # Create a test goal file
         self.test_goal_id = "G1"
@@ -55,98 +64,93 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         if self.test_goal_file.exists():
             self.test_goal_file.unlink()
         if self.test_dir.exists():
-            self.test_dir.rmdir()
+            # Remove all files in the directory
+            for file in self.test_dir.glob("*"):
+                file.unlink()
+            # Now remove the directory
+            shutil.rmtree(self.test_dir.parent)
         
         # Restore current directory
         os.chdir(self.orig_cwd)
+        
+        # Restore original GOAL_DIR
+        global GOAL_DIR
+        GOAL_DIR = self.original_goal_dir
     
     @async_test
     async def test_decompose_existing_goal_success(self, mock_decompose_goal):
         """Test successful goal decomposition."""
-        # Create an implementation of decompose_existing_goal that doesn't rely on importing goal_cli
-        # This mimics the behavior but is independent of the module structure
-        async def decompose_existing_goal(goal_id, debug=False, quiet=False):
-            if goal_id != self.test_goal_id:
-                print(f"Goal {goal_id} not found", file=sys.stderr)
-                return False
-            
-            # Get the goal content
-            with open(self.test_goal_file, 'r') as f:
-                goal_content = json.load(f)
-            
-            # Call the mocked decompose_goal function
-            result = await mock_decompose_goal(
-                repo_path=os.getcwd(),
-                goal=goal_content["description"],
-                parent_goal=goal_id,
-                goal_id=None,
-                debug=debug,
-                quiet=quiet
-            )
-            
-            if result["success"]:
-                print(f"\nGoal {goal_id} successfully decomposed into subgoals")
-                print(f"\nNext step: {result['next_step']}")
-                print("\nValidation criteria:")
-                for criterion in result["validation_criteria"]:
-                    print(f"- {criterion}")
-                
-                if result["requires_further_decomposition"]:
-                    print("\nRequires further decomposition: Yes")
-                else:
-                    print("\nRequires further decomposition: No")
-                
-                print(f"\nGoal file: {result['goal_file']}")
-                return True
-            else:
-                print(f"Failed to decompose goal: {result.get('error', 'Unknown error')}", file=sys.stderr)
-                return False
-        
-        # Setup mock response
+        # Setup mock response for success
         mock_result = {
             "success": True,
-            "next_step": "Implement feature X",
-            "validation_criteria": ["Code passes tests", "Feature works as expected"],
+            "next_step": "Implement user authentication",
+            "validation_criteria": [
+                "User can register with email and password",
+                "User can log in with correct credentials"
+            ],
             "requires_further_decomposition": True,
-            "git_hash": "abcdef123456",
-            "memory_hash": None,
-            "goal_file": "G1-S1.json"
+            "goal_file": ".goal/G1-S1.json"
         }
         mock_decompose_goal.return_value = mock_result
         
-        # Redirect stdout and stderr to capture output
-        stdout = sys.stdout
-        stderr = sys.stderr
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
+        # Create test goal files
+        top_level_id = "G1"
+        top_level_file = self.test_dir / f"{top_level_id}.json"
         
-        try:
+        # Create top-level goal file first
+        with open(top_level_file, 'w') as f:
+            json.dump({
+                "goal_id": top_level_id,
+                "description": "Implement authentication system",
+                "branch_name": "goal-G1",
+                "timestamp": "20250324_000000"
+            }, f)
+        
+        # Then create the subgoal file
+        self.test_goal_id = "G1-S1"
+        self.test_goal_file = self.test_dir / f"{self.test_goal_id}.json"
+        
+        with open(self.test_goal_file, 'w') as f:
+            json.dump({
+                "goal_id": self.test_goal_id,
+                "description": "Implement user authentication",
+                "parent_goal": top_level_id,
+                "timestamp": "20250324_000000"
+            }, f)
+        
+        # Mock git commands
+        with patch('subprocess.run') as mock_run, patch('midpoint.goal_cli.get_current_branch') as mock_get_branch:
+            # Mock current branch
+            mock_get_branch.return_value = "main"
+            
+            # Mock git status to show no changes
+            mock_run.side_effect = [
+                # git status
+                type('Result', (), {'stdout': '', 'returncode': 0}),
+                # git checkout goal-G1
+                type('Result', (), {'stdout': 'Switched to branch goal-G1', 'returncode': 0}),
+                # git checkout original branch
+                type('Result', (), {'stdout': 'Switched to branch main', 'returncode': 0})
+            ]
+            
             # Run the function
             result = await decompose_existing_goal(self.test_goal_id)
             
-            # Get captured output
-            stdout_value = sys.stdout.getvalue()
-            stderr_value = sys.stderr.getvalue()
-            
             # Assertions
-            self.assertTrue(result)
-            self.assertIn("Goal G1 successfully decomposed into subgoals", stdout_value)
-            self.assertIn("Next step: Implement feature X", stdout_value)
-            self.assertIn("Validation criteria:", stdout_value)
-            self.assertIn("- Code passes tests", stdout_value)
-            self.assertIn("- Feature works as expected", stdout_value)
-            self.assertIn("Requires further decomposition: Yes", stdout_value)
-            self.assertIn("Goal file: G1-S1.json", stdout_value)
-            
-            # Verify decompose_goal was called correctly
+            assert result is True
             mock_decompose_goal.assert_called_once()
-            call_args = mock_decompose_goal.call_args[1]
-            self.assertEqual(call_args["goal"], "Test goal description")
-            self.assertEqual(call_args["parent_goal"], self.test_goal_id)
-        finally:
-            # Restore stdout and stderr
-            sys.stdout = stdout
-            sys.stderr = stderr
+            
+            # Check that git commands were called correctly
+            assert mock_run.call_count == 3
+            assert mock_run.call_args_list[0][0][0] == ["git", "status", "--porcelain"]
+            assert mock_run.call_args_list[1][0][0] == ["git", "checkout", "goal-G1"]
+            assert mock_run.call_args_list[2][0][0] == ["git", "checkout", "main"]
+            
+            # Clean up files before directory removal
+            if self.test_goal_file.exists():
+                self.test_goal_file.unlink()
+            if top_level_file.exists():
+                top_level_file.unlink()
     
     @async_test
     async def test_decompose_existing_goal_failure(self, mock_decompose_goal):
