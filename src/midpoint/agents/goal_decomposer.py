@@ -804,10 +804,33 @@ Memory State:
 - Memory Hash: {memory_hash}
 - Memory Repository Path: {memory_path}
 """
+
+        # Add completed tasks information if available
+        if hasattr(context, 'metadata') and context.metadata and 'completed_tasks' in context.metadata:
+            logging.info("Found completed tasks in metadata:")
+            logging.info(f"Number of completed tasks: {len(context.metadata['completed_tasks'])}")
+            prompt += "\nCompleted Tasks:\n"
+            for i, task in enumerate(context.metadata['completed_tasks'], 1):
+                logging.info(f"Task {i}:")
+                logging.info(f"  Description: {task.get('description', 'No description')}")
+                logging.info(f"  Validation criteria: {task.get('validation_criteria', [])}")
+                logging.info(f"  Final state: {task.get('final_state', {}).get('description', 'No final state')}")
+                
+                prompt += f"{i}. {task['description']}\n"
+                if task.get('validation_criteria'):
+                    prompt += "   Validation criteria:\n"
+                    for criterion in task['validation_criteria']:
+                        prompt += f"   - {criterion}\n"
+                if task.get('final_state'):
+                    prompt += f"   Final state: {task['final_state'].get('description', '')}\n"
+                prompt += "\n"  # Add blank line between tasks
+        else:
+            logging.info("No completed tasks found in metadata")
+
         prompt += f"""
 Context:
 - Iteration: {context.iteration}
-- Previous Steps: {len(context.execution_history) if context.execution_history else 0}
+- Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
 Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
 Focus on providing a clear next step with measurable validation criteria.
@@ -1117,6 +1140,11 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
         if "metadata" in data:
             context.metadata.update(data["metadata"])
             logging.info(f"Loaded metadata from input file: {data['metadata']}")
+            
+        # Extract completed tasks if available
+        if "completed_tasks" in data:
+            context.metadata["completed_tasks"] = data["completed_tasks"]
+            logging.info(f"Loaded {len(data['completed_tasks'])} completed tasks from input file")
             
         # Add memory information from current_state if available
         if "current_state" in data:
