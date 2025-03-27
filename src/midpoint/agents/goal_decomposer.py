@@ -43,9 +43,11 @@ try:
     
     # Create direct references to the functions we need (except get_current_hash)
     get_repo_path = memory_tools.get_repo_path
-    store_document = memory_tools.store_document
     retrieve_documents = memory_tools.retrieve_documents
     update_cross_reference = memory_tools.update_cross_reference
+    
+    # Import the high-level store_memory_document
+    from midpoint.agents.tools.memory_tools import store_memory_document
     
     # Log success
     logging.debug("Successfully imported memory_tools directly")
@@ -62,9 +64,9 @@ except Exception as e:
             print("Using fallback get_repo_path")
         return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
     
-    def store_document(content, category, metadata=None, repo_path=None):
+    async def store_memory_document(content, category, metadata=None, repo_path=None, memory_hash=None):
         """Fallback implementation to store a document."""
-        logging.warning("Using fallback store_document implementation.")
+        logging.warning("Using fallback store_memory_document implementation.")
         # Get repository path
         repo_path = repo_path or get_repo_path()
         repo_path = Path(repo_path)
@@ -82,63 +84,10 @@ except Exception as e:
             f.write(content)
             
         logging.info(f"Stored document at: {doc_path} (fallback implementation)")
-        return str(doc_path.relative_to(repo_path) if repo_path in doc_path.parents else doc_path)
-        
-    def retrieve_documents(category=None, limit=10, repo_path=None):
-        """Fallback implementation to retrieve documents."""
-        logging.warning("Using fallback retrieve_documents implementation.")
-        # Get repository path
-        repo_path = repo_path or get_repo_path()
-        repo_path = Path(repo_path)
-        
-        # Set search path
-        if category:
-            search_path = repo_path / "documents" / category
-        else:
-            search_path = repo_path / "documents"
-        
-        results = []
-        
-        if search_path.exists():
-            # Find all .md files
-            files = list(search_path.glob("**/*.md"))
-            
-            # Sort by modification time (newest first)
-            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            
-            # Limit results
-            files = files[:limit]
-            
-            # Read contents
-            for file in files:
-                try:
-                    with open(file, "r") as f:
-                        results.append((str(file.relative_to(repo_path) if repo_path in file.parents else file), f.read()))
-                except:
-                    pass
-        
-        return results
-    
-    def update_cross_reference(code_hash, memory_hash, repo_path=None):
-        """Fallback implementation to update cross-reference between code and memory."""
-        logging.warning("Using fallback update_cross_reference implementation.")
-        # Get repository path
-        repo_path = repo_path or get_repo_path()
-        repo_path = Path(repo_path)
-        
-        # Create cross-reference directory
-        xref_dir = repo_path / "references"
-        xref_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create file for cross-reference
-        xref_path = xref_dir / f"{code_hash}.txt"
-        
-        # Write memory hash to the file
-        with open(xref_path, "w") as f:
-            f.write(memory_hash)
-            
-        logging.info(f"Updated cross-reference at: {xref_path} (fallback implementation)")
-        return True
+        return {
+            "success": True,
+            "document_path": str(doc_path.relative_to(repo_path) if repo_path in doc_path.parents else doc_path)
+        }
 
 # Now import the rest of the modules needed
 import json
@@ -157,7 +106,6 @@ from midpoint.agents.tools import (
     get_current_hash,
     web_search,
     web_scrape,
-    store_memory_document,
     retrieve_memory_documents,
 )
 from midpoint.agents.config import get_openai_api_key
@@ -357,7 +305,8 @@ class GoalDecomposer:
             content: str,
             metadata: Optional[Dict[str, Any]] = None,
             memory_hash: Optional[str] = None,
-            repo_path: Optional[str] = None
+            repo_path: Optional[str] = None,
+            goal_name: Optional[str] = None
         ) -> Optional[str]:
         """Save interaction to memory repository."""
         try:
@@ -394,24 +343,33 @@ Timestamp: {timestamp}
                 for key, value in metadata.items():
                     doc_content += f"- {key}: {value}\n"
             
-            # Store document
-            doc_path = store_document(
+            # Create category with goal name if available
+            category = "goal_decomposition"
+            if goal_name:
+                # Sanitize goal name for use in category
+                safe_goal_name = re.sub(r'[^a-zA-Z0-9_-]', '_', goal_name)[:50]  # Limit length
+                category = f"goal_decomposition_{safe_goal_name}"
+            
+            # Store document using high-level store_memory_document
+            result = await store_memory_document(
                 content=doc_content,
-                category="goal_decomposition",
+                category=category,
                 metadata={
                     "interaction_type": interaction_type,
                     "timestamp": timestamp,
+                    "goal_name": goal_name,
+                    "commit_message": f"Add {interaction_type} for goal: {goal_name}" if goal_name else f"Add {interaction_type}",
                     **(metadata or {})
                 },
                 memory_hash=memory_hash,
-                repo_path=repo_path
+                memory_repo_path=repo_path
             )
             
-            if doc_path:
-                logging.info(f"Successfully saved {interaction_type} to memory: {doc_path}")
-                return doc_path
+            if result["success"]:
+                logging.info(f"Successfully saved {interaction_type} to memory: {result['document_path']}")
+                return result["document_path"]
             else:
-                logging.error(f"Failed to save {interaction_type} to memory")
+                logging.error(f"Failed to save {interaction_type} to memory: {result.get('error', 'Unknown error')}")
                 return None
                 
         except Exception as e:
@@ -427,19 +385,10 @@ Timestamp: {timestamp}
         messages: List[Dict[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         memory_hash: Optional[str] = None,
-        repo_path: Optional[str] = None
+        repo_path: Optional[str] = None,
+        goal_name: Optional[str] = None
     ) -> Optional[str]:
-        """Save conversation to memory, excluding memory messages.
-        
-        Args:
-            messages: List of message dictionaries
-            metadata: Optional metadata
-            memory_hash: Optional memory hash to use
-            repo_path: Optional repository path
-            
-        Returns:
-            Optional[str]: Path of saved document if successful, None otherwise
-        """
+        """Save conversation to memory, excluding memory messages."""
         try:
             # Filter out memory messages and system prompt
             filtered_messages = [
@@ -472,24 +421,33 @@ Timestamp: {timestamp}
                 logging.error("No memory hash provided")
                 return None
             
-            # Store document
-            doc_path = store_document(
+            # Create category with goal name if available
+            category = "goal_decomposition"
+            if goal_name:
+                # Sanitize goal name for use in category
+                safe_goal_name = re.sub(r'[^a-zA-Z0-9_-]', '_', goal_name)[:50]  # Limit length
+                category = f"goal_decomposition_{safe_goal_name}"
+            
+            # Store document using high-level store_memory_document
+            result = await store_memory_document(
                 content=content,
-                category="goal_decomposition",
+                category=category,
                 metadata={
                     "interaction_type": "goal_decomposition",
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    "goal_name": goal_name,
+                    "commit_message": f"Add conversation for goal: {goal_name}" if goal_name else "Add conversation",
                     **(metadata or {})
                 },
                 memory_hash=memory_hash,
-                repo_path=repo_path
+                memory_repo_path=repo_path
             )
             
-            if doc_path:
-                logging.info(f"Saved conversation to memory: {doc_path}")
-                return doc_path
+            if result["success"]:
+                logging.info(f"Saved conversation to memory: {result['document_path']}")
+                return result["document_path"]
             else:
-                logging.error(f"Failed to save conversation to memory")
+                logging.error(f"Failed to save conversation to memory: {result.get('error', 'Unknown error')}")
                 return None
                 
         except Exception as e:
@@ -773,7 +731,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                         "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
                     memory_hash=memory_hash,
-                    repo_path=memory_repo_path
+                    repo_path=memory_repo_path,
+                    goal_name=context.goal.description  # Pass the goal name
                 )
             except Exception as e:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
@@ -812,7 +771,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                     "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                 },
                 memory_hash=memory_hash,
-                repo_path=memory_repo_path
+                repo_path=memory_repo_path,
+                goal_name=context.goal.description  # Pass the goal name
             )
             # Let the main function handle the specific error types
             raise

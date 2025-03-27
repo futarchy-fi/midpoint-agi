@@ -182,17 +182,29 @@ class TaskExecutor:
             content += f"- Git Hash: {context.state.git_hash}\n"
             content += f"- Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             
+            # Get task name from context
+            task_name = context.goal.description
+            
+            # Create category with task name
+            category = "task_execution"
+            if task_name:
+                # Sanitize task name for use in category
+                safe_task_name = re.sub(r'[^a-zA-Z0-9_-]', '_', task_name)[:50]  # Limit length
+                category = f"task_execution_{safe_task_name}"
+            
             # Store in memory
             await store_memory_document(
                 content=content,
-                category="task_execution",
+                category=category,
                 metadata={
                     "task_id": context.metadata.get("task_id"),
                     "parent_goal": context.metadata.get("parent_goal"),
                     "repository": context.state.repository_path,
                     "branch": context.state.branch_name,
                     "git_hash": context.state.git_hash,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "task_name": task_name,
+                    "commit_message": f"Add task execution for: {task_name}" if task_name else "Add task execution"
                 },
                 memory_repo_path=context.state.memory_repository_path,
                 memory_hash=context.state.memory_hash
