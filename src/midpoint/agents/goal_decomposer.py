@@ -133,6 +133,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     # Create a unique log file name with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"goal_decomposer_{timestamp}.log"
+    task_summary_file = log_dir / f"task_summary_{timestamp}.log"
     
     # Create file handler for full logging
     file_handler = logging.FileHandler(log_file)
@@ -162,6 +163,11 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     # Add our custom handlers
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+    
+    # Create task summary file with header
+    with open(task_summary_file, "w") as f:
+        f.write(f"Task Summary Log - {timestamp}\n")
+        f.write("=" * 50 + "\n\n")
     
     # Set up a filter for console output to make it more concise
     class ConsoleFormatFilter(logging.Filter):
@@ -259,8 +265,45 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     if quiet:
         print("Running in quiet mode - only showing result and errors...", file=sys.stderr)
     
-    # Return log file path for reference
-    return log_file
+    # Return log file paths for reference
+    return log_file, task_summary_file
+
+def log_task_summary(task_summary_file: Path, context: TaskContext):
+    """
+    Log a summary of tasks and metadata to the task summary file.
+    
+    Args:
+        task_summary_file: Path to the task summary log file
+        context: The current task context
+    """
+    try:
+        with open(task_summary_file, "a") as f:
+            f.write("\n=== Task Context Summary ===\n")
+            f.write(f"Goal: {context.goal.description}\n")
+            f.write(f"Iteration: {context.iteration}\n")
+            f.write(f"Git Hash: {context.state.git_hash}\n")
+            
+            if hasattr(context, 'metadata') and context.metadata:
+                f.write("\nMetadata:\n")
+                for key, value in context.metadata.items():
+                    if key == 'completed_tasks':
+                        f.write(f"\nCompleted Tasks ({len(value)}):\n")
+                        for i, task in enumerate(value, 1):
+                            f.write(f"\nTask {i}:\n")
+                            f.write(f"  Description: {task.get('description', 'No description')}\n")
+                            if task.get('validation_criteria'):
+                                f.write("  Validation criteria:\n")
+                                for criterion in task['validation_criteria']:
+                                    f.write(f"    - {criterion}\n")
+                            if task.get('final_state'):
+                                f.write(f"  Final state: {task.get('final_state', {}).get('description', 'No final state')}\n")
+                    else:
+                        f.write(f"  {key}: {value}\n")
+            
+            f.write("\n" + "=" * 50 + "\n")
+            f.flush()
+    except Exception as e:
+        logging.error(f"Failed to write task summary: {str(e)}")
 
 class GoalDecomposer:
     """
@@ -590,9 +633,13 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         """Determine the next step toward achieving the goal."""
         # Set up logging if requested (only when called directly, not from orchestrator)
         if setup_logging:
-            configure_logging(debug, quiet)
+            log_file, task_summary_file = configure_logging(debug, quiet)
             
         logging.info("Determining next step for goal: %s", context.goal.description)
+        
+        # Log task summary at the start
+        if setup_logging:
+            log_task_summary(task_summary_file, context)
         
         # Validate memory state
         if not context.memory_state:
@@ -767,6 +814,18 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             else:
                 logging.debug("No tool calls in final message")
 
+            # Log final task summary
+            if setup_logging:
+                with open(task_summary_file, "a") as f:
+                    f.write("\n=== Final Output ===\n")
+                    f.write(f"Next step: {final_output.next_step}\n")
+                    f.write(f"Requires further decomposition: {final_output.requires_further_decomposition}\n")
+                    f.write("\nValidation criteria:\n")
+                    for i, criterion in enumerate(final_output.validation_criteria, 1):
+                        f.write(f"  {i}. {criterion}\n")
+                    f.write("\n" + "=" * 50 + "\n")
+                    f.flush()
+
             return final_output
             
         except Exception as e:
@@ -782,6 +841,16 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 repo_path=memory_repo_path,
                 goal_name=context.goal.description  # Pass the goal name
             )
+            
+            # Log error to task summary
+            if setup_logging:
+                with open(task_summary_file, "a") as f:
+                    f.write("\n=== Error ===\n")
+                    f.write(f"Error type: {type(e).__name__}\n")
+                    f.write(f"Error message: {str(e)}\n")
+                    f.write("\n" + "=" * 50 + "\n")
+                    f.flush()
+            
             # Let the main function handle the specific error types
             raise
     
@@ -1143,32 +1212,57 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
             
         # Extract completed tasks if available
         if "completed_tasks" in data:
-            context.metadata["completed_tasks"] = data["completed_tasks"]
-            logging.info(f"Loaded {len(data['completed_tasks'])} completed tasks from input file")
+            completed_tasks = data["completed_tasks"]
+            context.metadata["completed_tasks"] = completed_tasks
+            
+            # Log detailed information about completed tasks
+            logging.info(f"\n=== Completed Tasks Summary ===")
+            logging.info(f"Total completed tasks: {len(completed_tasks)}")
+            
+            for i, task in enumerate(completed_tasks, 1):
+                logging.info(f"\nTask {i}:")
+                logging.info(f"  Description: {task.get('description', 'No description')}")
+                
+                if task.get('validation_criteria'):
+                    logging.info("  Validation criteria:")
+                    for criterion in task['validation_criteria']:
+                        logging.info(f"    - {criterion}")
+                
+                if task.get('final_state'):
+                    logging.info(f"  Final state: {task.get('final_state', {}).get('description', 'No final state')}")
+                
+                # Log any additional task metadata
+                for key, value in task.items():
+                    if key not in ['description', 'validation_criteria', 'final_state']:
+                        logging.info(f"  {key}: {value}")
+            
+            logging.info("\n" + "=" * 50)
+        else:
+            logging.info("No completed tasks found in input file")
             
         # Add memory information from current_state if available
         if "current_state" in data:
             current_state = data["current_state"]
-            logging.info("Found current_state in input file")
+            logging.info("\n=== Current State Information ===")
             
             # Update git_hash from current_state
             if "git_hash" in current_state:
                 context.state.git_hash = current_state["git_hash"]
-                logging.info(f"Using git_hash from input file: {current_state['git_hash'][:8]}")
+                logging.info(f"Git hash: {current_state['git_hash'][:8]}")
             else:
                 raise ValueError("No git_hash found in current_state")
                 
             # Update memory_hash from current_state
             if "memory_hash" in current_state:
                 context.state.memory_hash = current_state["memory_hash"]
-                logging.info(f"Using memory_hash from input file: {current_state['memory_hash'][:8]}")
+                logging.info(f"Memory hash: {current_state['memory_hash'][:8]}")
             else:
                 raise ValueError("No memory_hash found in current_state")
                 
             # Update memory_repository_path from current_state
             if "memory_repository_path" in current_state:
                 context.state.memory_repository_path = current_state["memory_repository_path"]
-                logging.info(f"Using memory_repository_path from input file: {current_state['memory_repository_path']}")
+                logging.info(f"Memory repository path: {current_state['memory_repository_path']}")
             else:
                 raise ValueError("No memory_repository_path found in current_state")
             
@@ -1181,6 +1275,7 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
                 repository_path=current_state["memory_repository_path"]
             )
             logging.info(f"Created memory state with hash {current_state['memory_hash'][:8]} and path {current_state['memory_repository_path']}")
+            logging.info("=" * 50)
         else:
             raise ValueError("No current_state found in input file")
             
