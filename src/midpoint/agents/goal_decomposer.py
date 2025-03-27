@@ -21,8 +21,9 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 script_location = Path(__file__).resolve()
 repo_root = script_location.parent.parent.parent.parent
 
-# Add repo root and scripts directory to path
+# Add repo root, src directory, and scripts directory to path
 sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / "src"))
 sys.path.insert(0, str(repo_root / "scripts"))
 
 # Debug information
@@ -145,7 +146,7 @@ import asyncio
 import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
-from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext
+from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext, MemoryState
 from midpoint.agents.tools import initialize_all_tools
 from midpoint.agents.tools.processor import ToolProcessor
 from midpoint.agents.tools.registry import ToolRegistry
@@ -443,7 +444,7 @@ Timestamp: {timestamp}
             # Filter out memory messages and system prompt
             filtered_messages = [
                 msg for msg in messages 
-                if msg["role"] not in ["memory", "system"]
+                if msg["role"] not in ["system"]
             ]
             
             # Format conversation content
@@ -627,15 +628,18 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             
         logging.info("Determining next step for goal: %s", context.goal.description)
         
+        # Validate memory state
+        if not context.memory_state:
+            raise ValueError("Memory state is required for goal decomposition")
+        
+        # Validate memory state attributes
+        memory_hash = getattr(context.memory_state, "memory_hash", None)
+        memory_path = getattr(context.memory_state, "repository_path", None)
+        if not memory_hash or not memory_path:
+            raise ValueError("Memory state must have both memory_hash and repository_path")
+        
         # Log memory state information
-        if hasattr(context.state, "memory_hash"):
-            logging.info(f"Memory hash from context state: {context.state.memory_hash[:8] if context.state.memory_hash else 'None'}")
-        if hasattr(context.state, "memory_repository_path"):
-            logging.info(f"Memory repository path from context state: {context.state.memory_repository_path}")
-        if hasattr(context, "memory_state") and context.memory_state is not None:
-            logging.info(f"Memory state: hash={context.memory_state.memory_hash[:8] if context.memory_state.memory_hash else 'None'}, path={context.memory_state.repository_path}")
-        else:
-            logging.info("No memory state available in context")
+        logging.info(f"Memory state: hash={memory_hash[:8]}, path={memory_path}")
         
         # Validate inputs
         if not context.goal:
@@ -679,13 +683,8 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                         timestamp_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
                         
                         messages.append({
-                            "role": "memory",
-                            "content": content,
-                            "metadata": {
-                                "filename": filename,
-                                "timestamp": timestamp_str,
-                                "path": path
-                            }
+                            "role": "system",
+                            "content": content
                         })
                     
                     # Log memory context stats
@@ -827,24 +826,16 @@ Validation Criteria for Final Goal:
 
 Current State:
 - Git Hash: {context.state.git_hash}
-- Description: {context.state.description}
-- Repository Path: {context.state.repository_path}
 """
-
-        # Add memory information if available
-        if context.state.memory_hash and context.state.memory_repository_path:
+        # Add memory state information if available
+        if context.memory_state:
+            memory_hash = getattr(context.memory_state, "memory_hash", None)
+            memory_path = getattr(context.memory_state, "repository_path", None)
             prompt += f"""
 Memory State:
-- Memory Hash: {context.state.memory_hash}
-- Memory Repository Path: {context.state.memory_repository_path}
+- Memory Hash: {memory_hash}
+- Memory Repository Path: {memory_path}
 """
-        elif context.memory_state:
-            prompt += f"""
-Memory State:
-- Memory Hash: {context.memory_state.memory_hash}
-- Memory Repository Path: {context.memory_state.repository_path}
-"""
-
         prompt += f"""
 Context:
 - Iteration: {context.iteration}
@@ -1143,56 +1134,33 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
                 context.state.git_hash = current_state["git_hash"]
                 logging.info(f"Using git_hash from input file: {current_state['git_hash'][:8]}")
             else:
-                logging.warning("No git_hash found in current_state")
+                raise ValueError("No git_hash found in current_state")
                 
             # Update memory_hash from current_state
             if "memory_hash" in current_state:
                 context.state.memory_hash = current_state["memory_hash"]
                 logging.info(f"Using memory_hash from input file: {current_state['memory_hash'][:8]}")
             else:
-                logging.warning("No memory_hash found in current_state")
+                raise ValueError("No memory_hash found in current_state")
                 
             # Update memory_repository_path from current_state
             if "memory_repository_path" in current_state:
                 context.state.memory_repository_path = current_state["memory_repository_path"]
                 logging.info(f"Using memory_repository_path from input file: {current_state['memory_repository_path']}")
             else:
-                logging.warning("No memory_repository_path found in current_state")
-                
-            # Update other memory-related fields if available
-            if "memory_reference" in current_state:
-                context.state.memory_reference = current_state["memory_reference"]
-                logging.info(f"Using memory_reference from input file: {current_state['memory_reference']}")
-            else:
-                logging.debug("No memory_reference found in current_state")
-                
-            if "memory_document_path" in current_state:
-                context.state.memory_document_path = current_state["memory_document_path"]
-                logging.debug(f"Using memory_document_path from input file: {current_state['memory_document_path']}")
-            else:
-                logging.debug("No memory_document_path found in current_state")
+                raise ValueError("No memory_repository_path found in current_state")
             
-            if "memory_timestamp" in current_state:
-                context.state.memory_timestamp = current_state["memory_timestamp"]
-                logging.debug(f"Using memory_timestamp from input file: {current_state['memory_timestamp']}")
-            else:
-                logging.debug("No memory_timestamp found in current_state")
-                
-            # Create memory state if we have both hash and path
-            if current_state.get("memory_hash") and current_state.get("memory_repository_path"):
-                context.memory_state = MemoryState(
-                    memory_hash=current_state["memory_hash"],
-                    repository_path=current_state["memory_repository_path"]
-                )
-                logging.info(f"Created memory state with hash {current_state['memory_hash'][:8]} and path {current_state['memory_repository_path']}")
-            else:
-                logging.warning("Could not create memory state - missing required fields")
-                if not current_state.get("memory_hash"):
-                    logging.warning("Missing memory_hash in current_state")
-                if not current_state.get("memory_repository_path"):
-                    logging.warning("Missing memory_repository_path in current_state")
+            # Create memory state - this is required
+            if not current_state.get("memory_hash") or not current_state.get("memory_repository_path"):
+                raise ValueError("Both memory_hash and memory_repository_path are required in current_state")
+            
+            context.memory_state = MemoryState(
+                memory_hash=current_state["memory_hash"],
+                repository_path=current_state["memory_repository_path"]
+            )
+            logging.info(f"Created memory state with hash {current_state['memory_hash'][:8]} and path {current_state['memory_repository_path']}")
         else:
-            logging.warning("No current_state found in input file")
+            raise ValueError("No current_state found in input file")
             
     except json.JSONDecodeError:
         logging.error(f"Invalid JSON in input file: {input_file}")
@@ -1264,6 +1232,10 @@ async def decompose_goal(
     context = TaskContext(
         state=state,
         goal=Goal(description=goal),
+        memory_state=MemoryState(
+            memory_hash=state.memory_hash or "",  # Use empty string as default if None
+            repository_path=state.memory_repository_path or ""  # Use empty string as default if None
+        ),
         iteration=0,
         execution_history=[],
         metadata={}

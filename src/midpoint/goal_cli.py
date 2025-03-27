@@ -1566,13 +1566,27 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         if completed_count > 0 and total_count > 0:
             logging.info(f"Current progress: {completed_count}/{total_count} tasks completed")
         
-        # Call the goal decomposer
+        # Get memory state from current_state
+        memory_hash = None
+        memory_repo_path = goal_data["current_state"].get("memory_repository_path")
+        if memory_repo_path:
+            memory_hash = goal_data["current_state"].get("memory_hash")
+            if memory_hash:
+                logging.info(f"Memory hash from context state: {memory_hash}")
+            else:
+                logging.warning("No memory hash found in context state")
+            logging.info(f"Memory repository path from context state: {memory_repo_path}")
+        else:
+            logging.warning("No memory repository path found in context state")
+        
+        # Call the goal decomposer with the goal file as input
         result = await agent_decompose_goal(
             repo_path=os.getcwd(),
             goal=goal_data["description"],
             parent_goal=goal_id,
             goal_id=None,
-            memory_repo=goal_data["current_state"].get("memory_repository_path"),
+            memory_repo=memory_repo_path,
+            input_file=str(goal_file),  # Pass the goal file as input
             debug=debug,
             quiet=quiet,
             bypass_validation=bypass_validation
@@ -1591,13 +1605,6 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 print("\nRequires further decomposition: No")
             
             print(f"\nGoal file: {result['goal_file']}")
-            
-            # Get current memory hash if memory repository is available
-            memory_hash = None
-            memory_repo_path = goal_data["current_state"].get("memory_repository_path")
-            if memory_repo_path:
-                memory_hash = goal_data["current_state"].get("memory_hash")
-                logging.info(f"Using memory hash from context: {memory_hash[:8]}")
             
             # Update the goal file with the decomposition result
             goal_data.update({

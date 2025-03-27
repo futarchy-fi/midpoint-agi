@@ -69,21 +69,24 @@ class ExtendedState:
             memory_state=memory_state
         )
     
-    def to_dict(self):
-        """Convert to dictionary representation."""
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the state to a dictionary."""
         result = {
             "git_hash": self.git_hash,
             "repository_path": self.repository_path,
             "description": self.description,
+            "branch_name": self.branch_name
         }
         
-        if self.branch_name:
-            result["branch_name"] = self.branch_name
-            
+        # Add memory state information if available
         if self.memory_state:
-            result["memory_hash"] = self.memory_state.memory_hash
-            result["memory_repository_path"] = self.memory_state.repository_path
-            
+            memory_hash = getattr(self.memory_state, "memory_hash", None)
+            memory_path = getattr(self.memory_state, "repository_path", None)
+            if memory_hash:
+                result["memory_hash"] = memory_hash
+            if memory_path:
+                result["memory_repository_path"] = memory_path
+        
         return result
 
 def get_context_for_state(state, query=None):
@@ -125,6 +128,22 @@ def get_context_for_state(state, query=None):
     
     return "\n".join(context_parts)
 
+def print_state_info(state: ExtendedState) -> None:
+    """Print information about the state."""
+    print(f"State Information:")
+    print(f"  Git Hash: {state.git_hash}")
+    print(f"  Repository: {state.repository_path}")
+    print(f"  Branch: {state.branch_name}")
+    print(f"  Description: {state.description}")
+    
+    if state.memory_state:
+        memory_hash = getattr(state.memory_state, "memory_hash", None)
+        memory_path = getattr(state.memory_state, "repository_path", None)
+        if memory_hash:
+            print(f"  Memory Hash: {memory_hash}")
+        if memory_path:
+            print(f"  Memory Repository: {memory_path}")
+
 def main():
     """Run the example."""
     load_dotenv()
@@ -165,13 +184,7 @@ def main():
     extended_state = ExtendedState.from_base_state(base_state, memory_state)
     
     # Print state information
-    print("\nState Information:")
-    print(f"  Code Repository: {extended_state.repository_path}")
-    print(f"  Code Hash: {extended_state.git_hash}")
-    if extended_state.branch_name:
-        print(f"  Branch: {extended_state.branch_name}")
-    print(f"  Memory Repository: {extended_state.memory_state.repository_path}")
-    print(f"  Memory Hash: {extended_state.memory_state.memory_hash}")
+    print_state_info(extended_state)
     
     # Store a sample document if requested
     if args.store:

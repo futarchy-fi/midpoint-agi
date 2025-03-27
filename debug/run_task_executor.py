@@ -118,7 +118,7 @@ async def run_executor(args):
         description=f"Repository state on branch {branch}",
         repository_path=repo_path,
         branch_name=branch,
-        memory_hash=memory_state.memory_hash if memory_state else None,
+        memory_hash=getattr(memory_state, "memory_hash", None) if memory_state else None,
         memory_repository_path=args.memory_repo_path
     )
     
@@ -144,8 +144,10 @@ async def run_executor(args):
         logger.info(f"Initial commit: {git_hash[:8]}")
         
         if memory_state:
+            memory_hash = getattr(memory_state, "memory_hash", None)
             logger.info(f"Memory repository: {args.memory_repo_path}")
-            logger.info(f"Memory hash: {memory_state.memory_hash[:8]}")
+            if memory_hash:
+                logger.info(f"Memory hash: {memory_hash[:8]}")
         
         result = await executor.execute_task(context, task_description)
         

@@ -56,10 +56,10 @@ class TaskContext:
     """Contains all context for a task, including state, goal, and execution history."""
     state: State
     goal: Goal
+    memory_state: MemoryState  # Required memory state
     iteration: int = 0
     execution_history: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)  # Metadata for tracking decomposition context
-    memory_state: Optional[MemoryState] = None  # Optional memory state
 
 @dataclass
 class ExecutionTrace:

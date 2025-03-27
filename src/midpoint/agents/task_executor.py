@@ -284,6 +284,16 @@ For exploratory or study tasks, use the memory repository to store your findings
             ExecutionResult containing the execution outcome
         """
         try:
+            # Validate memory state
+            if not context.memory_state:
+                raise ValueError("Memory state is required for task execution")
+            
+            # Validate memory state attributes
+            memory_hash = getattr(context.memory_state, "memory_hash", None)
+            memory_path = getattr(context.memory_state, "repository_path", None)
+            if not memory_hash or not memory_path:
+                raise ValueError("Memory state must have both memory_hash and repository_path")
+            
             # Use provided task description if available, otherwise use goal description
             task = task_description or context.goal.description
             
@@ -294,8 +304,9 @@ For exploratory or study tasks, use the memory repository to store your findings
             
             # Log memory state if available
             if context.memory_state:
-                logger.info(f"Memory repository: {context.memory_state.repository_path}")
-                logger.info(f"Initial memory hash: {context.memory_state.memory_hash[:8]}")
+                logger.info(f"Memory repository: {memory_path}")
+                if memory_hash:
+                    logger.info(f"Initial memory hash: {memory_hash[:8]}")
             elif context.state.memory_repository_path:
                 logger.info(f"Memory repository: {context.state.memory_repository_path}")
                 if context.state.memory_hash:
@@ -312,21 +323,20 @@ Git Hash: {context.state.git_hash}"""
             if context.memory_state:
                 user_prompt += f"""
 
-Memory Repository: {context.memory_state.repository_path}
-Memory Hash: {context.memory_state.memory_hash}"""
-            elif context.state.memory_repository_path:
-                user_prompt += f"""
-
-Memory Repository: {context.state.memory_repository_path}
-Memory Hash: {context.state.memory_hash or 'Not set'}"""
+Memory Repository: {memory_path}
+Memory Hash: {memory_hash}"""
             
             # Execute the task
             result = await self._execute_task_with_llm(user_prompt, context)
             
             # Get the current memory state if available
             current_memory_hash = None
-            memory_repo_path = (context.memory_state.repository_path if context.memory_state 
-                              else context.state.memory_repository_path)
+            memory_repo_path = None
+            
+            if context.memory_state:
+                memory_repo_path = getattr(context.memory_state, "repository_path", None)
+            if not memory_repo_path:
+                memory_repo_path = context.state.memory_repository_path
             
             if memory_repo_path:
                 try:
