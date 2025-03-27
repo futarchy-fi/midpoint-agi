@@ -134,6 +134,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"goal_decomposer_{timestamp}.log"
     task_summary_file = log_dir / f"task_summary_{timestamp}.log"
+    llm_responses_file = log_dir / f"llm_responses_{timestamp}.log"
     
     # Create file handler for full logging
     file_handler = logging.FileHandler(log_file)
@@ -167,6 +168,11 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     # Create task summary file with header
     with open(task_summary_file, "w") as f:
         f.write(f"Task Summary Log - {timestamp}\n")
+        f.write("=" * 50 + "\n\n")
+    
+    # Create LLM responses file with header
+    with open(llm_responses_file, "w") as f:
+        f.write(f"LLM Responses Log - {timestamp}\n")
         f.write("=" * 50 + "\n\n")
     
     # Set up a filter for console output to make it more concise
@@ -266,7 +272,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         print("Running in quiet mode - only showing result and errors...", file=sys.stderr)
     
     # Return log file paths for reference
-    return log_file, task_summary_file
+    return log_file, task_summary_file, llm_responses_file
 
 def log_task_summary(task_summary_file: Path, context: TaskContext):
     """
@@ -521,18 +527,7 @@ rather than immediately jumping to implementation.
 
 You have access to a memory repository where you can store and retrieve information across sessions.
 For intellectual tasks (such as studying, analyzing, or understanding code), you should consider
-updating the memory repository as a valid next step. Tasks are considered "done" when the memory
-has been properly updated, even if no code changes were made.
-
-Memory categories:
-- reasoning: Documents capturing your reasoning process
-- observations: Documents recording observations about the codebase
-- decisions: Documents recording decisions made
-- study: Documents capturing in-depth study of code or concepts
-
-IMPORTANT: Compare the validation criteria of completed tasks with the goal's validation criteria.
-If ANY completed task has validation criteria that EXACTLY MATCH the goal's validation criteria,
-and that task is marked as complete, then the goal is complete.
+updating the memory repository as a valid next step.
 
 For incomplete goals:
 - Determine whether the next step requires further decomposition
@@ -542,22 +537,7 @@ For incomplete goals:
 
 You have access to these tools:
 {tool_descriptions_text}
-
-You MUST provide a structured response in JSON format with these fields:
-For completed goals:
-- goal_completed: true
-- completion_summary: A summary of what was accomplished and which task(s) satisfied the goal's validation criteria
-- reasoning: Explanation of why the goal is considered complete
-
-For incomplete goals:
-- goal_completed: false
-- next_step: A clear description of the single next step to take
-- validation_criteria: List of measurable criteria to validate this step's completion
-- reasoning: Explanation of why this is the most promising next action
-- requires_further_decomposition: Boolean indicating if this step needs further breakdown
-- relevant_context: Object containing relevant information to pass to child subgoals
-
-IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting."""
+"""
         
         return system_prompt
 
@@ -633,7 +613,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         """Determine the next step toward achieving the goal."""
         # Set up logging if requested (only when called directly, not from orchestrator)
         if setup_logging:
-            log_file, task_summary_file = configure_logging(debug, quiet)
+            log_file, task_summary_file, llm_responses_file = configure_logging(debug, quiet)
             
         logging.info("Determining next step for goal: %s", context.goal.description)
         
@@ -737,6 +717,21 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             except json.JSONDecodeError:
                 logging.error("Failed to parse model response as JSON")
                 raise ValueError("Model response is not valid JSON")
+            
+            # Log LLM response to dedicated file
+            if setup_logging:
+                with open(llm_responses_file, "a") as f:
+                    f.write("\n=== LLM Response ===\n")
+                    f.write(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Goal: {context.goal.description}\n")
+                    f.write(f"Model: {self.model}\n")
+                    f.write("\nMessages:\n")
+                    for msg in messages:
+                        f.write(f"\n{msg['role'].upper()}:\n{msg['content']}\n")
+                    f.write("\nResponse:\n")
+                    f.write(content)
+                    f.write("\n\n" + "=" * 50 + "\n")
+                    f.flush()
             
             # Check if the output has the required fields
             if all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
@@ -901,12 +896,28 @@ Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
-Your task is to explore the repository and determine the SINGLE NEXT STEP toward achieving the goal.
-Focus on providing a clear next step with measurable validation criteria.
+Your task is to determine based on the completed tasks whether the validation criteria for the goal have been met.
 
-NOTE: For intellectual tasks that involve studying or understanding code rather than modifying it,
-you can consider updating the memory repository as a valid next step. Memory operations are
-appropriate when the goal involves gaining knowledge or understanding without changing code.
+For uncomplated goals, you must explore the repository, reason and provide a SINGLE NEXT STEP toward achieving the goal.
+
+For complex goals, consider if the best next step is exploration, research, or a "study session" 
+rather than immediately jumping to implementation.
+
+You MUST provide a structured response in JSON format with these fields:
+For completed goals:
+- goal_completed: true
+- completion_summary: A summary of what was accomplished and which task(s) satisfied the goal's validation criteria
+- reasoning: Explanation of why the goal is considered complete
+
+For incomplete goals:
+- goal_completed: false
+- next_step: A clear description of the single next step to take
+- validation_criteria: List of measurable criteria to validate this step's completion
+- reasoning: Explanation of why this is the most promising next action
+- requires_further_decomposition: Boolean indicating if this step needs further breakdown
+- relevant_context: Object containing relevant information to pass to child subgoals
+
+IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
 """
         return prompt
     
@@ -1390,8 +1401,8 @@ async def decompose_goal(
     # Initialize goal decomposer
     decomposer = GoalDecomposer()
     
-    # Determine next step
-    subgoal_plan = await decomposer.determine_next_step(context)
+    # Determine next step with logging enabled
+    subgoal_plan = await decomposer.determine_next_step(context, setup_logging=True, debug=debug, quiet=quiet)
     
     # Get current git hash
     git_hash = await get_current_hash(repo_path)
