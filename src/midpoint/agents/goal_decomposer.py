@@ -217,8 +217,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     # Set up a filter for console output to make it more concise
     class ConsoleFormatFilter(logging.Filter):
         def filter(self, record):
-            # Only process INFO level logs for formatting
-            if record.levelno == logging.INFO:
+            # Process both INFO and DEBUG level logs for formatting
+            if record.levelno in [logging.INFO, logging.DEBUG]:
                 # Convert record.msg to string if it's not already
                 msg = str(record.msg)
                 
