@@ -27,9 +27,11 @@ class Goal:
 @dataclass
 class SubgoalPlan:
     """Represents the next step toward achieving a goal."""
-    next_step: str
-    validation_criteria: List[str]
-    reasoning: str
+    reasoning: str  # Required for both complete and incomplete goals
+    goal_completed: bool = False  # Whether the goal is complete
+    completion_summary: Optional[str] = None  # Summary of what was accomplished (for completed goals)
+    next_step: Optional[str] = None  # Required for incomplete goals
+    validation_criteria: Optional[List[str]] = None  # Required for incomplete goals
     requires_further_decomposition: bool = True  # Flag to indicate if more decomposition is needed
     relevant_context: Dict[str, Any] = field(default_factory=dict)  # Context to pass to child goals
     metadata: Dict[str, Any] = field(default_factory=dict)

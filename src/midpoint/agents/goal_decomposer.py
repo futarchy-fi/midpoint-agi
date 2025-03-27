@@ -482,13 +482,13 @@ Timestamp: {timestamp}
         
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are an expert software architect and project planner.
-Your task is to determine the SINGLE NEXT STEP toward a complex software development goal.
+Your task is to determine if a goal is complete and if not, determine the SINGLE NEXT STEP toward that goal.
 Follow the OODA loop: Observe, Orient, Decide, Act.
 
 1. OBSERVE: Explore the repository to understand its current state. Use the available tools.
 2. ORIENT: Analyze how the current state relates to the final goal.
-3. DECIDE: Determine the most promising SINGLE NEXT STEP.
-4. OUTPUT: Provide a structured response with the next step and validation criteria.
+3. DECIDE: First determine if the goal is complete, then if not, determine the most promising SINGLE NEXT STEP.
+4. OUTPUT: Provide a structured response indicating goal completion status and next steps if needed.
 
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
@@ -504,23 +504,31 @@ Memory categories:
 - decisions: Documents recording decisions made
 - study: Documents capturing in-depth study of code or concepts
 
-As part of your analysis, you MUST determine whether the next step requires further decomposition:
+IMPORTANT: Compare the validation criteria of completed tasks with the goal's validation criteria.
+If ANY completed task has validation criteria that EXACTLY MATCH the goal's validation criteria,
+and that task is marked as complete, then the goal is complete.
+
+For incomplete goals:
+- Determine whether the next step requires further decomposition
 - If the next step is still complex and would benefit from being broken down further, set 'requires_further_decomposition' to TRUE
 - If the next step is simple enough to be directly implemented by a TaskExecutor agent, set 'requires_further_decomposition' to FALSE
-
-Also identify any relevant context that should be passed to child subgoals:
-- Include ONLY information that will be directly helpful for understanding and implementing the subgoal
-- DO NOT include high-level strategic information that isn't directly relevant to the subgoal
-- Structure this as key-value pairs in the 'relevant_context' field
+- Identify relevant context that should be passed to child subgoals
 
 You have access to these tools:
 {tool_descriptions_text}
 
 You MUST provide a structured response in JSON format with these fields:
+For completed goals:
+- goal_completed: true
+- completion_summary: A summary of what was accomplished and which task(s) satisfied the goal's validation criteria
+- reasoning: Explanation of why the goal is considered complete
+
+For incomplete goals:
+- goal_completed: false
 - next_step: A clear description of the single next step to take
 - validation_criteria: List of measurable criteria to validate this step's completion
 - reasoning: Explanation of why this is the most promising next action
-- requires_further_decomposition: Boolean indicating if this step needs further breakdown (true) or can be directly executed (false)
+- requires_further_decomposition: Boolean indicating if this step needs further breakdown
 - relevant_context: Object containing relevant information to pass to child subgoals
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting."""
@@ -733,7 +741,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 })
             
             # Validate the subgoal plan
-            self._validate_subgoal(final_output, context)
+            self._validate_subgoal(final_output)
             
             # Log tool usage at debug level
             logging.debug("Tool usage: %s", tool_usage)
@@ -901,18 +909,44 @@ appropriate when the goal involves gaining knowledge or understanding without ch
 """
         return prompt
     
-    def _validate_subgoal(self, subgoal: SubgoalPlan, context: TaskContext) -> None:
-        """Validate the generated subgoal plan."""
-        if not subgoal.next_step:
-            raise ValueError("Subgoal has no next step defined")
+    def _validate_subgoal(self, subgoal: SubgoalPlan) -> bool:
+        """
+        Validate that a subgoal plan has all required fields.
+        
+        Args:
+            subgoal: The subgoal plan to validate
             
-        if not subgoal.validation_criteria:
-            raise ValueError("Subgoal has no validation criteria")
+        Returns:
+            True if valid, False otherwise
             
+        Raises:
+            ValueError: If the subgoal is invalid
+        """
+        # Reasoning is always required
         if not subgoal.reasoning:
-            raise ValueError("Subgoal has no reasoning")
-            
-        # Additional validation can be added here 
+            raise ValueError("Subgoal must have reasoning")
+
+        # Check goal completion status
+        if subgoal.goal_completed:
+            # For completed goals, we need a completion summary but not next_step or validation_criteria
+            if not subgoal.completion_summary:
+                raise ValueError("Completed goals must have a completion_summary")
+            if subgoal.next_step or subgoal.validation_criteria:
+                raise ValueError("Completed goals should not have next_step or validation_criteria")
+            # Completed goals should not require further decomposition
+            if subgoal.requires_further_decomposition:
+                raise ValueError("Completed goals cannot require further decomposition")
+        else:
+            # For incomplete goals, we need next_step and validation_criteria
+            if not subgoal.next_step:
+                raise ValueError("Incomplete goals must have next_step")
+            if not subgoal.validation_criteria:
+                raise ValueError("Incomplete goals must have validation_criteria")
+            # Completion summary should not be present for incomplete goals
+            if subgoal.completion_summary:
+                raise ValueError("Incomplete goals should not have completion_summary")
+
+        return True
 
     def _serialize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI message objects to serializable dictionaries."""
