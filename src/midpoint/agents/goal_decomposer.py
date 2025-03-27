@@ -360,12 +360,13 @@ class GoalDecomposer:
             if not repo_path:
                 repo_path = get_repo_path()
             
-            # Get current memory hash
+            # Require memory hash to be provided
             if not memory_hash:
-                memory_hash = get_current_hash()
+                logging.error("No memory hash provided")
+                return None
             
             # Create timestamped filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{interaction_type}_{timestamp}.md"
             
             # Create document content
