@@ -219,9 +219,17 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         def filter(self, record):
             # Only process INFO level logs for formatting
             if record.levelno == logging.INFO:
+                # Convert record.msg to string if it's not already
+                msg = str(record.msg)
+                
                 # Truncate long lines to 300 characters
-                if len(record.msg) > 300:
-                    record.msg = record.msg[:300] + "..."
+                if len(msg) > 300:
+                    # Find the last space before 300 characters to avoid cutting words
+                    last_space = msg[:300].rfind(' ')
+                    if last_space > 0:
+                        msg = msg[:last_space] + "..."
+                    else:
+                        msg = msg[:300] + "..."
                 
                 # List of patterns to hide from console output
                 hide_patterns = [
@@ -245,50 +253,53 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                 
                 # Check if any hide patterns are in the message
                 for pattern in hide_patterns:
-                    if pattern in record.msg:
+                    if pattern in msg:
                         return False
                 
                 # Also hide the individual validation criteria lines from the default output
-                if record.msg.startswith('  ') and any(c.isdigit() for c in record.msg) and '. ' in record.msg:
+                if msg.startswith('  ') and any(c.isdigit() for c in msg) and '. ' in msg:
                     return False
                 
                 # Make emojis and messages more concise
-                if '📂 Listing directory:' in record.msg:
-                    record.msg = record.msg.replace('📂 Listing directory:', '📂')
-                elif '📄 Reading:' in record.msg:
-                    record.msg = record.msg.replace('📄 Reading:', '📄')
-                elif '🔍 Searching code:' in record.msg:
-                    record.msg = record.msg.replace('🔍 Searching code:', '🔍 Searching for pattern:')
-                elif '🤖 API call completed' in record.msg:
+                if '📂 Listing directory:' in msg:
+                    msg = msg.replace('📂 Listing directory:', '📂')
+                elif '📄 Reading:' in msg:
+                    msg = msg.replace('📄 Reading:', '📄')
+                elif '🔍 Searching code:' in msg:
+                    msg = msg.replace('🔍 Searching code:', '🔍 Searching for pattern:')
+                elif '🤖 API call completed' in msg:
                     return False  # Don't show API calls in console
-                elif '✅ Next step:' in record.msg:
+                elif '✅ Next step:' in msg:
                     # Show this message only in standalone mode
                     if 'main' not in sys._getframe().f_back.f_code.co_name:
                         return True
                     return False  # Don't show in main() since we have better formatting there
                 # Allow our new emoji formats to pass through
-                elif any(emoji in record.msg for emoji in ['📂', '📄', '🔍', '🌐', '💾', '🔄', '🔗', '✅', '📝', '➕', '➖', '🔀']):
+                elif any(emoji in msg for emoji in ['📂', '📄', '🔍', '🌐', '💾', '🔄', '🔗', '✅', '📝', '➕', '➖', '🔀']):
                     return True
-                elif ('🔄 Next subgoal:' in record.msg) or ('✅ Next task:' in record.msg):
+                elif ('🔄 Next subgoal:' in msg) or ('✅ Next task:' in msg):
                     return True
-                elif 'Determining next step for goal:' in record.msg:
+                elif 'Determining next step for goal:' in msg:
                     try:
                         # Try to safely extract the goal description
                         if record.args and len(record.args) > 0:
                             goal_desc = str(record.args[0])
-                            record.msg = f"🎯 Goal: {goal_desc}"
+                            msg = f"🎯 Goal: {goal_desc}"
                         else:
-                            record.msg = "🎯 Processing goal"
+                            msg = "🎯 Processing goal"
                         record.args = ()  # Clear arguments to avoid formatting errors
                     except:
-                        record.msg = "🎯 Processing goal"
+                        msg = "🎯 Processing goal"
                         record.args = ()
-                elif '🚀 Starting GoalDecomposer' in record.msg:
-                    record.msg = '🚀 Starting'
-                elif 'HTTP Request:' in record.msg or 'API' in record.msg:
+                elif '🚀 Starting GoalDecomposer' in msg:
+                    msg = '🚀 Starting'
+                elif 'HTTP Request:' in msg or 'API' in msg:
                     return False  # Don't show HTTP requests in console
-                elif 'Validating repository state' in record.msg:
+                elif 'Validating repository state' in msg:
                     return False  # Hide validation message in console
+                
+                # Update the record's message with our formatted version
+                record.msg = msg
                 
             return True
     
