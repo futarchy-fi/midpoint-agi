@@ -713,51 +713,104 @@ You have access to these tools:
                 else:
                     # If message is a dict or object, get its content
                     content = message.get('content') if isinstance(message, dict) else message.content
-                output_data = json.loads(content)
-            except json.JSONDecodeError:
-                logging.error("Failed to parse model response as JSON")
-                raise ValueError("Model response is not valid JSON")
-            
-            # Log LLM response to dedicated file
-            if setup_logging:
-                with open(llm_responses_file, "a") as f:
-                    f.write("\n=== LLM Response ===\n")
-                    f.write(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Goal: {context.goal.description}\n")
-                    f.write(f"Model: {self.model}\n")
-                    f.write("\nMessages:\n")
-                    for msg in messages:
-                        f.write(f"\n{msg['role'].upper()}:\n{msg['content']}\n")
-                    f.write("\nResponse:\n")
-                    f.write(content)
-                    f.write("\n\n" + "=" * 50 + "\n")
-                    f.flush()
-            
-            # Check if the output has the required fields
-            if all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
-                # Extract requires_further_decomposition (default to True if not provided)
-                requires_further_decomposition = output_data.get("requires_further_decomposition", True)
                 
-                # Extract relevant_context (default to empty dict if not provided)
-                relevant_context = output_data.get("relevant_context", {})
+                # Log the raw response for debugging
+                logging.debug(f"Raw model response: {content}")
                 
-                final_output = SubgoalPlan(
-                    next_step=output_data["next_step"],
-                    validation_criteria=output_data["validation_criteria"],
-                    reasoning=output_data["reasoning"],
-                    requires_further_decomposition=requires_further_decomposition,
-                    relevant_context=relevant_context,
-                    metadata={
-                        "raw_response": content,  # Use the content we already extracted
-                        "tool_usage": tool_usage
-                    }
-                )
-            else:
-                # Ask for a properly formatted response
+                try:
+                    output_data = json.loads(content)
+                except json.JSONDecodeError:
+                    logging.error("Failed to parse model response as JSON")
+                    # Try to extract JSON from markdown code blocks if present
+                    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+                    if json_match:
+                        try:
+                            output_data = json.loads(json_match.group(1))
+                        except json.JSONDecodeError:
+                            raise ValueError("Model response is not valid JSON")
+                    else:
+                        raise ValueError("Model response is not valid JSON")
+                
+                # Log the parsed output data
+                logging.debug(f"Parsed output data: {json.dumps(output_data, indent=2)}")
+                
+            except Exception as e:
+                logging.error(f"Error processing model response: {str(e)}")
+                # Add the error to messages and try again
                 messages.append({
                     "role": "user",
-                    "content": "Please provide a valid JSON response with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
+                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
                 })
+                # Get a new response from the model
+                message, tool_calls = await self.tool_processor.run_llm_with_tools(
+                    messages,
+                    model=self.model,
+                    validate_json_format=True,
+                    max_tokens=3000
+                )
+                # Process the new response
+                if isinstance(message, list):
+                    content = message[-1].get('content', '')
+                else:
+                    content = message.get('content') if isinstance(message, dict) else message.content
+                output_data = json.loads(content)
+            
+            # Check if the output has the required fields
+            if "goal_completed" in output_data:
+                # Handle completed goal case
+                if output_data["goal_completed"]:
+                    if not all(key in output_data for key in ["completion_summary", "reasoning"]):
+                        missing_fields = [field for field in ["completion_summary", "reasoning"] 
+                                        if field not in output_data]
+                        error_msg = f"Completed goal response missing required fields: {', '.join(missing_fields)}"
+                        logging.error(error_msg)
+                        logging.error(f"Full response: {content}")
+                        raise ValueError(error_msg)
+                    
+                    final_output = SubgoalPlan(
+                        goal_completed=True,
+                        completion_summary=output_data["completion_summary"],
+                        reasoning=output_data["reasoning"],
+                        requires_further_decomposition=False,  # Completed goals never need further decomposition
+                        metadata={
+                            "raw_response": content,
+                            "tool_usage": tool_usage
+                        }
+                    )
+                else:
+                    # Handle incomplete goal case
+                    if not all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
+                        missing_fields = [field for field in ["next_step", "validation_criteria", "reasoning"] 
+                                        if field not in output_data]
+                        error_msg = f"Incomplete goal response missing required fields: {', '.join(missing_fields)}"
+                        logging.error(error_msg)
+                        logging.error(f"Full response: {content}")
+                        raise ValueError(error_msg)
+                    
+                    # Extract requires_further_decomposition (default to True if not provided)
+                    requires_further_decomposition = output_data.get("requires_further_decomposition", True)
+                    
+                    # Extract relevant_context (default to empty dict if not provided)
+                    relevant_context = output_data.get("relevant_context", {})
+                    
+                    final_output = SubgoalPlan(
+                        goal_completed=False,
+                        next_step=output_data["next_step"],
+                        validation_criteria=output_data["validation_criteria"],
+                        reasoning=output_data["reasoning"],
+                        requires_further_decomposition=requires_further_decomposition,
+                        relevant_context=relevant_context,
+                        metadata={
+                            "raw_response": content,
+                            "tool_usage": tool_usage
+                        }
+                    )
+            else:
+                # If we don't have goal_completed field, raise an error
+                error_msg = "Model response missing goal_completed field"
+                logging.error(error_msg)
+                logging.error(f"Full response: {content}")
+                raise ValueError(error_msg)
             
             # Validate the subgoal plan
             self._validate_subgoal(final_output)
@@ -788,14 +841,18 @@ You have access to these tools:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
 
             # Log successful outcome at info level with a more complete message
-            logging.info(f"✅ Next step: {final_output.next_step}")
-            
-            # Only log detailed validation criteria at debug level to avoid duplication
-            logging.debug("Validation criteria:")
-            for i, criterion in enumerate(final_output.validation_criteria, 1):
-                logging.debug(f"  {i}. {criterion}")
-            
-            logging.debug(f"Requires further decomposition: {final_output.requires_further_decomposition}")
+            if final_output.goal_completed:
+                logging.info(f"✅ Goal completed: {final_output.completion_summary}")
+                logging.debug(f"Reasoning: {final_output.reasoning}")
+            else:
+                logging.info(f"✅ Next step: {final_output.next_step}")
+                
+                # Only log detailed validation criteria at debug level to avoid duplication
+                logging.debug("Validation criteria:")
+                for i, criterion in enumerate(final_output.validation_criteria, 1):
+                    logging.debug(f"  {i}. {criterion}")
+                
+                logging.debug(f"Requires further decomposition: {final_output.requires_further_decomposition}")
             
             # Add logging for the final output at debug level
             try:
@@ -813,11 +870,15 @@ You have access to these tools:
             if setup_logging:
                 with open(task_summary_file, "a") as f:
                     f.write("\n=== Final Output ===\n")
-                    f.write(f"Next step: {final_output.next_step}\n")
-                    f.write(f"Requires further decomposition: {final_output.requires_further_decomposition}\n")
-                    f.write("\nValidation criteria:\n")
-                    for i, criterion in enumerate(final_output.validation_criteria, 1):
-                        f.write(f"  {i}. {criterion}\n")
+                    if final_output.goal_completed:
+                        f.write(f"Goal completed: {final_output.completion_summary}\n")
+                        f.write(f"Reasoning: {final_output.reasoning}\n")
+                    else:
+                        f.write(f"Next step: {final_output.next_step}\n")
+                        f.write(f"Requires further decomposition: {final_output.requires_further_decomposition}\n")
+                        f.write("\nValidation criteria:\n")
+                        for i, criterion in enumerate(final_output.validation_criteria, 1):
+                            f.write(f"  {i}. {criterion}\n")
                     f.write("\n" + "=" * 50 + "\n")
                     f.flush()
 
@@ -872,9 +933,11 @@ Memory State:
         # Add completed tasks information if available
         if hasattr(context, 'metadata') and context.metadata and 'completed_tasks' in context.metadata:
             logging.info("Found completed tasks in metadata:")
-            logging.info(f"Number of completed tasks: {len(context.metadata['completed_tasks'])}")
+            completed_tasks = context.metadata['completed_tasks']
+            total_tasks = context.metadata.get('total_task_count', len(completed_tasks))
+            logging.info(f"Number of completed tasks: {len(completed_tasks)}")
             prompt += "\nCompleted Tasks:\n"
-            for i, task in enumerate(context.metadata['completed_tasks'], 1):
+            for i, task in enumerate(completed_tasks, 1):
                 logging.info(f"Task {i}:")
                 logging.info(f"  Description: {task.get('description', 'No description')}")
                 logging.info(f"  Validation criteria: {task.get('validation_criteria', [])}")
@@ -888,6 +951,11 @@ Memory State:
                 if task.get('final_state'):
                     prompt += f"   Final state: {task['final_state'].get('description', '')}\n"
                 prompt += "\n"  # Add blank line between tasks
+            
+            # Add task completion status
+            prompt += f"\nTask Completion Status: {len(completed_tasks)}/{total_tasks} tasks completed\n"
+            if len(completed_tasks) == total_tasks:
+                prompt += "\nAll tasks have been completed. Please evaluate if the goal's validation criteria have been met.\n"
         else:
             logging.info("No completed tasks found in metadata")
 
@@ -1420,19 +1488,30 @@ async def decompose_goal(
             logging.info(f"Repo ancestry check passed: {git_hash} is a descendant of {initial_git_hash}")
     
     # Return the decomposition result without creating any files
-    return {
-        "success": True,
-        "next_step": subgoal_plan.next_step,
-        "validation_criteria": subgoal_plan.validation_criteria,
-        "reasoning": subgoal_plan.reasoning,
-        "requires_further_decomposition": subgoal_plan.requires_further_decomposition,
-        "relevant_context": subgoal_plan.relevant_context,
-        "git_hash": git_hash,
-        "is_task": not subgoal_plan.requires_further_decomposition,
-        "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-        # Include initial git hash for reference
-        "initial_git_hash": initial_git_hash
-    }
+    if subgoal_plan.goal_completed:
+        return {
+            "success": True,
+            "goal_completed": True,
+            "completion_summary": subgoal_plan.completion_summary,
+            "reasoning": subgoal_plan.reasoning,
+            "git_hash": git_hash,
+            "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
+            "initial_git_hash": initial_git_hash
+        }
+    else:
+        return {
+            "success": True,
+            "goal_completed": False,
+            "next_step": subgoal_plan.next_step,
+            "validation_criteria": subgoal_plan.validation_criteria,
+            "reasoning": subgoal_plan.reasoning,
+            "requires_further_decomposition": subgoal_plan.requires_further_decomposition,
+            "relevant_context": subgoal_plan.relevant_context,
+            "git_hash": git_hash,
+            "is_task": not subgoal_plan.requires_further_decomposition,
+            "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
+            "initial_git_hash": initial_git_hash
+        }
 
 # Create a separate async entry point for CLI to avoid nesting asyncio.run() calls
 async def async_main():

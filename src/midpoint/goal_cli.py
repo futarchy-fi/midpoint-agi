@@ -1066,7 +1066,7 @@ def show_goal_status():
         indent = "  " * depth
         
         # Determine status symbol
-        if goal.get("complete", False):
+        if goal.get("complete", False) or goal.get("completed", False):
             status = "✅"
         else:
             # Special handling for tasks
@@ -1083,7 +1083,7 @@ def show_goal_status():
                 # Check if all subgoals are complete
                 subgoals = {k: v for k, v in goal_files.items() 
                           if v.get("parent_goal", "").upper() == goal_id.upper()}
-                all_subgoals_complete = all(sg.get("complete", False) for sg in subgoals.values())
+                all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
                 
                 if not subgoals:
                     status = "🔘"  # No subgoals (not yet decomposed)
@@ -1108,8 +1108,9 @@ def show_goal_status():
         print(f"{indent}{status} {goal_id}{progress_text}{memory_hash_display}: {goal['description']}")
         
         # Print completion timestamp if available
-        if goal.get("complete", False) and "completion_time" in goal:
-            completion_time = goal["completion_time"]
+        if (goal.get("complete", False) or goal.get("completed", False)) and \
+           ("completion_time" in goal or "completion_timestamp" in goal):
+            completion_time = goal.get("completion_time") or goal.get("completion_timestamp")
             print(f"{indent}   Completed: {completion_time}")
         
         # Print current state if available
@@ -1210,7 +1211,7 @@ def show_goal_tree():
                 states_equal = git_hash_equal and memory_hash_equal
         
         # Determine status symbol
-        if goal.get("complete", False):
+        if goal.get("complete", False) or goal.get("completed", False):
             status = "✅"
         else:
             # Special handling for tasks
@@ -1238,7 +1239,7 @@ def show_goal_tree():
                             status = "🔷"  # Directly executable task
                     else:
                         status = "🔘"  # No subgoals (not yet decomposed)
-                elif all(sg.get("complete", False) for sg in subgoals.values()):
+                elif all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values()):
                     status = "⚪"  # All subgoals complete but needs explicit completion
                 else:
                     if not states_equal:
@@ -1593,25 +1594,36 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         )
         
         if result["success"]:
-            print(f"\nGoal {goal_id} successfully decomposed into a subgoal")
-            print(f"\nNext step: {result['next_step']}")
-            print("\nValidation criteria:")
-            for criterion in result["validation_criteria"]:
-                print(f"- {criterion}")
-            
-            if result["requires_further_decomposition"]:
-                print("\nRequires further decomposition: Yes")
+            if result.get("goal_completed", False):
+                print(f"\nGoal {goal_id} has been completed!")
             else:
-                print("\nRequires further decomposition: No")
+                print(f"\nGoal {goal_id} successfully decomposed into a subgoal")
             
-            print(f"\nGoal file: {result['goal_file']}")
+            if result.get("goal_completed", False):
+                print("\n✅ Goal completed!")
+                print(f"Summary: {result['completion_summary']}")
+                print(f"Reasoning: {result['reasoning']}")
+            else:
+                print(f"\nNext step: {result['next_step']}")
+                print("\nValidation criteria:")
+                for criterion in result["validation_criteria"]:
+                    print(f"- {criterion}")
+                
+                if result["requires_further_decomposition"]:
+                    print("\nRequires further decomposition: Yes")
+                else:
+                    print("\nRequires further decomposition: No")
+                
+                print(f"\nGoal file: {result['goal_file']}")
             
             # Update the goal file with the decomposition result
             goal_data.update({
-                "next_step": result["next_step"],
-                "validation_criteria": result["validation_criteria"],
+                "goal_completed": result.get("goal_completed", False),
+                "completion_summary": result.get("completion_summary"),
+                "next_step": result.get("next_step"),
+                "validation_criteria": result.get("validation_criteria", []),
                 "reasoning": result["reasoning"],
-                "requires_further_decomposition": result["requires_further_decomposition"],
+                "requires_further_decomposition": result.get("requires_further_decomposition", False),
                 "relevant_context": result.get("relevant_context", {}),
                 "decomposed": True,  # Mark the goal as decomposed
                 "current_state": {
@@ -1624,48 +1636,59 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 }
             })
             
+            # If goal is completed, mark it as completed in the goal file
+            if result.get("goal_completed", False):
+                goal_data.update({
+                    "completed": True,
+                    "completion_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    "completion_summary": result["completion_summary"],
+                    "completion_reasoning": result["reasoning"]
+                })
+            
             # Save the updated goal data
             with open(goal_file, 'w') as f:
                 json.dump(goal_data, f, indent=2)
             
-            # Create the subgoal file
-            subgoal_id = generate_goal_id(goal_id, is_task=not result["requires_further_decomposition"])
-            subgoal_file = goal_path / f"{subgoal_id}.json"
-            
-            # Create subgoal data with memory state from parent
-            subgoal_data = {
-                "goal_id": subgoal_id,
-                "description": result["next_step"],
-                "parent_goal": goal_id,
-                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "is_task": not result["requires_further_decomposition"],
-                "requires_further_decomposition": result["requires_further_decomposition"],
-                "validation_criteria": result["validation_criteria"],
-                "reasoning": result["reasoning"],
-                "relevant_context": result.get("relevant_context", {}),
-                "initial_state": {
-                    "git_hash": result["git_hash"],
-                    "repository_path": os.getcwd(),
-                    "description": "Initial state before executing subgoal",
+            # Only create subgoal if goal is not completed
+            if not result.get("goal_completed", False):
+                # Create the subgoal file
+                subgoal_id = generate_goal_id(goal_id, is_task=not result["requires_further_decomposition"])
+                subgoal_file = goal_path / f"{subgoal_id}.json"
+                
+                # Create subgoal data with memory state from parent
+                subgoal_data = {
+                    "goal_id": subgoal_id,
+                    "description": result["next_step"],
+                    "parent_goal": goal_id,
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
-                    "memory_repository_path": memory_repo_path
-                },
-                "current_state": {
-                    "git_hash": result["git_hash"],
-                    "repository_path": os.getcwd(),
-                    "description": "Initial state before executing subgoal",
-                    "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
-                    "memory_repository_path": memory_repo_path
+                    "is_task": not result["requires_further_decomposition"],
+                    "requires_further_decomposition": result["requires_further_decomposition"],
+                    "validation_criteria": result["validation_criteria"],
+                    "reasoning": result["reasoning"],
+                    "relevant_context": result.get("relevant_context", {}),
+                    "initial_state": {
+                        "git_hash": result["git_hash"],
+                        "repository_path": os.getcwd(),
+                        "description": "Initial state before executing subgoal",
+                        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                        "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
+                        "memory_repository_path": memory_repo_path
+                    },
+                    "current_state": {
+                        "git_hash": result["git_hash"],
+                        "repository_path": os.getcwd(),
+                        "description": "Initial state before executing subgoal",
+                        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                        "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
+                        "memory_repository_path": memory_repo_path
+                    }
                 }
-            }
-            
-            # Save the subgoal file
-            with open(subgoal_file, 'w') as f:
-                json.dump(subgoal_data, f, indent=2)
-            
-            print(f"Created {'task' if not result['requires_further_decomposition'] else 'subgoal'} file: {subgoal_file}")
+                
+                # Save the subgoal file
+                with open(subgoal_file, 'w') as f:
+                    json.dump(subgoal_data, f, indent=2)
+                
+                print(f"Created {'task' if not result['requires_further_decomposition'] else 'subgoal'} file: {subgoal_file}")
             
             return True
         else:
