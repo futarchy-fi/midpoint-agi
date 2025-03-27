@@ -14,9 +14,146 @@ from midpoint.agents.tools.registry import ToolRegistry
 class ToolProcessor:
     """Handles LLM tool calls and executes appropriate tools."""
     
+    # Model-specific context windows
+    MODEL_CONTEXT_WINDOWS = {
+        "gpt-4": 128000,
+        "gpt-4-turbo-preview": 128000,
+        "gpt-4o-mini": 128000,
+        "gpt-3.5-turbo": 16385,
+    }
+    
     def __init__(self, client: AsyncOpenAI):
         self.client = client
+        # Rough estimate: 4 characters per token
+        self.chars_per_token = 4
+        # Reserve some tokens for the response
+        self.response_token_buffer = 1000
+        # Cache for tool schemas token count
+        self._tool_schemas_token_count = None
         
+    def estimate_token_count(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate the token count of a list of messages."""
+        total = 0
+        for msg in messages:
+            content = msg.get('content', '')
+            if content is None:
+                content = ''
+            total += len(content) // self.chars_per_token
+        return total
+    
+    def get_tool_schemas_token_count(self) -> int:
+        """Get the token count of tool schemas, caching the result."""
+        if self._tool_schemas_token_count is None:
+            schemas = ToolRegistry.get_tool_schemas()
+            self._tool_schemas_token_count = sum(
+                len(json.dumps(schema)) // self.chars_per_token 
+                for schema in schemas
+            )
+        return self._tool_schemas_token_count
+    
+    def get_model_context_window(self, model: str) -> int:
+        """Get the context window size for a given model."""
+        return self.MODEL_CONTEXT_WINDOWS.get(model, 128000)  # Default to 128k if unknown
+    
+    def get_available_tokens(self, model: str, max_tokens: int) -> int:
+        """Calculate available tokens for conversation history."""
+        context_window = self.get_model_context_window(model)
+        tool_schemas_tokens = self.get_tool_schemas_token_count()
+        # Reserve space for:
+        # - Tool schemas
+        # - Response buffer
+        # - Output tokens
+        available = context_window - tool_schemas_tokens - self.response_token_buffer - max_tokens
+        return max(0, available)  # Ensure we don't return negative
+    
+    def truncate_conversation(self, messages: List[Dict[str, Any]], model: str, max_tokens: int) -> List[Dict[str, Any]]:
+        """Truncate conversation history to fit within token limit."""
+        available_tokens = self.get_available_tokens(model, max_tokens)
+        
+        # Keep system prompt and user message
+        system_msg = next((msg for msg in messages if msg['role'] == 'system'), None)
+        user_msg = next((msg for msg in messages if msg['role'] == 'user'), None)
+        
+        # Keep most recent tool results and assistant messages
+        recent_messages = []
+        current_tokens = 0
+        
+        # Add system message if present
+        if system_msg:
+            content = system_msg.get('content', '')
+            if content is None:
+                content = ''
+            system_tokens = len(content) // self.chars_per_token
+            current_tokens += system_tokens
+            recent_messages.append(system_msg)
+            logging.info(f"System message tokens: {system_tokens}")
+        
+        # Add user message if present
+        if user_msg:
+            content = user_msg.get('content', '')
+            if content is None:
+                content = ''
+            user_tokens = len(content) // self.chars_per_token
+            current_tokens += user_tokens
+            recent_messages.append(user_msg)
+            logging.info(f"User message tokens: {user_tokens}")
+        
+        # Process messages in pairs (assistant + tool responses)
+        message_pairs = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg['role'] == 'assistant':
+                # Get all tool responses that follow this assistant message
+                tool_responses = []
+                j = i + 1
+                while j < len(messages) and messages[j]['role'] == 'tool':
+                    tool_responses.append(messages[j])
+                    j += 1
+                message_pairs.append((msg, tool_responses))
+                i = j
+            else:
+                i += 1
+        
+        logging.info(f"Found {len(message_pairs)} message pairs to process")
+        
+        # Add most recent message pairs until we hit the limit
+        for assistant_msg, tool_responses in reversed(message_pairs):
+            # Calculate tokens for this pair
+            pair_tokens = 0
+            
+            # Count assistant message tokens
+            content = assistant_msg.get('content', '')
+            if content is None:
+                content = ''
+            assistant_tokens = len(content) // self.chars_per_token
+            pair_tokens += assistant_tokens
+            
+            # Count tool response tokens
+            tool_tokens = 0
+            for tool_msg in tool_responses:
+                content = tool_msg.get('content', '')
+                if content is None:
+                    content = ''
+                tool_tokens += len(content) // self.chars_per_token
+            
+            pair_tokens += tool_tokens
+            logging.info(f"Message pair tokens - Assistant: {assistant_tokens}, Tools: {tool_tokens}, Total: {pair_tokens}")
+            
+            # Check if we can add this pair
+            if current_tokens + pair_tokens > available_tokens:
+                logging.info(f"Reached token limit. Current: {current_tokens}, Pair would add: {pair_tokens}")
+                break
+                
+            # Add the pair
+            current_tokens += pair_tokens
+            recent_messages.append(assistant_msg)
+            recent_messages.extend(tool_responses)
+        
+        logging.info(f"Final message count: {len(recent_messages)}")
+        logging.info(f"Final token count: {current_tokens}")
+        return recent_messages
+    
     async def process_tool_calls(self, message: Dict[str, Any], 
                                 context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Process tool calls from an LLM message and return results."""
@@ -139,6 +276,15 @@ class ToolProcessor:
         while current_iteration < max_iterations:
             current_iteration += 1
             try:
+                # Proactively manage conversation length
+                estimated_tokens = self.estimate_token_count(current_messages)
+                available_tokens = self.get_available_tokens(model, max_tokens)
+                
+                if estimated_tokens > available_tokens:
+                    logging.info(f"Conversation too long ({estimated_tokens} tokens), truncating...")
+                    current_messages = self.truncate_conversation(current_messages, model, max_tokens)
+                    logging.info(f"Truncated to {self.estimate_token_count(current_messages)} tokens")
+                
                 # Call the LLM
                 try:
                     response = await self.client.chat.completions.create(

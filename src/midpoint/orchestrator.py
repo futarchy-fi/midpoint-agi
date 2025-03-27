@@ -63,48 +63,25 @@ class Orchestrator:
     async def run(self, repo_path: str, goal: Goal, max_iterations: int = 10, 
               start_iteration: int = 0, checkpoint_path: Optional[str] = None) -> OrchestrationResult:
         """
-        Run the full orchestration workflow for a given goal.
+        Run the orchestration process to achieve a goal.
         
         Args:
-            repo_path: Path to the git repository
-            goal: The high-level goal to achieve
-            max_iterations: Maximum number of iterations to attempt
+            repo_path: Path to the repository to work with
+            goal: The goal to achieve
+            max_iterations: Maximum number of iterations to run
             start_iteration: Iteration to start from (for resuming)
-            checkpoint_path: Path to save checkpoints (if specified)
+            checkpoint_path: Path to save checkpoints to
             
         Returns:
-            OrchestrationResult with the outcome of the orchestration
+            OrchestrationResult containing the final state and execution history
         """
         logger.info(f"Starting orchestration for goal: {goal.description}")
-        logger.info(f"Repository path: {repo_path}")
-        
-        # Verify initial repository state
-        repo_state = await check_repo_state(repo_path)
-        if not repo_state["is_clean"]:
-            logger.error("Repository has uncommitted changes. Aborting.")
-            return OrchestrationResult(
-                success=False,
-                error_message="Repository has uncommitted changes. Please commit or stash changes first."
-            )
-        
-        # Get initial git hash
-        initial_hash = await get_current_hash(repo_path)
-        logger.info(f"Initial git hash: {initial_hash}")
-        
-        # Start a new logging session
-        session = log_manager.start_session(
-            repository_path=repo_path,
-            git_hash=initial_hash,
-            goal_description=goal.description
-        )
-        
-        # Write headers for all log files
-        log_manager.write_log_header("goal_hierarchy")
-        log_manager.write_log_header("execution")
+        logger.info(f"Repository: {repo_path}")
+        logger.info(f"Max iterations: {max_iterations}")
         
         # Initialize state
         current_state = State(
-            git_hash=initial_hash,
+            git_hash=await get_current_hash(repo_path),
             repository_path=repo_path,
             description="Initial state before orchestration"
         )
@@ -145,7 +122,9 @@ class Orchestrator:
                     state=State(
                         git_hash=current_state.git_hash,
                         repository_path=repo_path,
-                        description=f"State before executing: {subgoal_plan.next_step}"
+                        description=f"State before executing: {subgoal_plan.next_step}",
+                        memory_hash=current_state.memory_hash,
+                        memory_repository_path=current_state.memory_repository_path
                     ),
                     goal=Goal(
                         description=subgoal_plan.next_step,
@@ -171,6 +150,11 @@ class Orchestrator:
                 
                 logger.info(f"Task executed successfully. New git hash: {execution_result.git_hash}")
                 
+                # Update current state with final state from execution result
+                if execution_result.final_state:
+                    current_state = execution_result.final_state
+                    logger.info(f"Updated state - Git hash: {current_state.git_hash[:8]}, Memory hash: {current_state.memory_hash[:8] if current_state.memory_hash else 'None'}")
+                
                 # 3. Validate the execution
                 logger.info("Validating task execution")
                 subgoal = Goal(
@@ -195,67 +179,34 @@ class Orchestrator:
                 }
                 execution_history.append(execution_entry)
                 
-                # Log the execution result
-                log_manager.log_execution_result(
-                    iteration=iteration,
-                    subgoal=subgoal_plan.next_step,
-                    git_hash=execution_result.git_hash,
-                    branch_name=execution_result.branch_name,
-                    validation_score=validation_result.score,
-                    execution_time=execution_result.execution_time
-                )
-                
-                logger.info(f"Validation score: {validation_result.score:.2f}")
-                
-                # 5. Update current state
-                current_state = State(
-                    git_hash=execution_result.git_hash,
-                    repository_path=repo_path,
-                    description=f"State after iteration {iteration+1}"
-                )
-                
-                # Save checkpoint if path is specified
+                # Save checkpoint if path provided
                 if checkpoint_path:
-                    await self.save_checkpoint(
-                        checkpoint_path,
-                        current_state,
-                        goal,
-                        execution_history,
-                        iteration + 1  # Save the next iteration to start from
-                    )
+                    self._save_checkpoint(checkpoint_path, current_state, execution_history)
                 
-                # 6. Check if the main goal is achieved
-                logger.info("Checking if main goal is achieved")
-                main_goal_validation = await self.validator.validate_execution(
-                    goal=goal,
-                    execution_result=execution_result
-                )
-                
-                if main_goal_validation.success:
-                    logger.info(f"Main goal achieved with score: {main_goal_validation.score:.2f}")
+                # Check if goal is complete
+                if validation_result.score >= goal.success_threshold:
+                    logger.info("Goal completed successfully!")
                     return OrchestrationResult(
                         success=True,
                         final_state=current_state,
                         execution_history=execution_history
                     )
                 
-                logger.info(f"Main goal not yet achieved. Continuing with next iteration.")
-                
             except Exception as e:
                 logger.error(f"Error during orchestration: {str(e)}")
                 return OrchestrationResult(
                     success=False,
                     final_state=current_state,
-                    error_message=f"Error during orchestration: {str(e)}",
+                    error_message=str(e),
                     execution_history=execution_history
                 )
         
-        # If we reach here, we've hit the maximum iterations
-        logger.warning(f"Reached maximum iterations ({max_iterations}) without achieving goal")
+        # If we get here, we've hit the max iterations
+        logger.warning(f"Reached maximum iterations ({max_iterations}) without completing goal")
         return OrchestrationResult(
             success=False,
             final_state=current_state,
-            error_message=f"Reached maximum iterations ({max_iterations}) without achieving goal",
+            error_message=f"Maximum iterations ({max_iterations}) reached without completing goal",
             execution_history=execution_history
         )
 

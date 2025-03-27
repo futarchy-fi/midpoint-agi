@@ -125,6 +125,17 @@ Requires [Graphviz](https://graphviz.org/download/) to be installed.
 
 For detailed examples of the visualization outputs, please see the [Goal CLI Visualization Guide](goal_cli_visuals.md).
 
+#### Convert existing hierarchical goal IDs to the new flat ID system
+```bash
+goal convert
+```
+
+#### Revert a goal's current state back to its initial state
+```bash
+goal revert <goal-id>
+```
+This command will reset all fields in the goal's current state to match its initial state. If the goal has any child goals or tasks, you will be prompted for confirmation before proceeding.
+
 ## Status Indicators
 
 The goal management system uses the following status indicators:

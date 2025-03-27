@@ -230,24 +230,8 @@ Your role is to:
 4. Maintain clean git state
 5. Store important findings and observations in the memory repository
 
-IMPORTANT: A new branch has been created for you to work on. You are responsible for:
-1. Understanding the required changes for the task
-2. EITHER making code changes in the repository OR storing information in the memory repository (or both)
-3. If making code changes: Create commits with meaningful messages and return the commit hash
-4. If only storing information in memory: Use memory repository tools and set task_completed to true
-5. Ensuring all code changes are committed before completing
-
 You have the following tools available:
 {tool_descriptions_text}
-
-Task completion criteria:
-1. A task is considered complete if EITHER:
-   a. You made code changes and committed them, OR
-   b. You stored information in the memory repository without code changes
-2. A task is considered failed if:
-   a. You cannot complete the requested task for any reason, OR
-   b. You have uncommitted code changes, OR
-   c. You neither made code changes nor stored anything in memory
 
 For each task:
 1. Analyze the current repository state
@@ -264,11 +248,20 @@ When you've completed the task or determined it cannot be completed, provide a f
 4. The git hash of the final commit, if you made code changes
 5. References to any memory documents you created
 
+IMPORTANT: Your final response MUST be in valid JSON format with these fields:
+{{
+  "summary": "A clear summary of what you did",
+  "success": true/false,
+  "validation_steps": ["List of validation steps"],
+  "git_hash": "Optional git hash if code was changed",
+  "memory_references": ["Optional list of memory document references"]
+}}
+
 For exploratory or study tasks, use the memory repository to store your findings rather than making code changes."""
         
         return system_prompt
 
-    async def execute_task(self, context: TaskContext) -> ExecutionResult:
+    async def execute_task(self, context: TaskContext, task_description: Optional[str] = None) -> ExecutionResult:
         """
         Execute a task using LLM-driven decision making.
         
@@ -285,46 +278,226 @@ For exploratory or study tasks, use the memory repository to store your findings
         
         Args:
             context: The current task context
+            task_description: Optional task description to override context.goal.description
             
         Returns:
             ExecutionResult containing the execution outcome
         """
         try:
+            # Use provided task description if available, otherwise use goal description
+            task = task_description or context.goal.description
+            
             # Log task information
-            logger.info(f"Executing task: {context.task}")
+            logger.info(f"Executing task: {task}")
             logger.info(f"Repository: {context.state.repository_path}")
             logger.info(f"Branch: {context.state.branch_name}")
             
+            # Log memory state if available
+            if context.memory_state:
+                logger.info(f"Memory repository: {context.memory_state.repository_path}")
+                logger.info(f"Initial memory hash: {context.memory_state.memory_hash[:8]}")
+            elif context.state.memory_repository_path:
+                logger.info(f"Memory repository: {context.state.memory_repository_path}")
+                if context.state.memory_hash:
+                    logger.info(f"Initial memory hash: {context.state.memory_hash[:8]}")
+            
             # Create the user prompt for the LLM
-            user_prompt = f"""Task: {context.task}
+            user_prompt = f"""Task: {task}
 
 Repository Path: {context.state.repository_path}
 Branch: {context.state.branch_name}
 Git Hash: {context.state.git_hash}"""
+
+            # Add memory information to prompt if available
+            if context.memory_state:
+                user_prompt += f"""
+
+Memory Repository: {context.memory_state.repository_path}
+Memory Hash: {context.memory_state.memory_hash}"""
+            elif context.state.memory_repository_path:
+                user_prompt += f"""
+
+Memory Repository: {context.state.memory_repository_path}
+Memory Hash: {context.state.memory_hash or 'Not set'}"""
             
             # Execute the task
             result = await self._execute_task_with_llm(user_prompt, context)
             
-            # Return the result
+            # Get the current memory state if available
+            current_memory_hash = None
+            memory_repo_path = (context.memory_state.repository_path if context.memory_state 
+                              else context.state.memory_repository_path)
+            
+            if memory_repo_path:
+                try:
+                    current_memory_hash = await get_current_hash(memory_repo_path)
+                    logger.info(f"Updated memory hash: {current_memory_hash[:8]}")
+                except Exception as e:
+                    logger.warning(f"Failed to get current memory hash: {e}")
+            
+            # Create final state with updated memory hash
+            final_state = State(
+                git_hash=context.state.git_hash,
+                repository_path=context.state.repository_path,
+                description=context.state.description,
+                branch_name=context.state.branch_name,
+                memory_hash=current_memory_hash,
+                memory_repository_path=memory_repo_path
+            )
+            
+            # Return the result with final state
             return ExecutionResult(
                 success=True,
-                result=result,
-                error=None
+                branch_name=context.state.branch_name,
+                git_hash=context.state.git_hash,
+                repository_path=context.state.repository_path,
+                final_state=final_state
             )
             
         except Exception as e:
             logger.error(f"Error executing task: {str(e)}")
             return ExecutionResult(
                 success=False,
-                result=None,
-                error=str(e)
+                branch_name=context.state.branch_name,
+                git_hash=context.state.git_hash,
+                repository_path=context.state.repository_path,
+                error_message=str(e)
             )
 
     async def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> str:
         """Execute a task using the LLM."""
-        # TODO: Implement LLM-based task execution
-        # For now, just return a placeholder result
-        return "Task executed successfully"
+        # Initialize messages
+        messages = [
+            {"role": "system", "content": self.system_prompt}
+        ]
+        
+        # Get memory repository path if available
+        memory_repo_path = context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None
+        
+        # Get memory hash if available
+        memory_hash = context.state.memory_hash if hasattr(context.state, "memory_hash") else None
+        if memory_hash:
+            logger.info(f"Using memory hash from context state: {memory_hash[:8]}")
+        
+        # Add memory context as separate messages if available
+        if memory_hash and memory_repo_path:
+            try:
+                # Use the new memory retrieval function
+                from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+                
+                # Get approximately 10000 characters of recent memory
+                total_chars, memory_documents = retrieve_recent_memory(
+                    memory_hash=memory_hash,
+                    char_limit=10000,
+                    repo_path=memory_repo_path
+                )
+                
+                if memory_documents:
+                    # Add each memory document as a separate message
+                    for path, content, timestamp in memory_documents:
+                        filename = os.path.basename(path)
+                        timestamp_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        messages.append({
+                            "role": "system",
+                            "content": f"Memory document from {filename} ({timestamp_str}):\n{content}"
+                        })
+                    
+                    # Log memory context stats
+                    logger.info(f"Added {len(memory_documents)} memory documents to conversation")
+            except Exception as e:
+                logger.error(f"Error retrieving memory context: {str(e)}")
+        
+        # Add the user prompt as the final message
+        messages.append({"role": "user", "content": user_prompt})
+        
+        # Track tool usage for metadata
+        tool_usage = []
+        
+        try:
+            # Get the task execution plan from the model
+            message, tool_calls = await self.tool_processor.run_llm_with_tools(
+                messages,
+                model="gpt-4o-mini",
+                validate_json_format=True,
+                max_tokens=3000
+            )
+            
+            # Process tool calls and update tool usage
+            if tool_calls:
+                for tool_call in tool_calls:
+                    tool_usage.append(tool_call)
+            
+            # Parse the model's response
+            try:
+                if isinstance(message, list):
+                    # If message is a list, get the last message's content
+                    content = message[-1].get('content', '')
+                else:
+                    # If message is a dict or object, get its content
+                    content = message.get('content') if isinstance(message, dict) else message.content
+                
+                # Try to parse the content as JSON
+                try:
+                    output_data = json.loads(content)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse model response as JSON: {str(e)}")
+                    logger.error(f"Raw response: {content}")
+                    # Create a default response with error information
+                    output_data = {
+                        "summary": f"Error parsing LLM response: {str(e)}",
+                        "success": False,
+                        "validation_steps": ["Failed to parse LLM response as JSON"],
+                        "error": str(e)
+                    }
+            except Exception as e:
+                logger.error(f"Error processing model response: {str(e)}")
+                # Create a default response with error information
+                output_data = {
+                    "summary": f"Error processing LLM response: {str(e)}",
+                    "success": False,
+                    "validation_steps": ["Failed to process LLM response"],
+                    "error": str(e)
+                }
+            
+            # Check if the output has the required fields
+            if all(key in output_data for key in ["summary", "success", "validation_steps"]):
+                # Extract git hash and memory references if available
+                git_hash = output_data.get("git_hash")
+                memory_references = output_data.get("memory_references", [])
+                
+                # Save the conversation to memory
+                await self._save_interaction_to_memory(context)
+                
+                # Log successful outcome
+                logger.info(f"✅ Task execution summary: {output_data['summary']}")
+                if output_data["validation_steps"]:
+                    logger.info("Validation steps:")
+                    for i, step in enumerate(output_data["validation_steps"], 1):
+                        logger.info(f"  {i}. {step}")
+                
+                return json.dumps(output_data)
+            else:
+                # Create a default response for missing fields
+                default_response = {
+                    "summary": "LLM response missing required fields",
+                    "success": False,
+                    "validation_steps": ["Failed to get complete response from LLM"],
+                    "error": "Missing required fields in LLM response"
+                }
+                return json.dumps(default_response)
+            
+        except Exception as e:
+            # Log the error to memory
+            await self._save_interaction_to_memory(context)
+            # Create a default response with error information
+            error_response = {
+                "summary": f"Error during task execution: {str(e)}",
+                "success": False,
+                "validation_steps": ["Task execution failed"],
+                "error": str(e)
+            }
+            return json.dumps(error_response)
 
     async def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
         """

@@ -12,6 +12,7 @@ from pathlib import Path
 import logging
 import traceback
 import re
+import datetime
 
 # Early initialization of logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -161,7 +162,6 @@ from midpoint.agents.tools import (
 from midpoint.agents.config import get_openai_api_key
 from midpoint.utils.logging import log_manager
 from dotenv import load_dotenv
-import datetime
 import subprocess
 import time
 
@@ -305,7 +305,7 @@ class GoalDecomposer:
     This agent is responsible for determining the next step toward achieving a complex goal.
     """
     
-    def __init__(self, model: str = "gpt-4-turbo-preview", max_history_entries: int = 5):
+    def __init__(self, model: str = "gpt-4o-mini", max_history_entries: int = 5):
         """
         Initialize the goal decomposer.
         
@@ -335,7 +335,7 @@ class GoalDecomposer:
         # Generate system prompt with dynamic tool descriptions
         self.system_prompt = self._generate_system_prompt()
         
-    def _save_interaction_to_memory(
+    async def _save_interaction_to_memory(
             self,
             interaction_type: str,
             content: str,
@@ -360,12 +360,13 @@ class GoalDecomposer:
             if not repo_path:
                 repo_path = get_repo_path()
             
-            # Get current memory hash
+            # Require memory hash to be provided
             if not memory_hash:
-                memory_hash = get_current_hash()
+                logging.error("No memory hash provided")
+                return None
             
             # Create timestamped filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{interaction_type}_{timestamp}.md"
             
             # Create document content
@@ -406,7 +407,7 @@ Timestamp: {timestamp}
             logging.error(f"Error saving {interaction_type} to memory: {str(e)}")
             return None
 
-    def _save_conversation_to_memory(
+    async def _save_conversation_to_memory(
         self,
         messages: List[Dict[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
@@ -442,15 +443,40 @@ Timestamp: {timestamp}
                 for key, value in metadata.items():
                     content += f"- {key}: {value}\n"
             
-            # Save to memory
-            return self._save_interaction_to_memory(
-                interaction_type="goal_decomposition",
+            # Get memory repository path if not provided
+            if not repo_path:
+                repo_path = get_repo_path()
+            
+            # Get memory hash from metadata or use provided memory_hash
+            if not memory_hash and metadata and "memory_hash" in metadata:
+                memory_hash = metadata["memory_hash"]
+                logging.info(f"Using memory hash from metadata: {memory_hash[:8]}")
+            elif memory_hash:
+                logging.info(f"Using provided memory hash: {memory_hash[:8]}")
+            else:
+                logging.error("No memory hash provided")
+                return None
+            
+            # Store document
+            doc_path = store_document(
                 content=content,
-                metadata=metadata,
+                category="goal_decomposition",
+                metadata={
+                    "interaction_type": "goal_decomposition",
+                    "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    **(metadata or {})
+                },
                 memory_hash=memory_hash,
                 repo_path=repo_path
             )
             
+            if doc_path:
+                logging.info(f"Saved conversation to memory: {doc_path}")
+                return doc_path
+            else:
+                logging.error(f"Failed to save conversation to memory")
+                return None
+                
         except Exception as e:
             logging.error(f"Error saving conversation to memory: {str(e)}")
             return None
@@ -616,7 +642,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         # Get memory hash if available - we'll use this to ensure we save to the correct memory state
         memory_hash = context.state.memory_hash if hasattr(context.state, "memory_hash") else None
         if memory_hash:
-            logging.info(f"Using existing memory hash from context state: {memory_hash}")
+            logging.info(f"Using memory hash from context state: {memory_hash[:8]}")
         
         # Initialize messages
         messages = [
@@ -640,7 +666,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                     # Add each memory document as a separate message
                     for path, content, timestamp in memory_documents:
                         filename = os.path.basename(path)
-                        timestamp_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                        timestamp_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
                         
                         messages.append({
                             "role": "memory",
@@ -765,68 +791,6 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             else:
                 logging.debug("No tool calls in final message")
 
-            # Prepare and store the conversation in memory
-            try:
-                # Prepare the conversation for memory
-                conversation_data = {
-                    "system": self.system_prompt,
-                    "user": user_prompt,
-                    "assistant": content,
-                    "tool_usage": tool_usage
-                }
-                
-                # Save the conversation to memory
-                memory_result = await self._save_conversation_to_memory(
-                    messages,
-                    metadata={
-                        "timestamp": int(time.time()),
-                        "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
-                    },
-                    memory_hash=memory_hash,
-                    repo_path=memory_repo_path
-                )
-                
-                # Update context state with memory information if available
-                if memory_result and memory_result.get("success"):
-                    logging.info(f"Saved conversation to memory: {memory_result}")
-                    
-                    # Handle the case where document_path is a dictionary
-                    doc_path_info = memory_result.get("document_path", {})
-                    if isinstance(doc_path_info, dict):
-                        # Update memory hash from the document_path dictionary
-                        if "memory_hash" in doc_path_info:
-                            context.state.memory_hash = doc_path_info.get("memory_hash")
-                        
-                        # Extract filename from path to create a memory reference ID
-                        if "filename" in doc_path_info:
-                            # Use the filename as a clean memory reference
-                            context.state.memory_reference = doc_path_info.get("filename")
-                        elif "path" in doc_path_info:
-                            # Extract just the filename from the path as fallback
-                            from pathlib import Path
-                            path = doc_path_info.get("path")
-                            context.state.memory_reference = Path(path).name
-                            # Still store the full path in memory_document_path for backward compatibility
-                            context.state.memory_document_path = path
-                    # Handle the case where the fields are directly in memory_result
-                    else:
-                        # Update memory hash if available at top level
-                        if "memory_hash" in memory_result:
-                            context.state.memory_hash = memory_result.get("memory_hash")
-                        
-                        # Extract filename from path to create a memory reference ID
-                        if "path" in memory_result:
-                            from pathlib import Path
-                            path = memory_result.get("path")
-                            context.state.memory_reference = Path(path).name
-                            # Still store the full path for backward compatibility
-                            context.state.memory_document_path = path
-                        
-                        # Set memory timestamp
-                        context.state.memory_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            except Exception as e:
-                logging.error(f"Failed to save conversation to memory: {str(e)}")
-                
             return final_output
             
         except Exception as e:
@@ -1131,25 +1095,30 @@ def list_subgoal_files(logs_dir="logs"):
 
 async def load_input_file(input_file: str, context: TaskContext) -> None:
     """Load goal details from an input file."""
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-        
     try:
+        # Load and parse the input file
         with open(input_file, 'r') as f:
             data = json.load(f)
             
-        # Update context with data from input file
-        if "next_step" in data:
-            context.goal.description = data["next_step"]
-            logging.info(f"Using next_step from input file: {data['next_step']}")
+        # Extract goal description if available
+        if "goal" in data:
+            context.goal.description = data["goal"]
+            logging.info(f"Using goal from input file: {data['goal']}")
             
+        # Extract validation criteria if available
         if "validation_criteria" in data:
             context.goal.validation_criteria = data["validation_criteria"]
-            logging.info("Added validation criteria from input file")
+            logging.info(f"Found {len(data['validation_criteria'])} validation criteria in input file")
             
-        if "relevant_context" in data:
-            context.metadata["relevant_context"] = data["relevant_context"]
-            logging.info("Added relevant context from input file")
+        # Extract success threshold if available
+        if "success_threshold" in data:
+            context.goal.success_threshold = data["success_threshold"]
+            logging.info(f"Using success threshold from input file: {data['success_threshold']}")
+            
+        # Extract metadata if available
+        if "metadata" in data:
+            context.metadata.update(data["metadata"])
+            logging.info(f"Loaded metadata from input file: {data['metadata']}")
             
         # Add memory information from current_state if available
         if "current_state" in data:
@@ -1180,6 +1149,14 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
             
             if "memory_timestamp" in current_state:
                 context.state.memory_timestamp = current_state["memory_timestamp"]
+                
+            # Create memory state if we have both hash and path
+            if current_state.get("memory_hash") and current_state.get("memory_repository_path"):
+                context.memory_state = MemoryState(
+                    memory_hash=current_state["memory_hash"],
+                    repository_path=current_state["memory_repository_path"]
+                )
+                logging.info("Created memory state from current_state data")
             
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON in input file: {input_file}")
@@ -1233,28 +1210,12 @@ async def decompose_goal(
 ) -> Dict[str, Any]:
     """
     Asynchronous function to decompose a goal into subgoals.
-    
-    Args:
-        repo_path: Path to the target repository
-        goal: Description of the goal to achieve
-        input_file: Optional path to input file with goal context
-        parent_goal: Optional parent goal ID
-        goal_id: Optional goal ID
-        memory_repo: Optional path to memory repository
-        debug: Whether to show debug output
-        quiet: Whether to only show warnings and final result
-        bypass_validation: Whether to bypass repository validation (for testing)
-        logs_dir: Directory to store log files (default: "logs")
-        
-    Returns:
-        Dictionary containing the decomposition result
     """
     # Configure logging - always use logs_dir for actual logs
     configure_logging(debug, quiet, logs_dir)
     
     # Initialize state and context
     state = State(
-        git_hash=await get_current_hash(repo_path),
         repository_path=repo_path,
         description="Initial state before goal decomposition"
     )
@@ -1273,12 +1234,9 @@ async def decompose_goal(
         await load_input_file(input_file, context)
     else:
         # Only set memory_repository_path if memory_repo is provided and we don't have input file
-        # This ensures memory_repo is NEVER used when input_file is provided
         if memory_repo:
             logging.info(f"Setting memory repository path to: {memory_repo}")
             state.memory_repository_path = memory_repo
-            # We don't set memory_hash here because we don't want to initialize memory
-            # without explicit instructions (this would be a new goal with no memory yet)
     
     # Add metadata for parent goals and goal IDs
     if parent_goal:
@@ -1286,22 +1244,8 @@ async def decompose_goal(
     if goal_id:
         context.metadata["goal_id"] = goal_id
     
-    # Store the initial memory hash and git hash for sanity checking later
-    initial_memory_hash = context.state.memory_hash
+    # Store the initial git hash for sanity checking later
     initial_git_hash = context.state.git_hash
-    
-    # If we have a parent goal, ensure we inherit its memory hash
-    if parent_goal and not initial_memory_hash:
-        try:
-            parent_goal_file = Path(repo_path) / ".goal" / f"{parent_goal}.json"
-            if parent_goal_file.exists():
-                with open(parent_goal_file, 'r') as f:
-                    parent_content = json.load(f)
-                    if "current_state" in parent_content and "memory_hash" in parent_content["current_state"]:
-                        context.state.memory_hash = parent_content["current_state"]["memory_hash"]
-                        logging.info(f"Inherited memory hash {context.state.memory_hash} from parent goal {parent_goal}")
-        except Exception as e:
-            logging.warning(f"Failed to inherit memory hash from parent goal: {e}")
     
     # Validate repository state
     if not bypass_validation:
@@ -1323,9 +1267,6 @@ async def decompose_goal(
     # Get current git hash
     git_hash = await get_current_hash(repo_path)
     
-    # Use memory_hash from context state (which was either loaded from input_file or never set)
-    memory_hash = context.state.memory_hash
-    
     # Sanity check: Verify that the final git hash is a descendant of the initial git hash
     if initial_git_hash and git_hash and initial_git_hash != git_hash:
         is_descendant = await is_git_ancestor(
@@ -1335,23 +1276,8 @@ async def decompose_goal(
         )
         if not is_descendant:
             logging.warning(f"REPO ANCESTRY CHECK FAILED: Final git hash {git_hash} is not a descendant of initial git hash {initial_git_hash}")
-            # Don't fail the operation, but log the warning
         else:
             logging.info(f"Repo ancestry check passed: {git_hash} is a descendant of {initial_git_hash}")
-    
-    # Sanity check: Verify that the final memory hash is a descendant of the initial memory hash
-    if initial_memory_hash and memory_hash and initial_memory_hash != memory_hash:
-        if context.state.memory_repository_path:
-            is_descendant = await is_git_ancestor(
-                context.state.memory_repository_path, 
-                initial_memory_hash, 
-                memory_hash
-            )
-            if not is_descendant:
-                logging.warning(f"MEMORY ANCESTRY CHECK FAILED: Final memory hash {memory_hash} is not a descendant of initial memory hash {initial_memory_hash}")
-                # Don't fail the operation, but log the warning
-            else:
-                logging.info(f"Memory ancestry check passed: {memory_hash} is a descendant of {initial_memory_hash}")
     
     # Return the decomposition result without creating any files
     return {
@@ -1362,15 +1288,8 @@ async def decompose_goal(
         "requires_further_decomposition": subgoal_plan.requires_further_decomposition,
         "relevant_context": subgoal_plan.relevant_context,
         "git_hash": git_hash,
-        "memory_hash": memory_hash,
         "is_task": not subgoal_plan.requires_further_decomposition,
         "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-        # Include memory reference ID (preferred) and other memory information
-        "memory_reference": getattr(context.state, "memory_reference", None),
-        "memory_document_path": getattr(context.state, "memory_document_path", None),
-        "memory_timestamp": getattr(context.state, "memory_timestamp", None),
-        # Include initial memory hash for reference
-        "initial_memory_hash": initial_memory_hash,
         # Include initial git hash for reference
         "initial_git_hash": initial_git_hash
     }
