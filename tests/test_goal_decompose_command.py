@@ -12,9 +12,10 @@ from pathlib import Path
 import json
 import io
 from unittest.mock import patch, MagicMock, AsyncMock
+import subprocess
 
 from midpoint.agents.goal_decomposer import decompose_goal
-from tests.test_helpers import async_test
+from tests.test_helpers import async_test, setup_test_logging
 
 # Import the goal decompose command
 from midpoint.goal_cli import decompose_existing_goal, agent_decompose_goal, ensure_goal_dir, GOAL_DIR
@@ -30,7 +31,8 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         global GOAL_DIR
         
         # Create a temporary directory for test files
-        self.test_dir = Path(tempfile.mkdtemp()) / ".goal"
+        self.temp_dir = tempfile.mkdtemp()
+        self.test_dir = Path(self.temp_dir) / ".goal"
         self.test_dir.mkdir(parents=True, exist_ok=True)
         
         # Save original GOAL_DIR
@@ -40,6 +42,21 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         os.environ["MIDPOINT_GOAL_DIR"] = str(self.test_dir.parent)
         GOAL_DIR = str(self.test_dir)
         
+        # Set up logging
+        self.log_manager, self.log_manager_patcher = setup_test_logging(self.temp_dir)
+        self.log_manager_patcher.start()
+        
+        # Initialize git repository
+        subprocess.run(["git", "init"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create and commit initial README
+        readme_path = Path(self.temp_dir) / "README.md"
+        readme_path.write_text("# Test Repository")
+        subprocess.run(["git", "add", "README.md"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.temp_dir, check=True, capture_output=True)
+        
         # Create a test goal file
         self.test_goal_id = "G1"
         self.test_goal_file = self.test_dir / f"{self.test_goal_id}.json"
@@ -47,31 +64,39 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             "goal_id": self.test_goal_id,
             "description": "Test goal description",
             "parent_goal": "",
+            "branch_name": f"goal-{self.test_goal_id}",
             "timestamp": "20250101_000000"
         }
         
         with open(self.test_goal_file, 'w') as f:
             json.dump(self.test_goal_content, f)
         
+        # Add and commit the goal file
+        subprocess.run(["git", "add", str(self.test_goal_file)], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Add goal file"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create goal branch
+        subprocess.run(["git", "checkout", "-b", f"goal-{self.test_goal_id}"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Switch back to main branch before creating new files
+        subprocess.run(["git", "checkout", "main"], cwd=self.temp_dir, check=True, capture_output=True)
+        
         # Save current directory to restore it later
         self.orig_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
         
         self.addCleanup(self.cleanup)
     
     def cleanup(self):
         """Clean up after the test."""
-        # Clean up the test directory
-        if self.test_goal_file.exists():
-            self.test_goal_file.unlink()
-        if self.test_dir.exists():
-            # Remove all files in the directory
-            for file in self.test_dir.glob("*"):
-                file.unlink()
-            # Now remove the directory
-            shutil.rmtree(self.test_dir.parent)
+        # Stop the log manager patcher
+        self.log_manager_patcher.stop()
         
         # Restore current directory
         os.chdir(self.orig_cwd)
+        
+        # Clean up the test directory
+        shutil.rmtree(self.temp_dir)
         
         # Restore original GOAL_DIR
         global GOAL_DIR
@@ -118,27 +143,88 @@ class TestGoalDecomposeCommand(unittest.TestCase):
                 "timestamp": "20250324_000000"
             }, f)
         
+        # Add and commit the new goal files
+        subprocess.run(["git", "add", str(top_level_file), str(self.test_goal_file)], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Add test goal files"], cwd=self.temp_dir, check=True, capture_output=True)
+        
         # Mock git commands
-        with patch('subprocess.run') as mock_run, patch('midpoint.goal_cli.get_current_branch') as mock_get_branch:
+        with patch('subprocess.run') as mock_run, patch('midpoint.goal_cli.get_current_branch') as mock_get_branch, \
+             patch('midpoint.goal_cli.agent_decompose_goal', new_callable=AsyncMock) as mock_agent_decompose:
             # Mock current branch
             mock_get_branch.return_value = "main"
-            
-            # Mock git status to show no changes
-            mock_run.side_effect = [
-                # git status
-                type('Result', (), {'stdout': '', 'returncode': 0}),
-                # git checkout goal-G1
-                type('Result', (), {'stdout': 'Switched to branch goal-G1', 'returncode': 0}),
-                # git checkout original branch
-                type('Result', (), {'stdout': 'Switched to branch main', 'returncode': 0})
-            ]
-            
+
+            # Mock agent_decompose_goal
+            mock_agent_decompose.return_value = {
+                "success": True,
+                "next_step": "Implement user authentication",
+                "validation_criteria": [
+                    "User can register with email and password",
+                    "User can log in with correct credentials"
+                ],
+                "requires_further_decomposition": True,
+                "goal_file": ".goal/G1-S1.json"
+            }
+
+            # Create a MagicMock for subprocess.run that returns different results based on the command
+            def mock_run_side_effect(*args, **kwargs):
+                command = args[0] if args else kwargs.get('args', [])
+                mock_result = MagicMock()
+                mock_result.stdout = ""
+                mock_result.returncode = 0
+                mock_result.stderr = ""
+
+                # For git status command, return empty output (no changes)
+                if command[0:2] == ["git", "status"]:
+                    mock_result.stdout = ""
+                    mock_result.returncode = 0
+                    mock_result.stderr = ""
+                    if kwargs.get('check', False) and mock_result.returncode != 0:
+                        raise subprocess.CalledProcessError(mock_result.returncode, command, mock_result.stdout, mock_result.stderr)
+                    return mock_result
+
+                # For git checkout command
+                if command[0:2] == ["git", "checkout"]:
+                    mock_result.stdout = ""
+                    mock_result.returncode = 0
+                    mock_result.stderr = ""
+                    if kwargs.get('check', False) and mock_result.returncode != 0:
+                        raise subprocess.CalledProcessError(mock_result.returncode, command, mock_result.stdout, mock_result.stderr)
+                    return mock_result
+
+                # For git stash commands
+                if command[0:2] == ["git", "stash"]:
+                    mock_result.stdout = ""
+                    mock_result.returncode = 0
+                    mock_result.stderr = ""
+                    if kwargs.get('check', False) and mock_result.returncode != 0:
+                        raise subprocess.CalledProcessError(mock_result.returncode, command, mock_result.stdout, mock_result.stderr)
+                    return mock_result
+
+                # For git rev-parse commands
+                if command[0:2] == ["git", "rev-parse"]:
+                    mock_result.stdout = "main"
+                    mock_result.returncode = 0
+                    mock_result.stderr = ""
+                    if kwargs.get('check', False) and mock_result.returncode != 0:
+                        raise subprocess.CalledProcessError(mock_result.returncode, command, mock_result.stdout, mock_result.stderr)
+                    return mock_result
+
+                # For any other git command
+                mock_result.stdout = ""
+                mock_result.returncode = 0
+                mock_result.stderr = ""
+                if kwargs.get('check', False) and mock_result.returncode != 0:
+                    raise subprocess.CalledProcessError(mock_result.returncode, command, mock_result.stdout, mock_result.stderr)
+                return mock_result
+
+            mock_run.side_effect = mock_run_side_effect
+
             # Run the function
             result = await decompose_existing_goal(self.test_goal_id)
             
             # Assertions
             assert result is True
-            mock_decompose_goal.assert_called_once()
+            mock_agent_decompose.assert_called_once()
             
             # Check that git commands were called correctly
             assert mock_run.call_count == 3

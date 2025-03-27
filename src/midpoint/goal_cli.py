@@ -183,7 +183,20 @@ def list_goals():
 
 def create_new_goal(description):
     """Create a new top-level goal."""
-    # Check for uncommitted changes
+    # Store original branch
+    try:
+        original_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True
+        ).stdout.strip()
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to get original branch: {e}")
+        return None
+
+    # Check for uncommitted changes and stash them if needed
+    has_changes = False
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -191,45 +204,77 @@ def create_new_goal(description):
             capture_output=True,
             text=True
         )
-        if result.stdout.strip():
-            logging.error("Cannot create new goal: You have uncommitted changes. Please commit or stash them first.")
-            return None
+        has_changes = bool(result.stdout.strip())
+        if has_changes:
+            subprocess.run(
+                ["git", "stash", "push", "-m", "Stashing changes before creating new goal"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to check git status: {e}")
+        logging.error(f"Failed to check git status or stash changes: {e}")
         return None
 
-    # Generate goal ID
-    goal_id = generate_goal_id()
-    
-    # Create a branch name from the description
-    branch_name = f"goal-{goal_id}"
-    
-    # Create and checkout the branch
     try:
-        subprocess.run(
-            ["git", "checkout", "-b", branch_name],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to create branch: {e}")
-        return None
-    
-    # Create goal file with branch information
-    goal_data = {
-        "goal_id": goal_id,
-        "description": description,
-        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "branch_name": branch_name,
-        "is_task": False,
-        "requires_further_decomposition": True
-    }
-    
-    create_goal_file(goal_id, description, branch_name=branch_name)
-    print(f"Created new goal {goal_id}: {description}")
-    print(f"Created branch: {branch_name}")
-    return goal_id
+        # Generate goal ID
+        goal_id = generate_goal_id()
+        
+        # Create a branch name from the description
+        branch_name = f"goal-{goal_id}"
+        
+        # Create and checkout the branch
+        try:
+            subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to create branch: {e}")
+            return None
+        
+        # Create goal file with branch information
+        goal_data = {
+            "goal_id": goal_id,
+            "description": description,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "branch_name": branch_name,
+            "is_task": False,
+            "requires_further_decomposition": True
+        }
+        
+        create_goal_file(goal_id, description, branch_name=branch_name)
+        print(f"Created new goal {goal_id}: {description}")
+        print(f"Created branch: {branch_name}")
+
+        # Switch back to original branch
+        try:
+            subprocess.run(
+                ["git", "checkout", original_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to switch back to original branch: {e}")
+            # Don't return None here as the goal was created successfully
+        
+        return goal_id
+    finally:
+        # Always restore stashed changes if we stashed them
+        if has_changes:
+            try:
+                subprocess.run(
+                    ["git", "stash", "pop"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to restore stashed changes: {e}")
+                # Don't return None here as the goal was created successfully
 
 
 def create_new_subgoal(parent_id, description):
@@ -289,11 +334,23 @@ def create_new_task(parent_id, description):
     return task_id
 
 
-def get_current_hash():
-    """Get the current git hash."""
+def get_current_hash(repo_path: Optional[str] = None) -> str:
+    """Get the current git hash.
+    
+    Args:
+        repo_path: Optional path to the git repository. If not provided, uses current directory.
+        
+    Returns:
+        The current git hash as a string.
+    """
     try:
+        # If no repo_path provided, use current directory
+        if not repo_path:
+            repo_path = os.getcwd()
+            
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
             check=True,
             capture_output=True,
             text=True
@@ -1450,10 +1507,14 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         logging.error(f"Failed to read top-level goal file: {e}")
         return False
     
+    # Get the branch name, or generate one if not present
     top_level_branch = top_level_data.get('branch_name')
     if not top_level_branch:
-        logging.error(f"Failed to decompose goal: Top-level goal {top_level_id} has no associated branch")
-        return False
+        top_level_branch = f"goal-{top_level_id}"
+        # Update the top-level goal file with the branch name
+        top_level_data['branch_name'] = top_level_branch
+        with open(top_level_file, 'w') as f:
+            json.dump(top_level_data, f, indent=2)
     
     # Save current branch and check for changes
     current_branch = get_current_branch()
@@ -1512,7 +1573,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
         )
         
         if result["success"]:
-            print(f"\nGoal {goal_id} successfully decomposed into subgoals")
+            print(f"\nGoal {goal_id} successfully decomposed into a subgoal")
             print(f"\nNext step: {result['next_step']}")
             print("\nValidation criteria:")
             for criterion in result["validation_criteria"]:
@@ -1526,7 +1587,9 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             print(f"\nGoal file: {result['goal_file']}")
             return True
         else:
-            print(f"Failed to decompose goal: {result.get('error', 'Unknown error')}", file=sys.stderr)
+            error_msg = result.get('error', 'Unknown error')
+            logging.error(f"Failed to decompose goal: {error_msg}")
+            print(f"Failed to decompose goal: {error_msg}", file=sys.stderr)
             return False
             
     finally:
@@ -2162,6 +2225,10 @@ def main():
     new_parser = subparsers.add_parser("new", help="Create a new top-level goal")
     new_parser.add_argument("description", help="Description of the goal")
     
+    # goal delete <goal-id>
+    delete_parser = subparsers.add_parser("delete", help="Delete a goal, subgoal, or task")
+    delete_parser.add_argument("goal_id", help="ID of the goal to delete")
+    
     # goal sub <parent-id> <description>
     sub_parser = subparsers.add_parser("sub", help="Create a subgoal under the specified parent")
     sub_parser.add_argument("parent_id", help="Parent goal ID")
@@ -2283,6 +2350,8 @@ def main():
         # Handle synchronous commands directly
         if args.command == "new":
             create_new_goal(args.description)
+        elif args.command == "delete":
+            delete_goal(args.goal_id)
         elif args.command == "sub":
             create_new_subgoal(args.parent_id, args.description)
         elif args.command == "task":
@@ -2323,6 +2392,101 @@ def main():
             normalize_goal_relationships()
         else:
             parser.print_help()
+
+
+def delete_goal(goal_id):
+    """Delete a goal, subgoal, or task and its associated branch."""
+    # Verify goal exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal {goal_id} not found")
+        return False
+    
+    try:
+        # Load goal data
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read goal file: {e}")
+        return False
+    
+    # Find all child goals and tasks
+    child_goals = []
+    child_tasks = []
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                if data.get("parent_goal", "") == goal_id:
+                    if data.get("is_task", False):
+                        child_tasks.append(data["goal_id"])
+                    else:
+                        child_goals.append(data["goal_id"])
+        except:
+            continue
+    
+    # If there are children, ask for confirmation
+    if child_goals or child_tasks:
+        print(f"\nWarning: Goal {goal_id} has the following children:")
+        if child_goals:
+            print("\nSubgoals:")
+            for child_id in child_goals:
+                print(f"  • {child_id}")
+        if child_tasks:
+            print("\nTasks:")
+            for child_id in child_tasks:
+                print(f"  • {child_id}")
+        
+        response = input("\nDeleting this goal will also delete all its children. Are you sure? (y/N): ")
+        if response.lower() != 'y':
+            print("Deletion cancelled.")
+            return False
+    
+    # Get the branch name
+    branch_name = goal_data.get("branch_name")
+    
+    try:
+        # Delete the goal file
+        goal_file.unlink()
+        print(f"Deleted goal file: {goal_file}")
+        
+        # If there's an associated branch, delete it
+        if branch_name:
+            try:
+                # Switch to a different branch if we're on the one we're deleting
+                current_branch = get_current_branch()
+                if current_branch == branch_name:
+                    # Switch to main branch or the first available branch
+                    subprocess.run(
+                        ["git", "checkout", "main"],
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
+                
+                # Delete the branch
+                subprocess.run(
+                    ["git", "branch", "-D", branch_name],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"Deleted branch: {branch_name}")
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to delete branch {branch_name}: {e}")
+                # Continue with deletion even if branch deletion fails
+        
+        # Recursively delete all child goals and tasks
+        for child_id in child_goals + child_tasks:
+            delete_goal(child_id)
+        
+        print(f"Successfully deleted goal {goal_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to delete goal {goal_id}: {e}")
+        return False
 
 
 if __name__ == "__main__":

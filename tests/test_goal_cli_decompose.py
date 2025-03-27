@@ -13,46 +13,81 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 import tempfile
 import shutil
+import subprocess
 
 # Import goal_cli and the goal decomposer
 import midpoint.goal_cli as goal_cli
 from midpoint.agents.goal_decomposer import decompose_goal
-from tests.test_helpers import async_test
+from midpoint.utils.logging import LogManager
+from tests.test_helpers import async_test, setup_test_logging
 
 class TestGoalCliDecompose(unittest.TestCase):
     """Test the decompose_existing_goal function in goal_cli.py."""
     
     def setUp(self):
         """Set up temporary directory and files for testing."""
+        # Create a temporary directory for test files
         self.temp_dir = tempfile.mkdtemp()
-        self.goal_dir = Path(self.temp_dir) / ".goal"
-        self.goal_dir.mkdir()
+        self.test_dir = Path(self.temp_dir) / ".goal"
+        self.test_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create a test goal file
+        # Save original GOAL_DIR
+        self.original_goal_dir = goal_cli.GOAL_DIR
+        
+        # Set up the goal directory
+        os.environ["MIDPOINT_GOAL_DIR"] = str(self.test_dir.parent)
+        goal_cli.GOAL_DIR = str(self.test_dir)
+        
+        # Set up logging
+        self.log_manager, self.log_manager_patcher = setup_test_logging(self.temp_dir)
+        self.log_manager_patcher.start()
+        
+        # Initialize git repository
+        subprocess.run(["git", "init"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create and commit initial README
+        readme_path = Path(self.temp_dir) / "README.md"
+        readme_path.write_text("# Test Repository")
+        subprocess.run(["git", "add", "README.md"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create test goal file
         self.goal_id = "G1"
+        self.goal_file = self.test_dir / f"{self.goal_id}.json"
         self.goal_data = {
             "goal_id": self.goal_id,
-            "description": "Test goal",
-            "parent_goal": "",
+            "description": "Test goal description",
+            "branch_name": f"goal-{self.goal_id}",
             "timestamp": "20250101_000000"
         }
-        self.goal_file = self.goal_dir / f"{self.goal_id}.json"
-        with open(self.goal_file, "w") as f:
+        
+        with open(self.goal_file, 'w') as f:
             json.dump(self.goal_data, f)
         
-        # Save original directory
-        self.original_dir = os.getcwd()
-        # Change to the temporary directory
+        # Create goal branch
+        subprocess.run(["git", "checkout", "-b", f"goal-{self.goal_id}"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Save current directory
+        self.orig_cwd = os.getcwd()
         os.chdir(self.temp_dir)
+        
+        self.addCleanup(self.cleanup)
     
     def cleanup(self):
         """Clean up the test environment."""
-        os.chdir(self.original_dir)
+        # Stop the log manager patcher
+        self.log_manager_patcher.stop()
+        
+        # Restore current directory
+        os.chdir(self.orig_cwd)
+        
+        # Clean up the test directory
         shutil.rmtree(self.temp_dir)
-    
-    def tearDown(self):
-        """Clean up after the test."""
-        self.cleanup()
+        
+        # Restore original GOAL_DIR
+        goal_cli.GOAL_DIR = self.original_goal_dir
     
     @patch('midpoint.goal_cli.agent_decompose_goal')
     @async_test
@@ -90,7 +125,7 @@ class TestGoalCliDecompose(unittest.TestCase):
             mock_decompose_goal.assert_called_once()
             args, kwargs = mock_decompose_goal.call_args
             self.assertEqual(kwargs["repo_path"], os.getcwd())
-            self.assertEqual(kwargs["goal"], "Test goal")
+            self.assertEqual(kwargs["goal"], "Test goal description")
             self.assertEqual(kwargs["parent_goal"], self.goal_id)
             
             # Check the output

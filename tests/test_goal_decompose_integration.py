@@ -32,6 +32,17 @@ class TestGoalDecomposeIntegration(unittest.TestCase):
         self.goal_dir = Path(self.temp_dir) / ".goal"
         self.goal_dir.mkdir(exist_ok=True)
         
+        # Initialize git repository
+        subprocess.run(["git", "init"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create and commit initial README
+        readme_path = Path(self.temp_dir) / "README.md"
+        readme_path.write_text("# Test Repository")
+        subprocess.run(["git", "add", "README.md"], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.temp_dir, check=True, capture_output=True)
+        
         # Create a sample goal file
         self.goal_id = "G1"
         self.goal_file = self.goal_dir / f"{self.goal_id}.json"
@@ -39,11 +50,19 @@ class TestGoalDecomposeIntegration(unittest.TestCase):
             "goal_id": self.goal_id,
             "description": "Test goal for decomposition",
             "parent_goal": "",
+            "branch_name": f"goal-{self.goal_id}",
             "timestamp": "20250101_000000"
         }
         
         with open(self.goal_file, 'w') as f:
             json.dump(self.goal_content, f)
+        
+        # Add and commit the goal file
+        subprocess.run(["git", "add", str(self.goal_file)], cwd=self.temp_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Add goal file"], cwd=self.temp_dir, check=True, capture_output=True)
+        
+        # Create goal branch
+        subprocess.run(["git", "checkout", "-b", f"goal-{self.goal_id}"], cwd=self.temp_dir, check=True, capture_output=True)
         
         # Path to the repository root
         self.repo_root = Path(__file__).parent.parent
@@ -55,25 +74,32 @@ class TestGoalDecomposeIntegration(unittest.TestCase):
 import sys
 from pathlib import Path
 import os
+import asyncio
 
-# Add src to Python path
+# Add necessary directories to Python path
 sys.path.insert(0, 'SRC_DIR')
+sys.path.insert(0, '{}')
 
-# Import the goal_cli module
-from midpoint.goal_cli import decompose_existing_goal
+# Import the goal_cli module but patch the agent_decompose_goal import
+import midpoint.goal_cli
+from mock_agent import decompose_goal
+midpoint.goal_cli.agent_decompose_goal = decompose_goal
 
-def main():
+async def run_decompose():
     goal_id = sys.argv[1]
     debug = "--debug" in sys.argv
     quiet = "--quiet" in sys.argv
     bypass_validation = "--bypass-validation" in sys.argv
     
     # Run the decompose_existing_goal function
-    decompose_existing_goal(goal_id, debug, quiet, bypass_validation)
+    return await midpoint.goal_cli.decompose_existing_goal(goal_id, debug, quiet, bypass_validation)
+
+def main():
+    asyncio.run(run_decompose())
 
 if __name__ == "__main__":
     main()
-""".replace("SRC_DIR", str(self.repo_root / "src")))
+""".format(self.temp_dir).replace("SRC_DIR", str(self.repo_root / "src")))
     
     def tearDown(self):
         """Clean up after the test."""
@@ -174,7 +200,7 @@ if __name__ == "__main__":
             "- Code passes tests",
             "- Feature works as expected",
             "Requires further decomposition: Yes",
-            "Created file:"
+            "Goal file: G1-S1.json"
         ]
         
         # Check for expected messages

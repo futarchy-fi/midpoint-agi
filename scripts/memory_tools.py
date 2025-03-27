@@ -14,14 +14,26 @@ import argparse
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import Optional
 
 def get_repo_path():
     """Get the memory repository path from environment variables."""
     load_dotenv()
     return os.getenv("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
 
-def get_current_hash(repo_path):
-    """Get the current commit hash of the memory repository."""
+def get_current_hash(repo_path: Optional[str] = None) -> str:
+    """Get the current commit hash of the memory repository.
+    
+    Args:
+        repo_path: Optional path to the git repository. If not provided, uses current directory.
+        
+    Returns:
+        The current git hash as a string.
+    """
+    # If no repo_path provided, use current directory
+    if not repo_path:
+        repo_path = os.getcwd()
+        
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_path,

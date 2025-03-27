@@ -96,23 +96,26 @@ def test_create_new_goal(goal_dir, capsys):
     
     # Test with uncommitted changes
     with patch('subprocess.run') as mock_run:
-        mock_run.return_value.stdout = "M test.txt"  # Simulate uncommitted changes
-        with patch('logging.error') as mock_logging:
-            goal_id = create_new_goal(description)
-            assert goal_id is None
-            mock_logging.assert_called_once_with("Cannot create new goal: You have uncommitted changes. Please commit or stash them first.")
-    
-    # Test successful creation
-    with patch('subprocess.run') as mock_run:
-        # Mock git status to show no changes
-        mock_run.side_effect = [
-            # git status
-            type('Result', (), {'stdout': '', 'returncode': 0}),
-            # git rev-parse HEAD
-            type('Result', (), {'stdout': 'abcdef123456\n', 'returncode': 0}),
-            # git checkout -b
-            type('Result', (), {'stdout': 'Switched to a new branch', 'returncode': 0})
-        ]
+        # Mock git status to show changes
+        def mock_run_side_effect(*args, **kwargs):
+            cmd = args[0]
+            if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return type('Result', (), {'stdout': 'main\n', 'returncode': 0})
+            elif cmd == ["git", "status", "--porcelain"]:
+                return type('Result', (), {'stdout': 'M test.txt', 'returncode': 0})
+            elif cmd == ["git", "stash", "push", "-m", "Stashing changes before creating new goal"]:
+                return type('Result', (), {'stdout': '', 'returncode': 0})
+            elif cmd == ["git", "checkout", "-b", "goal-G1"]:
+                return type('Result', (), {'stdout': 'Switched to a new branch', 'returncode': 0})
+            elif cmd == ["git", "rev-parse", "HEAD"]:
+                return type('Result', (), {'stdout': 'abc123\n', 'returncode': 0})
+            elif cmd == ["git", "checkout", "main"]:
+                return type('Result', (), {'stdout': '', 'returncode': 0})
+            elif cmd == ["git", "stash", "pop"]:
+                return type('Result', (), {'stdout': '', 'returncode': 0})
+            return type('Result', (), {'stdout': '', 'returncode': 0})
+        
+        mock_run.side_effect = mock_run_side_effect
         
         with patch('midpoint.goal_cli.generate_goal_id', return_value="G1"):
             goal_id = create_new_goal(description)
@@ -133,6 +136,63 @@ def test_create_new_goal(goal_dir, capsys):
         assert data["branch_name"] == "goal-G1"
         assert data["is_task"] is False
         assert data["requires_further_decomposition"] is True
+        
+        # Verify git commands were called in the correct order
+        assert len(mock_run.call_args_list) == 7
+        assert mock_run.call_args_list[0][0][0] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+        assert mock_run.call_args_list[1][0][0] == ["git", "status", "--porcelain"]
+        assert mock_run.call_args_list[2][0][0] == ["git", "stash", "push", "-m", "Stashing changes before creating new goal"]
+        assert mock_run.call_args_list[3][0][0] == ["git", "checkout", "-b", "goal-G1"]
+        assert mock_run.call_args_list[4][0][0] == ["git", "rev-parse", "HEAD"]
+        assert mock_run.call_args_list[5][0][0] == ["git", "checkout", "main"]
+        assert mock_run.call_args_list[6][0][0] == ["git", "stash", "pop"]
+    
+    # Test successful creation without changes
+    with patch('subprocess.run') as mock_run:
+        # Mock git status to show no changes
+        def mock_run_side_effect(*args, **kwargs):
+            cmd = args[0]
+            if cmd == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return type('Result', (), {'stdout': 'main\n', 'returncode': 0})
+            elif cmd == ["git", "status", "--porcelain"]:
+                return type('Result', (), {'stdout': '', 'returncode': 0})
+            elif cmd == ["git", "checkout", "-b", "goal-G2"]:
+                return type('Result', (), {'stdout': 'Switched to a new branch', 'returncode': 0})
+            elif cmd == ["git", "rev-parse", "HEAD"]:
+                return type('Result', (), {'stdout': 'def456\n', 'returncode': 0})
+            elif cmd == ["git", "checkout", "main"]:
+                return type('Result', (), {'stdout': '', 'returncode': 0})
+            return type('Result', (), {'stdout': '', 'returncode': 0})
+        
+        mock_run.side_effect = mock_run_side_effect
+        
+        with patch('midpoint.goal_cli.generate_goal_id', return_value="G2"):
+            goal_id = create_new_goal(description)
+        
+        # Check output
+        captured = capsys.readouterr()
+        assert f"Created new goal {goal_id}" in captured.out
+        assert "Created branch: goal-G2" in captured.out
+        
+        # Check file exists
+        goal_file = goal_dir / f"{goal_id}.json"
+        assert goal_file.exists()
+        
+        # Check file contents
+        data = json.loads(goal_file.read_text())
+        assert data["goal_id"] == goal_id
+        assert data["description"] == description
+        assert data["branch_name"] == "goal-G2"
+        assert data["is_task"] is False
+        assert data["requires_further_decomposition"] is True
+        
+        # Verify git commands were called in the correct order
+        assert len(mock_run.call_args_list) == 5
+        assert mock_run.call_args_list[0][0][0] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+        assert mock_run.call_args_list[1][0][0] == ["git", "status", "--porcelain"]
+        assert mock_run.call_args_list[2][0][0] == ["git", "checkout", "-b", "goal-G2"]
+        assert mock_run.call_args_list[3][0][0] == ["git", "rev-parse", "HEAD"]
+        assert mock_run.call_args_list[4][0][0] == ["git", "checkout", "main"]
 
 
 def test_create_new_subgoal(goal_dir, capsys):

@@ -34,18 +34,21 @@ class GetCurrentHashTool(Tool):
             "properties": {
                 "repo_path": {
                     "type": "string",
-                    "description": "Path to the Git repository"
+                    "description": "Path to the Git repository (optional, defaults to current directory)"
                 }
-            },
-            "required": ["repo_path"]
+            }
         }
     
     @property
     def required_parameters(self) -> List[str]:
-        return ["repo_path"]
+        return []
     
-    async def execute(self, repo_path: str) -> str:
+    async def execute(self, repo_path: Optional[str] = None) -> str:
         """Get the current git hash."""
+        # If no repo_path provided, use current directory
+        if not repo_path:
+            repo_path = os.getcwd()
+            
         result = await asyncio.create_subprocess_exec(
             "git", "rev-parse", "HEAD",
             cwd=repo_path,
@@ -360,9 +363,16 @@ ToolRegistry.register_tool(create_branch_tool)
 ToolRegistry.register_tool(create_commit_tool)
 
 # Export tool functions
-async def get_current_hash(repo_path: str) -> str:
-    """Get the current git hash of the repository."""
-    return await get_current_hash_tool.execute(repo_path=repo_path)
+async def get_current_hash(repo_path: Optional[str] = None) -> str:
+    """Get the current git hash of the repository.
+    
+    Args:
+        repo_path: Optional path to the git repository. If not provided, uses current directory.
+        
+    Returns:
+        The current git hash as a string.
+    """
+    return await get_current_hash_tool.execute(repo_path=repo_path or os.getcwd())
 
 async def check_repo_state(repo_path: str) -> Dict[str, bool]:
     """Check the current state of the git repository."""

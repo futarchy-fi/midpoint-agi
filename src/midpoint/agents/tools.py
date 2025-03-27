@@ -140,8 +140,19 @@ async def create_commit(repo_path: str, message: str) -> str:
         
     return stdout.decode().strip()
 
-async def get_current_hash(repo_path: str) -> str:
-    """Get the current git hash."""
+async def get_current_hash(repo_path: Optional[str] = None) -> str:
+    """Get the current git hash.
+    
+    Args:
+        repo_path: Optional path to the git repository. If not provided, uses current directory.
+        
+    Returns:
+        The current git hash as a string.
+    """
+    # If no repo_path provided, use current directory
+    if not repo_path:
+        repo_path = os.getcwd()
+        
     result = await asyncio.create_subprocess_exec(
         "git", "rev-parse", "HEAD",
         cwd=repo_path,
