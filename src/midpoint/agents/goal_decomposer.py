@@ -358,27 +358,22 @@ class GoalDecomposer:
             memory_hash: Optional[str] = None,
             repo_path: Optional[str] = None
         ) -> Optional[str]:
-        """Save interaction to memory repository.
-        
-        Args:
-            interaction_type: Type of interaction (e.g., 'goal_decomposition')
-            content: Content to save
-            metadata: Optional metadata
-            memory_hash: Optional memory hash to use
-            repo_path: Optional repository path
-            
-        Returns:
-            Optional[str]: Path of saved document if successful, None otherwise
-        """
+        """Save interaction to memory repository."""
         try:
             # Get memory repository path
             if not repo_path:
                 repo_path = get_repo_path()
+                logging.info(f"Using default memory repository path: {repo_path}")
             
             # Require memory hash to be provided
             if not memory_hash:
                 logging.error("No memory hash provided")
+                logging.info("Current memory state:")
+                logging.info(f"  Repository path: {repo_path}")
+                logging.info(f"  Metadata: {metadata}")
                 return None
+            
+            logging.info(f"Attempting to save {interaction_type} with memory hash: {memory_hash[:8]}...")
             
             # Create timestamped filename
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -412,7 +407,7 @@ Timestamp: {timestamp}
             )
             
             if doc_path:
-                logging.info(f"Saved {interaction_type} to memory: {doc_path}")
+                logging.info(f"Successfully saved {interaction_type} to memory: {doc_path}")
                 return doc_path
             else:
                 logging.error(f"Failed to save {interaction_type} to memory")
@@ -420,6 +415,10 @@ Timestamp: {timestamp}
                 
         except Exception as e:
             logging.error(f"Error saving {interaction_type} to memory: {str(e)}")
+            logging.info("Memory operation details:")
+            logging.info(f"  Interaction type: {interaction_type}")
+            logging.info(f"  Memory hash: {memory_hash[:8] if memory_hash else 'None'}")
+            logging.info(f"  Repository path: {repo_path}")
             return None
 
     async def _save_conversation_to_memory(
@@ -621,27 +620,23 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             return ""
 
     async def determine_next_step(self, context: TaskContext, setup_logging=False, debug=False, quiet=False) -> SubgoalPlan:
-        """
-        Determine the next step toward achieving the goal.
-        
-        Args:
-            context: The current task context containing the goal and state
-            setup_logging: Whether to set up logging for this invocation (should be False when called from orchestrator)
-            debug: Whether to enable debug logging on console
-            quiet: Whether to minimize console output
-            
-        Returns:
-            A SubgoalPlan containing the next step and validation criteria
-            
-        Raises:
-            ValueError: If the goal or context is invalid
-            Exception: For other errors during execution
-        """
+        """Determine the next step toward achieving the goal."""
         # Set up logging if requested (only when called directly, not from orchestrator)
         if setup_logging:
             configure_logging(debug, quiet)
             
         logging.info("Determining next step for goal: %s", context.goal.description)
+        
+        # Log memory state information
+        if hasattr(context.state, "memory_hash"):
+            logging.info(f"Memory hash from context state: {context.state.memory_hash[:8] if context.state.memory_hash else 'None'}")
+        if hasattr(context.state, "memory_repository_path"):
+            logging.info(f"Memory repository path from context state: {context.state.memory_repository_path}")
+        if hasattr(context, "memory_state") and context.memory_state is not None:
+            logging.info(f"Memory state: hash={context.memory_state.memory_hash[:8] if context.memory_state.memory_hash else 'None'}, path={context.memory_state.repository_path}")
+        else:
+            logging.info("No memory state available in context")
+        
         # Validate inputs
         if not context.goal:
             raise ValueError("No goal provided in context")
@@ -1111,6 +1106,9 @@ def list_subgoal_files(logs_dir="logs"):
 async def load_input_file(input_file: str, context: TaskContext) -> None:
     """Load goal details from an input file."""
     try:
+        # Log the start of file loading
+        logging.info(f"Loading input file: {input_file}")
+        
         # Load and parse the input file
         with open(input_file, 'r') as f:
             data = json.load(f)
@@ -1138,32 +1136,47 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
         # Add memory information from current_state if available
         if "current_state" in data:
             current_state = data["current_state"]
+            logging.info("Found current_state in input file")
             
             # Update git_hash from current_state
             if "git_hash" in current_state:
                 context.state.git_hash = current_state["git_hash"]
-                logging.info(f"Using git_hash from input file: {current_state['git_hash']}")
+                logging.info(f"Using git_hash from input file: {current_state['git_hash'][:8]}")
+            else:
+                logging.warning("No git_hash found in current_state")
                 
             # Update memory_hash from current_state
             if "memory_hash" in current_state:
                 context.state.memory_hash = current_state["memory_hash"]
-                logging.info(f"Using memory_hash from input file: {current_state['memory_hash']}")
+                logging.info(f"Using memory_hash from input file: {current_state['memory_hash'][:8]}")
+            else:
+                logging.warning("No memory_hash found in current_state")
                 
             # Update memory_repository_path from current_state
             if "memory_repository_path" in current_state:
                 context.state.memory_repository_path = current_state["memory_repository_path"]
                 logging.info(f"Using memory_repository_path from input file: {current_state['memory_repository_path']}")
+            else:
+                logging.warning("No memory_repository_path found in current_state")
                 
             # Update other memory-related fields if available
             if "memory_reference" in current_state:
                 context.state.memory_reference = current_state["memory_reference"]
                 logging.info(f"Using memory_reference from input file: {current_state['memory_reference']}")
+            else:
+                logging.debug("No memory_reference found in current_state")
                 
             if "memory_document_path" in current_state:
                 context.state.memory_document_path = current_state["memory_document_path"]
+                logging.debug(f"Using memory_document_path from input file: {current_state['memory_document_path']}")
+            else:
+                logging.debug("No memory_document_path found in current_state")
             
             if "memory_timestamp" in current_state:
                 context.state.memory_timestamp = current_state["memory_timestamp"]
+                logging.debug(f"Using memory_timestamp from input file: {current_state['memory_timestamp']}")
+            else:
+                logging.debug("No memory_timestamp found in current_state")
                 
             # Create memory state if we have both hash and path
             if current_state.get("memory_hash") and current_state.get("memory_repository_path"):
@@ -1171,11 +1184,21 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
                     memory_hash=current_state["memory_hash"],
                     repository_path=current_state["memory_repository_path"]
                 )
-                logging.info("Created memory state from current_state data")
+                logging.info(f"Created memory state with hash {current_state['memory_hash'][:8]} and path {current_state['memory_repository_path']}")
+            else:
+                logging.warning("Could not create memory state - missing required fields")
+                if not current_state.get("memory_hash"):
+                    logging.warning("Missing memory_hash in current_state")
+                if not current_state.get("memory_repository_path"):
+                    logging.warning("Missing memory_repository_path in current_state")
+        else:
+            logging.warning("No current_state found in input file")
             
     except json.JSONDecodeError:
+        logging.error(f"Invalid JSON in input file: {input_file}")
         raise ValueError(f"Invalid JSON in input file: {input_file}")
     except Exception as e:
+        logging.error(f"Failed to load input file: {str(e)}")
         raise RuntimeError(f"Failed to load input file: {str(e)}")
 
 async def is_git_ancestor(repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
@@ -1232,7 +1255,9 @@ async def decompose_goal(
     # Initialize state and context
     state = State(
         repository_path=repo_path,
-        description="Initial state before goal decomposition"
+        description="Initial state before goal decomposition",
+        memory_hash=None,  # Will be set from parent goal if available
+        memory_repository_path=memory_repo
     )
     
     # Create context before loading input file

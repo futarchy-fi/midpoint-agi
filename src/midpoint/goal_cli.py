@@ -1572,6 +1572,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             goal=goal_data["description"],
             parent_goal=goal_id,
             goal_id=None,
+            memory_repo=goal_data["current_state"].get("memory_repository_path"),
             debug=debug,
             quiet=quiet,
             bypass_validation=bypass_validation
