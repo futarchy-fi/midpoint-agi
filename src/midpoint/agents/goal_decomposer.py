@@ -219,6 +219,10 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         def filter(self, record):
             # Only process INFO level logs for formatting
             if record.levelno == logging.INFO:
+                # Truncate long lines to 300 characters
+                if len(record.msg) > 300:
+                    record.msg = record.msg[:300] + "..."
+                
                 # List of patterns to hide from console output
                 hide_patterns = [
                     'Added relevant context from input file',
