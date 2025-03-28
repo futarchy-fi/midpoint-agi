@@ -1949,14 +1949,32 @@ def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_st
         if "completed_tasks" not in parent_data:
             parent_data["completed_tasks"] = []
         
+        # Load task data to get description and validation criteria
+        task_file = goal_path / f"{task_id}.json"
+        task_description = f"Task {task_id}"
+        task_validation_criteria = []
+        
+        if task_file.exists():
+            try:
+                with open(task_file, 'r') as f:
+                    task_data = json.load(f)
+                    task_description = task_data.get("description", task_description)
+                    task_validation_criteria = task_data.get("validation_criteria", [])
+            except Exception as e:
+                logging.warning(f"Failed to read task file: {e}")
+        
         # Add this task to the list of completed tasks if not already there
         task_already_recorded = False
         for completed in parent_data["completed_tasks"]:
             if completed.get("task_id") == task_id:
                 task_already_recorded = True
-                completed["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                completed["git_hash"] = execution_result.git_hash
-                completed["final_state"] = final_state
+                completed.update({
+                    "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    "git_hash": execution_result.git_hash,
+                    "final_state": final_state,
+                    "description": task_description,
+                    "validation_criteria": task_validation_criteria
+                })
                 break
                 
         if not task_already_recorded:
@@ -1964,7 +1982,9 @@ def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_st
                 "task_id": task_id,
                 "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                 "git_hash": execution_result.git_hash,
-                "final_state": final_state
+                "final_state": final_state,
+                "description": task_description,
+                "validation_criteria": task_validation_criteria
             })
         
         # Update the parent's current state to reflect the latest git hash
