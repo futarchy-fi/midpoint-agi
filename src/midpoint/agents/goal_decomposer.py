@@ -342,7 +342,7 @@ class GoalDecomposer:
         initialize_all_tools()
         self.tool_processor = ToolProcessor(self.client)
         
-        # Get tools from registry
+        # Get tools from registry (excluding memory tools)
         self.tools = ToolRegistry.get_tool_schemas()
         
         # Generate system prompt with dynamic tool descriptions
@@ -525,9 +525,8 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
 
-You have access to a memory repository where you can store and retrieve information across sessions.
-For intellectual tasks (such as studying, analyzing, or understanding code), you should consider
-updating the memory repository as a valid next step.
+You have access to a memory repository where your responses will be automatically stored.
+The memory system captures your planning process and decisions automatically.
 
 For incomplete goals:
 - Determine if the next step CAN be broken down into smaller, meaningful steps

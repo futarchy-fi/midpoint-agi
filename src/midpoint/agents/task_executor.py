@@ -232,13 +232,15 @@ class TaskExecutor:
         """
         Generate the system prompt with tool descriptions.
         """
-        # Get all available tools
+        # Get all available tools (excluding memory tools)
         available_tools = []
-        for tool_name, tool in ToolRegistry.get_instance().tools.items():
+        # Use ToolRegistry.get_tool_schemas() which now filters out memory tools
+        for schema in ToolRegistry.get_tool_schemas():
+            tool_info = schema.get("function", {})
             available_tools.append({
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters
+                "name": tool_info.get("name", ""),
+                "description": tool_info.get("description", ""),
+                "parameters": tool_info.get("parameters", {})
             })
         
         # Create a formatted list of tool descriptions

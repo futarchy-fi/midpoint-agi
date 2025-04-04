@@ -14,6 +14,7 @@ from .code_tools import search_code
 from .terminal_tools import run_terminal_cmd
 from .git_tools import get_current_hash, check_repo_state, get_current_branch, create_branch, create_commit
 from .web_tools import web_search, web_scrape
+# Importing memory tools for internal use, but not exposing to agents
 from .memory_tools import store_memory_document, retrieve_memory_documents
 
 # Export public API
@@ -44,9 +45,9 @@ __all__ = [
     'web_search',
     'web_scrape',
     
-    # Memory tools
-    'store_memory_document',
-    'retrieve_memory_documents',
+    # Memory tools are removed from __all__ as they should not be exposed to agents
+    # 'store_memory_document',
+    # 'retrieve_memory_documents',
     
     # Initialization function
     'initialize_all_tools'
@@ -60,6 +61,7 @@ def initialize_all_tools():
     from . import terminal_tools
     from . import git_tools
     from . import web_tools
+    # Still import memory_tools for internal use
     from . import memory_tools
     
     # Mark as initialized

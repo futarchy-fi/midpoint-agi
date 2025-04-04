@@ -40,10 +40,15 @@ class ToolRegistry:
     
     @classmethod
     def get_tool_schemas(cls) -> List[Dict[str, Any]]:
-        """Get the schemas for all registered tools."""
+        """Get the schemas for all registered tools, excluding memory tools."""
         schemas = []
         
         for tool in cls._tools.values():
+            # Skip memory-related tools as we handle memory automatically now
+            if tool.name.startswith("store_memory") or tool.name.startswith("retrieve_memory"):
+                logging.debug(f"Excluding memory tool from schemas: {tool.name}")
+                continue
+                
             schema = {
                 "type": "function",
                 "function": {
