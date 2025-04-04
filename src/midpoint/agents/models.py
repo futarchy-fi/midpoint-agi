@@ -6,6 +6,7 @@ This module defines the core data structures used throughout the system.
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
 @dataclass
 class State:
@@ -24,17 +25,16 @@ class Goal:
     validation_criteria: List[str] = field(default_factory=list)  # Make optional with default empty list
     success_threshold: float = 0.8
 
-@dataclass
-class SubgoalPlan:
+class SubgoalPlan(BaseModel):
     """Represents the next step toward achieving a goal."""
     reasoning: str  # Required for both complete and incomplete goals
     goal_completed: bool = False  # Whether the goal is complete
     completion_summary: Optional[str] = None  # Summary of what was accomplished (for completed goals)
-    next_step: Optional[str] = None  # Required for incomplete goals
-    validation_criteria: Optional[List[str]] = None  # Required for incomplete goals
-    requires_further_decomposition: bool = True  # Flag to indicate if more decomposition is needed
-    relevant_context: Dict[str, Any] = field(default_factory=dict)  # Context to pass to child goals
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    next_step: str
+    validation_criteria: List[str]
+    can_be_decomposed: bool = True  # Flag to indicate if more decomposition is needed
+    relevant_context: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     parent_goal: Optional[str] = None  # Reference to the parent goal file
     goal_id: Optional[str] = None  # Unique identifier for this goal
     timestamp: Optional[str] = None  # When this goal was created

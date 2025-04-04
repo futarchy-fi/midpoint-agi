@@ -1609,7 +1609,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 for criterion in result["validation_criteria"]:
                     print(f"- {criterion}")
                 
-                if result["requires_further_decomposition"]:
+                if result["can_be_decomposed"]:
                     print("\nRequires further decomposition: Yes")
                 else:
                     print("\nRequires further decomposition: No")
@@ -1623,7 +1623,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 "next_step": result.get("next_step"),
                 "validation_criteria": result.get("validation_criteria", []),
                 "reasoning": result["reasoning"],
-                "requires_further_decomposition": result.get("requires_further_decomposition", False),
+                "can_be_decomposed": result.get("can_be_decomposed", result.get("requires_further_decomposition", True)),
                 "relevant_context": result.get("relevant_context", {}),
                 "decomposed": True,  # Mark the goal as decomposed
                 "current_state": {
@@ -1652,7 +1652,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             # Only create subgoal if goal is not completed
             if not result.get("goal_completed", False):
                 # Create the subgoal file
-                subgoal_id = generate_goal_id(goal_id, is_task=not result["requires_further_decomposition"])
+                subgoal_id = generate_goal_id(goal_id, is_task=not result["can_be_decomposed"])
                 subgoal_file = goal_path / f"{subgoal_id}.json"
                 
                 # Create subgoal data with memory state from parent
@@ -1661,8 +1661,8 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                     "description": result["next_step"],
                     "parent_goal": goal_id,
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "is_task": not result["requires_further_decomposition"],
-                    "requires_further_decomposition": result["requires_further_decomposition"],
+                    "is_task": not result["can_be_decomposed"],
+                    "can_be_decomposed": result["can_be_decomposed"],
                     "validation_criteria": result["validation_criteria"],
                     "reasoning": result["reasoning"],
                     "relevant_context": result.get("relevant_context", {}),
@@ -1688,7 +1688,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 with open(subgoal_file, 'w') as f:
                     json.dump(subgoal_data, f, indent=2)
                 
-                print(f"Created {'task' if not result['requires_further_decomposition'] else 'subgoal'} file: {subgoal_file}")
+                print(f"Created {'task' if not result['can_be_decomposed'] else 'subgoal'} file: {subgoal_file}")
             
             return True
         else:
@@ -2478,16 +2478,22 @@ def revert_goal(goal_id):
             return False
     
     try:
-        # Set current_state to be a copy of initial_state
+        # Store essential fields that should be preserved
+        preserved_fields = {
+            "goal_id": goal_data["goal_id"],
+            "description": goal_data["description"],
+            "parent_goal": goal_data.get("parent_goal"),
+            "timestamp": goal_data["timestamp"],
+            "is_task": goal_data.get("is_task", False),
+            "can_be_decomposed": goal_data.get("can_be_decomposed", goal_data.get("requires_further_decomposition", True)),
+            "branch_name": goal_data.get("branch_name"),
+            "initial_state": goal_data["initial_state"]
+        }
+        
+        # Reset all state to initial values
+        goal_data.clear()  # Clear all fields
+        goal_data.update(preserved_fields)  # Restore preserved fields
         goal_data["current_state"] = goal_data["initial_state"].copy()
-        
-        # If this is a task and it was marked as complete, undo that
-        if goal_data.get("is_task", False):
-            goal_data.pop("complete", None)  # Remove completion status
-            goal_data.pop("completion_time", None)  # Remove completion time
-        
-        # Reset the decomposed flag to false
-        goal_data["decomposed"] = False
         
         # Update the goal file
         with open(goal_file, 'w') as f:
