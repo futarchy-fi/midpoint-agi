@@ -146,32 +146,37 @@ class TaskExecutor:
 
     async def _save_interaction_to_memory(self, context: TaskContext):
         """
-        Save the conversation to memory, excluding memory messages and system prompts.
+        Save the conversation to memory, following the GoalDecomposer's pattern.
         """
         if not context.state.memory_repository_path or not context.state.memory_hash:
             logger.info("No memory repo or hash available, skipping _save_interaction_to_memory")
             return
 
         try:
+            # Get repository path and memory hash
+            memory_repo_path = context.state.memory_repository_path
+            memory_hash = context.state.memory_hash
+            
+            # Create timestamped filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
             # Format conversation content
-            content = "## Task Execution Conversation\n\n"
+            content = f"# Task Execution Conversation\n\nTimestamp: {timestamp}\n\n"
             
             # Add each relevant entry from the conversation buffer
             for entry in self.conversation_buffer:
                 entry_type = entry.get("type", "unknown")
                 
-                # Skip tool usage entries as they're already reflected in the conversation
-                if entry_type == "tool_usage":
-                    continue
-                    
-                content += f"### {entry_type.title()}\n\n"
-                
-                if "user_prompt" in entry:
-                    content += f"User:\n{entry['user_prompt']}\n\n"
-                if "partial_response" in entry:
-                    content += f"Assistant:\n{entry['partial_response']}\n\n"
-                if "final_content" in entry:
-                    content += f"Final Response:\n{entry['final_content']}\n\n"
+                # Format based on entry type
+                if entry_type == "user_message":
+                    content += f"## User Message\n\n{entry.get('user_prompt', '')}\n\n"
+                elif entry_type == "assistant_response":
+                    content += f"## Assistant Response\n\n{entry.get('final_content', '')}\n\n"
+                elif entry_type == "tool_usage":
+                    tool_name = entry.get('tool_name', 'unknown_tool')
+                    tool_args = entry.get('tool_args', {})
+                    content += f"## Tool Usage: {tool_name}\n\n"
+                    content += f"Arguments: {json.dumps(tool_args, indent=2)}\n\n"
             
             # Add metadata
             content += "## Metadata\n\n"
@@ -180,7 +185,7 @@ class TaskExecutor:
             content += f"- Repository: {context.state.repository_path}\n"
             content += f"- Branch: {context.state.branch_name}\n"
             content += f"- Git Hash: {context.state.git_hash}\n"
-            content += f"- Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            content += f"- Execution Timestamp: {timestamp}\n"
             
             # Get task name from context
             task_name = context.goal.description
@@ -193,45 +198,54 @@ class TaskExecutor:
                 category = f"task_execution_{safe_task_name}"
             
             # Store in memory
-            await store_memory_document(
+            result = await store_memory_document(
                 content=content,
                 category=category,
                 metadata={
+                    "interaction_type": "task_execution",
                     "task_id": context.metadata.get("task_id"),
                     "parent_goal": context.metadata.get("parent_goal"),
                     "repository": context.state.repository_path,
                     "branch": context.state.branch_name,
                     "git_hash": context.state.git_hash,
-                    "timestamp": datetime.datetime.now().isoformat(),
+                    "timestamp": timestamp,
                     "task_name": task_name,
                     "commit_message": f"Add task execution for: {task_name}" if task_name else "Add task execution"
                 },
-                memory_repo_path=context.state.memory_repository_path,
-                memory_hash=context.state.memory_hash
+                memory_repo_path=memory_repo_path,
+                memory_hash=memory_hash
             )
-            logger.info("Successfully saved task execution conversation to memory", extra={'memory': True})
+            
+            if result.get("success", False):
+                logger.info(f"Successfully saved task execution conversation to memory: {result.get('document_path', 'unknown')}", extra={'memory': True})
+            else:
+                logger.error(f"Failed to save conversation to memory: {result.get('error', 'Unknown error')}")
             
         except Exception as e:
             logger.error(f"Failed to store conversation to memory: {str(e)}")
+            logger.info("Memory operation details:")
+            logger.info(f"  Repository path: {context.state.memory_repository_path}")
+            logger.info(f"  Memory hash: {context.state.memory_hash[:8] if context.state.memory_hash else 'None'}")
+            logger.info(f"  Task: {context.goal.description}")
 
     def _generate_system_prompt(self) -> str:
         """
-        Generate a system prompt that includes dynamically generated tool descriptions.
-        
-        Returns:
-            The system prompt with tool descriptions.
+        Generate the system prompt with tool descriptions.
         """
-        # Generate list of available tools and their descriptions
-        tool_descriptions = []
-        for tool_schema in self.tool_registry.get_tool_schemas():
-            if tool_schema['type'] == 'function' and 'function' in tool_schema:
-                function = tool_schema['function']
-                name = function.get('name', '')
-                description = function.get('description', '')
-                tool_descriptions.append(f"- {name}: {description}")
+        # Get all available tools
+        available_tools = []
+        for tool_name, tool in ToolRegistry.get_instance().tools.items():
+            available_tools.append({
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters
+            })
         
-        # Join the tool descriptions with newlines
-        tool_descriptions_text = "\n".join(tool_descriptions)
+        # Create a formatted list of tool descriptions
+        tool_descriptions_text = "\n".join([
+            f"- {tool['name']}: {tool['description']}"
+            for tool in available_tools
+        ])
         
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are a task execution agent responsible for implementing changes.
@@ -240,36 +254,32 @@ Your role is to:
 2. Track progress and report status
 3. Handle errors gracefully
 4. Maintain clean git state
-5. Store important findings and observations in the memory repository
 
 You have the following tools available:
 {tool_descriptions_text}
 
 For each task:
 1. Analyze the current repository state
-2. Determine what changes are needed (code changes, memory storage, or both)
+2. Determine what changes are needed (code changes)
 3. Use the available tools to implement those changes
 4. Validate the changes
 5. Create appropriate commits if code was changed
-6. Store relevant information in the memory repository
 
 When you've completed the task or determined it cannot be completed, provide a final response with:
 1. A summary of what you did
 2. Whether the task was completed successfully
 3. Any validation steps that can be taken to verify the changes
 4. The git hash of the final commit, if you made code changes
-5. References to any memory documents you created
 
 IMPORTANT: Your final response MUST be in valid JSON format with these fields:
 {{
   "summary": "A clear summary of what you did",
   "success": true/false,
   "validation_steps": ["List of validation steps"],
-  "git_hash": "Optional git hash if code was changed",
-  "memory_references": ["Optional list of memory document references"]
+  "git_hash": "Optional git hash if code was changed"
 }}
 
-For exploratory or study tasks, use the memory repository to store your findings rather than making code changes."""
+For exploratory or study tasks, focus on analyzing the codebase and documenting your findings."""
         
         return system_prompt
 
@@ -401,6 +411,9 @@ Memory Hash: {memory_hash}"""
         if memory_hash:
             logger.info(f"Using memory hash from context state: {memory_hash[:8]}")
         
+        # Reset conversation buffer for this new execution
+        self.conversation_buffer = []
+        
         # Add memory context as separate messages if available
         if memory_hash and memory_repo_path:
             try:
@@ -433,6 +446,13 @@ Memory Hash: {memory_hash}"""
         # Add the user prompt as the final message
         messages.append({"role": "user", "content": user_prompt})
         
+        # Record user prompt in conversation buffer
+        self.conversation_buffer.append({
+            "type": "user_message",
+            "user_prompt": user_prompt,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
         # Track tool usage for metadata
         tool_usage = []
         
@@ -449,16 +469,31 @@ Memory Hash: {memory_hash}"""
             if tool_calls:
                 for tool_call in tool_calls:
                     tool_usage.append(tool_call)
+                    
+                    # Record tool usage in conversation buffer
+                    self.conversation_buffer.append({
+                        "type": "tool_usage",
+                        "tool_name": tool_call.get("name", "unknown_tool"),
+                        "tool_args": tool_call.get("arguments", {}),
+                        "timestamp": datetime.datetime.now().isoformat()
+                    })
+            
+            # Record assistant response in conversation buffer
+            if isinstance(message, list):
+                # If message is a list, get the last message's content
+                content = message[-1].get('content', '')
+            else:
+                # If message is a dict or object, get its content
+                content = message.get('content') if isinstance(message, dict) else message.content
+                
+            self.conversation_buffer.append({
+                "type": "assistant_response",
+                "final_content": content,
+                "timestamp": datetime.datetime.now().isoformat()
+            })
             
             # Parse the model's response
             try:
-                if isinstance(message, list):
-                    # If message is a list, get the last message's content
-                    content = message[-1].get('content', '')
-                else:
-                    # If message is a dict or object, get its content
-                    content = message.get('content') if isinstance(message, dict) else message.content
-                
                 # Try to parse the content as JSON
                 try:
                     output_data = json.loads(content)
@@ -484,11 +519,10 @@ Memory Hash: {memory_hash}"""
             
             # Check if the output has the required fields
             if all(key in output_data for key in ["summary", "success", "validation_steps"]):
-                # Extract git hash and memory references if available
+                # Extract git hash if available
                 git_hash = output_data.get("git_hash")
-                memory_references = output_data.get("memory_references", [])
                 
-                # Save the conversation to memory
+                # Save the conversation to memory - do this regardless of outcome
                 await self._save_interaction_to_memory(context)
                 
                 # Log successful outcome
@@ -507,11 +541,22 @@ Memory Hash: {memory_hash}"""
                     "validation_steps": ["Failed to get complete response from LLM"],
                     "error": "Missing required fields in LLM response"
                 }
+                
+                # Always save the conversation, even on failure
+                await self._save_interaction_to_memory(context)
+                
                 return json.dumps(default_response)
             
         except Exception as e:
-            # Log the error to memory
-            await self._save_interaction_to_memory(context)
+            # Log the error
+            logger.error(f"Error during task execution: {str(e)}")
+            
+            # Always attempt to save the conversation, even on error
+            try:
+                await self._save_interaction_to_memory(context)
+            except Exception as save_error:
+                logger.error(f"Failed to save conversation on error: {str(save_error)}")
+                
             # Create a default response with error information
             error_response = {
                 "summary": f"Error during task execution: {str(e)}",
