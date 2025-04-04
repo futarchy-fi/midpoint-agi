@@ -7,16 +7,18 @@ All validation decisions should be made by the LLM at runtime.
 """
 
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import re
 import os
 import random
 import json
+import logging
+from pathlib import Path
+import datetime
 
 from .models import Goal, ExecutionResult, ValidationResult
 from .tools import (
     get_current_hash,
-    validate_repository_state,
     list_directory,
     read_file,
     search_code,
@@ -25,8 +27,15 @@ from .tools import (
     web_search,
     web_scrape
 )
+# Import validate_repository_state from goal_decomposer
+from .goal_decomposer import validate_repository_state
+from .tools.processor import ToolProcessor
+from .tools.registry import ToolRegistry
 from .config import get_openai_api_key
 from openai import AsyncOpenAI
+
+# Set up logging
+logger = logging.getLogger('GoalValidator')
 
 class GoalValidator:
     """
@@ -37,9 +46,15 @@ class GoalValidator:
     - Not contain any hardcoded validation rules
     - Delegate all validation decisions to the LLM
     - Use the provided tools to gather evidence for validation
+
+    As outlined in the VISION.md document, this validator:
+    1. Evaluates whether a subgoal has been successfully achieved
+    2. Provides a success score from 0.0 to 1.0
+    3. Determines whether the result is acceptable
+    4. Identifies specific areas for improvement
     """
     
-    def __init__(self):
+    def __init__(self, model: str = "gpt-4o-mini"):
         """Initialize the GoalValidator agent."""
         # Initialize OpenAI client with API key from config
         api_key = get_openai_api_key()
@@ -51,6 +66,12 @@ class GoalValidator:
         # Initialize OpenAI client
         self.client = AsyncOpenAI(api_key=api_key)
         
+        # Store the model name
+        self.model = model
+        
+        # Initialize tool processor
+        self.tool_processor = ToolProcessor(self.client)
+        
         # System prompt for the LLM that will make all validation decisions
         self.system_prompt = """You are a goal validation agent responsible for evaluating execution results.
 Your role is to:
@@ -59,13 +80,8 @@ Your role is to:
 3. Provide detailed reasoning for validation decisions
 4. Calculate a validation score
 
-Available tools:
-- list_directory: List contents of a directory
-- read_file: Read contents of a file
-- search_code: Search for code patterns
-- run_terminal_cmd: Run a terminal command
-- web_search: Search the web using DuckDuckGo's API
-- web_scrape: Scrape content from a webpage
+IMPORTANT: You must be thorough and objective in your validation. Your job is to ensure that each validation criterion 
+has been properly satisfied. Be specific in your reasoning and cite concrete evidence rather than making general statements.
 
 For each validation criterion:
 1. Use the available tools to gather evidence
@@ -87,114 +103,8 @@ Your response must be in JSON format with these fields:
     "overall_reasoning": "string"
 }"""
 
-        # Define tool schema for the OpenAI API
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_directory",
-                    "description": "List the contents of a directory in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "directory": {
-                                "type": "string",
-                                "description": "Directory to list within the repository",
-                                "default": "."
-                            }
-                        },
-                        "required": ["repo_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read the contents of a file in the repository",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the file within the repository"
-                            },
-                            "start_line": {
-                                "type": "integer",
-                                "description": "First line to read (0-indexed)",
-                                "default": 0
-                            },
-                            "max_lines": {
-                                "type": "integer",
-                                "description": "Maximum number of lines to read",
-                                "default": 100
-                            }
-                        },
-                        "required": ["repo_path", "file_path"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_code",
-                    "description": "Search the codebase for patterns",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "repo_path": {
-                                "type": "string",
-                                "description": "Path to the git repository"
-                            },
-                            "pattern": {
-                                "type": "string",
-                                "description": "Regular expression pattern to search for"
-                            },
-                            "file_pattern": {
-                                "type": "string",
-                                "description": "Pattern for files to include (e.g., '*.py')",
-                                "default": "*"
-                            },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of results to return",
-                                "default": 20
-                            }
-                        },
-                        "required": ["repo_path", "pattern"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_terminal_cmd",
-                    "description": "Run a terminal command",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The command to run"
-                            },
-                            "cwd": {
-                                "type": "string",
-                                "description": "Working directory for the command"
-                            }
-                        },
-                        "required": ["command", "cwd"]
-                    }
-                }
-            }
-        ]
+        # Get tools from registry
+        self.tools = ToolRegistry.get_tool_schemas()
 
     async def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
         """
@@ -253,121 +163,107 @@ Your response must be in JSON format with these fields:
                 )
         
         try:
-            # Create the user prompt for the LLM
-            user_prompt = f"""Goal: {goal.description}
-
-Validation Criteria:
-{chr(10).join(f"- {criterion}" for criterion in goal.validation_criteria)}
-
-Repository Path: {execution_result.repository_path}
+            # Get repository information
+            try:
+                repository_files = await list_directory(execution_result.repository_path, ".")
+                if isinstance(repository_files, dict) and "files" in repository_files:
+                    repository_files = repository_files["files"]
+                else:
+                    repository_files = []
+            except Exception:
+                repository_files = []
+            
+            # Prepare the context for the LLM
+            context = f"""
+Repository: {execution_result.repository_path}
 Branch: {execution_result.branch_name}
 Git Hash: {execution_result.git_hash}
 
-Please validate the execution result against each criterion.
-Use the available tools to gather evidence and make validation decisions."""
+Goal: {goal.description}
 
-            # Initialize messages
+Validation Criteria:
+{chr(10).join([f"{i+1}. {criterion}" for i, criterion in enumerate(goal.validation_criteria)])}
+
+Success Threshold: {goal.success_threshold}
+"""
+            
+            # Create messages for the LLM
             messages = [
                 {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": context}
             ]
             
-            # Chat completion with tool use
+            # Get validation from LLM using tool processor
+            logger.info(f"Validating goal: {goal.description}")
+            logger.info(f"Number of criteria: {len(goal.validation_criteria)}")
+            
+            # Call LLM with tools
+            response, tool_calls = await self.tool_processor.run_llm_with_tools(
+                messages=messages,
+                model=self.model,
+                validate_json_format=True
+            )
+            
+            # Extract the response content
+            if isinstance(response, list):
+                # If we got a list of messages, get the last one's content
+                content = response[-1]["content"] if response else "{}"
+            else:
+                # If we got a single message object
+                content = response.get("content", "{}") if isinstance(response, dict) else response.content
+            
+            # Parse the validation result
             try:
-                final_output = None
+                validation_data = json.loads(content)
+                criteria_results = validation_data.get("criteria_results", [])
+                overall_score = validation_data.get("overall_score", 0.0)
+                overall_reasoning = validation_data.get("overall_reasoning", "No reasoning provided")
                 
-                # Loop until we get a final output
-                while final_output is None:
-                    # Call OpenAI API
-                    response = await self.client.chat.completions.create(
-                        model="gpt-4",
-                        messages=messages,
-                        tools=self.tools,
-                        tool_choice="auto",
-                        temperature=0.1,
-                        max_tokens=4000
-                    )
-                    
-                    # Get the model's message
-                    message = response.choices[0].message
-                    
-                    # Add the message to our conversation
-                    messages.append({"role": "assistant", "content": message.content, "tool_calls": message.tool_calls})
-                    
-                    # If the model wants to use tools
-                    if message.tool_calls:
-                        # Handle each tool call
-                        for tool_call in message.tool_calls:
-                            # Get the function call details
-                            func_name = tool_call.function.name
-                            func_args = json.loads(tool_call.function.arguments)
-                            
-                            # Execute the appropriate tool
-                            if func_name == "list_directory":
-                                result = await list_directory(func_args["repo_path"], func_args.get("directory", "."))
-                            elif func_name == "read_file":
-                                result = await read_file(
-                                    func_args["repo_path"],
-                                    func_args["file_path"],
-                                    func_args.get("start_line", 0),
-                                    func_args.get("max_lines", 100)
-                                )
-                            elif func_name == "search_code":
-                                result = await search_code(
-                                    func_args["repo_path"],
-                                    func_args["pattern"],
-                                    func_args.get("file_pattern", "*"),
-                                    func_args.get("max_results", 20)
-                                )
-                            elif func_name == "run_terminal_cmd":
-                                result = await run_terminal_cmd(
-                                    command=func_args["command"],
-                                    cwd=func_args["cwd"]
-                                )
-                            
-                            # Add the result to messages
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": func_name,
-                                "content": str(result)
-                            })
-                    else:
-                        # Try to parse the final output
-                        try:
-                            final_output = json.loads(message.content)
-                            
-                            # Validate the output format
-                            if not all(key in final_output for key in ["criteria_results", "overall_score", "overall_reasoning"]):
-                                final_output = None
-                                messages.append({
-                                    "role": "user",
-                                    "content": "Please provide your response in the correct JSON format with all required fields."
-                                })
-                        except json.JSONDecodeError:
-                            messages.append({
-                                "role": "user",
-                                "content": "Please provide your response in valid JSON format."
-                            })
+                # Calculate success based on threshold
+                success = overall_score >= goal.success_threshold
                 
-                # Create the validation result
+                # Create ValidationResult
                 return ValidationResult(
-                    success=final_output["overall_score"] >= goal.success_threshold,
-                    score=final_output["overall_score"],
-                    reasoning=final_output["overall_reasoning"],
-                    criteria_results=final_output["criteria_results"],
+                    success=success,
+                    score=overall_score,
+                    reasoning=overall_reasoning,
+                    criteria_results=criteria_results,
                     git_hash=execution_result.git_hash,
                     branch_name=execution_result.branch_name
                 )
-            except Exception as e:
+            except json.JSONDecodeError:
+                # If we can't parse the response, create a fallback result
+                logger.error(f"Failed to parse LLM response as JSON: {content[:100]}...")
+                
+                # Generate fallback criteria results
+                criteria_results = []
+                for criterion in goal.validation_criteria:
+                    criteria_results.append({
+                        "criterion": criterion,
+                        "passed": False,
+                        "reasoning": "Failed to parse LLM response",
+                        "evidence": ["Invalid response format"]
+                    })
+                
                 return ValidationResult(
                     success=False,
                     score=0.0,
-                    reasoning=f"Validation failed due to error: {str(e)}",
-                    criteria_results=[],
+                    reasoning="Failed to parse validation response from LLM",
+                    criteria_results=criteria_results,
                     git_hash=execution_result.git_hash,
                     branch_name=execution_result.branch_name
                 )
+            
+        except Exception as e:
+            logger.error(f"Error during goal validation: {str(e)}")
+            return ValidationResult(
+                success=False,
+                score=0.0,
+                reasoning=f"Validation failed due to error: {str(e)}",
+                criteria_results=[],
+                git_hash=execution_result.git_hash,
+                branch_name=execution_result.branch_name
+            )
         finally:
             # Always switch back to main branch
             try:
@@ -403,4 +299,65 @@ Use the available tools to gather evidence and make validation decisions."""
                     reasoning.append(f"- {result['criterion']}")
                     reasoning.append(f"  Reason: {result['reasoning']}")
         
-        return "\n".join(reasoning) 
+        return "\n".join(reasoning)
+
+    async def validate_goal(self, goal_id: str, repository_path: str = None, auto: bool = True) -> ValidationResult:
+        """
+        Validate a goal by ID.
+        
+        This is a convenience method that:
+        1. Loads the goal data from the goal file
+        2. Creates a Goal object with the validation criteria
+        3. Creates an ExecutionResult for the current state
+        4. Calls validate_execution
+        
+        Args:
+            goal_id: The ID of the goal to validate
+            repository_path: Optional repository path (defaults to current directory)
+            auto: Whether this is an automated validation
+            
+        Returns:
+            ValidationResult containing the validation outcome
+        """
+        # Use current directory if no repository path provided
+        if not repository_path:
+            repository_path = os.getcwd()
+            
+        # Load goal file
+        from midpoint.goal_cli import ensure_goal_dir
+        goal_path = ensure_goal_dir()
+        goal_file = goal_path / f"{goal_id}.json"
+        
+        if not goal_file.exists():
+            raise ValueError(f"Goal not found: {goal_id}")
+            
+        # Load goal data
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+            
+        # Get validation criteria
+        criteria = goal_data.get("validation_criteria", [])
+        if not criteria:
+            raise ValueError(f"No validation criteria found for goal {goal_id}")
+            
+        # Create Goal object
+        goal = Goal(
+            description=goal_data.get("description", ""),
+            validation_criteria=criteria,
+            success_threshold=goal_data.get("success_threshold", 0.8)
+        )
+        
+        # Get current git state
+        git_hash = await get_current_hash(repository_path)
+        branch_name = await get_current_branch(repository_path)
+        
+        # Create ExecutionResult
+        execution_result = ExecutionResult(
+            success=True,
+            branch_name=branch_name,
+            git_hash=git_hash,
+            repository_path=repository_path
+        )
+        
+        # Validate execution
+        return await self.validate_execution(goal, execution_result) 

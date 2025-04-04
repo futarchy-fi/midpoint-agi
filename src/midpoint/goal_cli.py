@@ -19,6 +19,9 @@ from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
 from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
 from .agents.tools.git_tools import get_current_hash, get_current_branch
 
+# Import validator for automated validation
+from .agents.goal_validator import GoalValidator
+
 # Configure basic logging
 logging.basicConfig(
     level=logging.INFO,
@@ -2117,8 +2120,6 @@ async def async_main(args):
         return normalize_goal_relationships()
     elif args.command == "revert":
         return revert_goal(args.goal_id)
-    elif args.command == "validate":
-        return asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet, args.auto))
     elif args.command == "update-parent":
         return update_parent_from_child(args.child_id)
     elif args.command == "validate-history":
@@ -2251,6 +2252,7 @@ def main():
     validate_parser.add_argument("--debug", action="store_true", help="Show debug output")
     validate_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     validate_parser.add_argument("--auto", action="store_true", help="Perform automated validation using LLM")
+    validate_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use for validation (with --auto)")
     
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
@@ -2266,6 +2268,7 @@ def main():
     elif args.command == "memory":
         asyncio.run(show_memory_history(args.goal_id, args.debug, args.quiet))
     elif args.command == "validate":
+        # Use the GoalValidator directly
         asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet, args.auto))
     else:
         # Handle synchronous commands directly
@@ -2315,8 +2318,6 @@ def main():
             revert_goal(args.goal_id)
         elif args.command == "update-parent":
             update_parent_from_child(args.child_id)
-        elif args.command == "validate":
-            asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet, args.auto))
         else:
             parser.print_help()
 
@@ -2667,7 +2668,7 @@ async def show_memory_history(goal_id: str, debug: bool = False, quiet: bool = F
 
 async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> bool:
     """
-    CLI command to validate a goal's completion criteria.
+    Validate a goal by checking its completion criteria.
     
     Args:
         goal_id: ID of the goal to validate
@@ -2676,40 +2677,62 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
         auto: Whether to use automated LLM validation
         
     Returns:
-        bool: True if validation was successful, False otherwise
+        bool: True if validation succeeded, False otherwise
     """
-    from midpoint.validation import (
-        validate_goal as validate_goal_core,
-        create_validation_record,
-        save_validation_record
-    )
-    
     try:
-        # Call core validation logic
+        # Import validation module
+        from midpoint.validation import (
+            validate_goal as validate_goal_core,
+        )
+        
+        # Call the validation function
         success, result = await validate_goal_core(goal_id, debug, quiet, auto)
         
         if not success:
+            logging.error(f"Failed to validate goal {goal_id}")
             return False
-            
-        # Handle different validation flows
+        
         if auto:
-            # Automated validation already created a record
-            validation_record = result
+            # We've already performed automated validation in the validation module
+            # and saved the record, now let's display the results
             
-            # Display results
-            print("\nValidation Results:")
-            print(f"Overall Score: {validation_record['score']:.2%}")
-            
-            passed_count = sum(1 for result in validation_record["criteria_results"] if result.get("passed", False))
-            total_count = len(validation_record["criteria_results"])
-            print(f"Passed: {passed_count}/{total_count} criteria")
-            
-            success_threshold = validation_record.get("success_threshold", 0.8)
-            if validation_record["score"] >= success_threshold:
-                print("\n✅ Goal validation passed!")
-            else:
-                print("\n❌ Goal validation failed.")
+            # Check if we have validation results
+            if "criteria_results" in result and "score" in result:
+                # Extract key data
+                score = result["score"]
+                criteria_results = result["criteria_results"]
                 
+                # Display results
+                print(f"\nValidation Results for goal {goal_id}:")
+                print(f"Overall Score: {score:.2%}")
+                
+                passed_count = sum(1 for criteria in criteria_results if criteria.get("passed", False))
+                total_count = len(criteria_results)
+                print(f"Passed: {passed_count}/{total_count} criteria")
+                
+                # Get success threshold
+                success_threshold = 0.8  # Default
+                if "goal_data" in result:
+                    success_threshold = result["goal_data"].get("success_threshold", 0.8)
+                
+                if score >= success_threshold:
+                    print("\n✅ Goal validation passed!")
+                else:
+                    print("\n❌ Goal validation failed.")
+                
+                # Show individual criteria results
+                print("\nCriteria Results:")
+                for i, criterion_result in enumerate(criteria_results, 1):
+                    criterion = criterion_result["criterion"]
+                    passed = criterion_result["passed"]
+                    reasoning = criterion_result.get("reasoning", "")
+                    
+                    print(f"{i}. {criterion}")
+                    print(f"   {'✅ Passed' if passed else '❌ Failed'}")
+                    if reasoning:
+                        print(f"   Reason: {reasoning}")
+                
+                return True
         else:
             # Manual validation - handle user interaction
             goal_data = result["goal_data"]

@@ -18,6 +18,9 @@ from midpoint.goal_cli import (
     get_current_branch
 )
 
+# Import agents for automated validation
+from midpoint.agents.goal_validator import GoalValidator
+
 
 async def get_repository_state(goal_id: str, debug: bool = False) -> Dict[str, Any]:
     """
@@ -188,32 +191,79 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
     if debug:
         print(f"Debug: Found {len(criteria)} validation criteria")
     
-    # Placeholder for actual LLM validation
-    # In a real implementation, this would:
-    # 1. Prepare context about the goal and its state
-    # 2. Create a validation prompt for the LLM
-    # 3. Send the prompt to the LLM API
-    # 4. Parse the LLM response into validation results
+    # Get the current repository path (assumed to be the current directory)
+    repo_path = os.getcwd()
     
-    # For now, we'll return mock results
-    criteria_results = []
-    for criterion in criteria:
-        criteria_results.append({
-            "criterion": criterion,
-            "passed": False,  # Mock result - actual implementation would determine this
-            "reasoning": "This is a placeholder for LLM reasoning",
-            "evidence": []
-        })
+    # Get state information for constructing necessary objects
+    repo_state = await get_repository_state(goal_id, debug)
+    current_hash = repo_state["current_hash"]
+    branch_name = repo_state["current_branch"]
     
-    # Calculate overall score
-    passed_count = sum(1 for result in criteria_results if result["passed"])
-    total_count = len(criteria_results)
-    score = passed_count / total_count if total_count > 0 else 0.0
+    # Create a Goal object from the goal data
+    from midpoint.agents.models import Goal, ExecutionResult, State
     
-    return {
-        "criteria_results": criteria_results,
-        "score": score
-    }
+    goal = Goal(
+        description=goal_data.get("description", ""),
+        validation_criteria=criteria,
+        success_threshold=goal_data.get("success_threshold", 0.8)
+    )
+    
+    # Create a mock ExecutionResult to use with the goal validator
+    execution_result = ExecutionResult(
+        success=True,
+        branch_name=branch_name,
+        git_hash=current_hash,
+        repository_path=repo_path
+    )
+    
+    # Initialize the GoalValidator
+    validator = GoalValidator()
+    
+    try:
+        # Validate the goal execution
+        if not quiet:
+            print(f"Validating goal: {goal_data.get('description', '')}")
+            print(f"Validation criteria: {len(criteria)}")
+        
+        validation_result = await validator.validate_execution(goal, execution_result)
+        
+        # Convert the validation result to criteria_results format
+        criteria_results = []
+        for result in validation_result.criteria_results:
+            criteria_results.append({
+                "criterion": result.get("criterion", ""),
+                "passed": result.get("passed", False),
+                "reasoning": result.get("reasoning", ""),
+                "evidence": result.get("evidence", [])
+            })
+        
+        if debug:
+            print(f"Debug: Validation complete with score {validation_result.score:.2f}")
+            print(f"Debug: Reasoning: {validation_result.reasoning}")
+        
+        return {
+            "criteria_results": criteria_results,
+            "score": validation_result.score
+        }
+    except Exception as e:
+        if debug:
+            print(f"Debug: Error during LLM validation: {str(e)}")
+        logging.error(f"Error during automated validation: {str(e)}")
+        
+        # Return failed validation results
+        criteria_results = []
+        for criterion in criteria:
+            criteria_results.append({
+                "criterion": criterion,
+                "passed": False,
+                "reasoning": f"Validation failed due to error: {str(e)}",
+                "evidence": []
+            })
+        
+        return {
+            "criteria_results": criteria_results,
+            "score": 0.0
+        }
 
 
 async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> Tuple[bool, Dict[str, Any]]:

@@ -36,6 +36,7 @@ packages = ["midpoint", "midpoint.agents", "midpoint.testing", "midpoint.utils",
 
 [project.scripts]
 goal = "midpoint.goal_cli:main"
+goal-validator = "midpoint.goal_validator_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
