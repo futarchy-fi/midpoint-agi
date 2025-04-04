@@ -100,6 +100,22 @@ goal complete
 goal merge <subgoal-id>
 ```
 
+#### Validate a goal's completion criteria
+```bash
+goal validate <goal-id>
+```
+This command will:
+1. Display the goal's validation criteria
+2. Guide you through validating each criterion
+3. Record your validation decisions and reasoning
+4. Calculate an overall validation score
+5. Save the validation history
+6. Update the goal's validation status
+
+Options:
+- `--debug`: Show debug output
+- `--quiet`: Only show warnings and result
+
 #### Show completion status of all goals
 ```bash
 goal status

@@ -1067,14 +1067,21 @@ def show_goal_status():
         
         # Determine status symbol
         if goal.get("complete", False) or goal.get("completed", False):
-            status = "✅"
+            # Check if goal has been validated
+            if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                status = "✅"  # Complete and validated
+            else:
+                status = "🔷"  # Complete but not validated
         else:
             # Special handling for tasks
             if goal.get("is_task", False):
                 if "execution_result" in goal and goal["execution_result"].get("success"):
-                    status = "✅"  # Completed task
+                    if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                        status = "✅"  # Task executed and validated
+                    else:
+                        status = "🔷"  # Task executed but not validated
                 else:
-                    status = "🔷"  # Directly executable task
+                    status = "⏳"  # Task pending execution
             else:
                 # Check for completed tasks
                 completed_tasks = len(goal.get("completed_tasks", []))
@@ -1088,7 +1095,10 @@ def show_goal_status():
                 if not subgoals:
                     status = "🔘"  # No subgoals (not yet decomposed)
                 elif all_subgoals_complete:
-                    status = "⚪"  # All subgoals complete but needs explicit completion
+                    if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                        status = "✅"  # All subgoals complete and validated
+                    else:
+                        status = "🔷"  # All subgoals complete but not validated
                 else:
                     status = "⚪"  # Some subgoals incomplete
         
@@ -1137,6 +1147,22 @@ def show_goal_status():
                 subgoal_id = merge_info.get("subgoal_id", "")
                 merge_time = merge_info.get("merge_time", "")
                 print(f"{indent}   Merged: {subgoal_id} at {merge_time}")
+        
+        # Print validation status if available
+        if "validation_status" in goal:
+            validation = goal["validation_status"]
+            last_validated = validation.get("last_validated", "")
+            last_score = validation.get("last_score", 0.0)
+            last_validated_by = validation.get("last_validated_by", "")
+            last_git_hash = validation.get("last_git_hash", "")
+            
+            if last_validated:
+                print(f"{indent}   Last validated: {last_validated} by {last_validated_by}")
+                print(f"{indent}   Validation score: {last_score:.2%}")
+                if last_git_hash:
+                    print(f"{indent}   Git hash: {last_git_hash[:8]}")
+        elif goal.get("complete", False) or goal.get("completed", False):
+            print(f"{indent}   ⚠️  Not yet validated")
         
         # Find and print children
         children = {k: v for k, v in goal_files.items() 
@@ -2091,6 +2117,10 @@ async def async_main(args):
         return normalize_goal_relationships()
     elif args.command == "revert":
         return revert_goal(args.goal_id)
+    elif args.command == "validate":
+        return asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet))
+    elif args.command == "update-parent":
+        return update_parent_from_child(args.child_id)
     else:
         return None
 
@@ -2213,6 +2243,12 @@ def main():
     revert_parser = subparsers.add_parser("revert", help="Revert a goal's current state back to its initial state")
     revert_parser.add_argument("goal_id", help="ID of the goal to revert")
     
+    # goal validate <goal-id>
+    validate_parser = subparsers.add_parser("validate", help="Validate a goal's completion criteria")
+    validate_parser.add_argument("goal_id", help="ID of the goal to validate")
+    validate_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    validate_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
     update_parent_parser.add_argument('child_id', help='ID of the child goal/task to use for updating parent')
@@ -2226,6 +2262,8 @@ def main():
         asyncio.run(async_main(args))
     elif args.command == "memory":
         asyncio.run(show_memory_history(args.goal_id, args.debug, args.quiet))
+    elif args.command == "validate":
+        asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet))
     else:
         # Handle synchronous commands directly
         if args.command == "new":
@@ -2274,6 +2312,8 @@ def main():
             revert_goal(args.goal_id)
         elif args.command == "update-parent":
             update_parent_from_child(args.child_id)
+        elif args.command == "validate":
+            asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet))
         else:
             parser.print_help()
 
@@ -2556,13 +2596,7 @@ def update_parent_from_child(child_id):
 
 
 async def show_memory_history(goal_id: str, debug: bool = False, quiet: bool = False):
-    """Show memory history for a goal/subgoal/task.
-    
-    Args:
-        goal_id: ID of the goal/subgoal/task to show memory history for
-        debug: Whether to show debug output
-        quiet: Whether to only show warnings and final result
-    """
+    """Show memory history for a goal/subgoal/task."""
     # Configure logging
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -2625,6 +2659,125 @@ async def show_memory_history(goal_id: str, debug: bool = False, quiet: bool = F
         
     except Exception as e:
         logging.error(f"Error showing memory history: {e}")
+        return False
+
+
+async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False) -> bool:
+    """
+    Validate a goal's completion criteria manually.
+    
+    Args:
+        goal_id: ID of the goal to validate
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and result
+        
+    Returns:
+        bool: True if validation was successful, False otherwise
+    """
+    # Ensure goal directory exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal not found: {goal_id}")
+        return False
+    
+    try:
+        # Load goal data
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+        
+        # Get validation criteria
+        criteria = goal_data.get("validation_criteria", [])
+        if not criteria:
+            logging.error(f"No validation criteria found for goal {goal_id}")
+            return False
+        
+        # Create validation history directory if it doesn't exist
+        validation_dir = goal_path / "validation_history"
+        if not validation_dir.exists():
+            validation_dir.mkdir()
+        
+        # Get current git hash
+        current_hash = get_current_hash()
+        current_branch = get_current_branch()
+        
+        # Display validation criteria
+        print(f"\nValidating goal {goal_id}: {goal_data['description']}")
+        print("\nValidation Criteria:")
+        for i, criterion in enumerate(criteria, 1):
+            print(f"{i}. {criterion}")
+        
+        # Validate each criterion
+        criteria_results = []
+        for i, criterion in enumerate(criteria, 1):
+            while True:
+                response = input(f"\nDoes criterion {i} pass? (y/n/s): ").lower()
+                if response in ['y', 'n', 's']:
+                    break
+                print("Please enter 'y' for yes, 'n' for no, or 's' to skip")
+            
+            if response == 's':
+                continue
+                
+            passed = response == 'y'
+            reasoning = input("Reasoning (optional): ").strip()
+            evidence = input("Evidence (optional, comma-separated): ").strip()
+            
+            criteria_results.append({
+                "criterion": criterion,
+                "passed": passed,
+                "reasoning": reasoning,
+                "evidence": [e.strip() for e in evidence.split(",")] if evidence else []
+            })
+        
+        # Calculate overall score
+        passed_count = sum(1 for result in criteria_results if result["passed"])
+        total_count = len(criteria_results)
+        score = passed_count / total_count if total_count > 0 else 0.0
+        
+        # Create validation record
+        validation_record = {
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "git_hash": current_hash,
+            "branch": current_branch,
+            "criteria_results": criteria_results,
+            "score": score,
+            "validated_by": os.getenv("USER", "unknown")
+        }
+        
+        # Save validation record
+        validation_file = validation_dir / f"{goal_id}_{validation_record['timestamp']}.json"
+        with open(validation_file, 'w') as f:
+            json.dump(validation_record, f, indent=2)
+        
+        # Update goal data
+        goal_data["validation_status"] = {
+            "last_validated": validation_record["timestamp"],
+            "last_score": score,
+            "last_validated_by": validation_record["validated_by"],
+            "last_git_hash": current_hash,
+            "last_branch": current_branch
+        }
+        
+        # Save updated goal data
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+        
+        # Display results
+        print("\nValidation Results:")
+        print(f"Overall Score: {score:.2%}")
+        print(f"Passed: {passed_count}/{total_count} criteria")
+        
+        if score >= goal_data.get("success_threshold", 0.8):
+            print("\n✅ Goal validation passed!")
+        else:
+            print("\n❌ Goal validation failed.")
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Failed to validate goal {goal_id}: {e}")
         return False
 
 
