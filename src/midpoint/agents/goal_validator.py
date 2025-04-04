@@ -7,23 +7,26 @@ All validation decisions should be made by the LLM at runtime.
 """
 
 import asyncio
-from typing import List, Dict, Any, Optional
-import re
-import os
-import random
 import json
 import logging
+import re
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
+import os
+import random
 from pathlib import Path
-import datetime
+import subprocess
 
-from .models import Goal, ExecutionResult, ValidationResult
+from openai import AsyncOpenAI
+
+from midpoint.agents.models import Goal, ExecutionResult, CriterionResult, ValidationResult, State
+from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
+from midpoint.agents.tools.memory_tools import get_memory_diff
 from .tools import (
-    get_current_hash,
     list_directory,
     read_file,
     search_code,
     run_terminal_cmd,
-    get_current_branch,
     web_search,
     web_scrape
 )
@@ -32,10 +35,22 @@ from .goal_decomposer import validate_repository_state
 from .tools.processor import ToolProcessor
 from .tools.registry import ToolRegistry
 from .config import get_openai_api_key
-from openai import AsyncOpenAI
 
 # Set up logging
-logger = logging.getLogger('GoalValidator')
+logger = logging.getLogger(__name__)
+
+# System prompt for the validator
+VALIDATION_SYSTEM_PROMPT = """
+You are the Goal Validator, an expert at verifying whether a goal's validation criteria have been met.
+
+Your task is to analyze the evidence provided and determine if each validation criterion has been met.
+You should look for concrete evidence in the repository changes and any other information provided.
+
+Be precise and objective in your assessment. Clearly explain your reasoning for each criterion.
+You should provide specific evidence from the diffs or other sources to support your conclusions.
+
+Your output will be used to determine if the overall goal has been successfully completed.
+"""
 
 class GoalValidator:
     """
@@ -84,10 +99,20 @@ IMPORTANT: You must be thorough and objective in your validation. Your job is to
 has been properly satisfied. Be specific in your reasoning and cite concrete evidence rather than making general statements.
 
 For each validation criterion:
-1. Use the available tools to gather evidence
-2. Analyze the evidence against the criterion
-3. Make a judgment about whether the criterion is satisfied
-4. Provide clear reasoning for your decision
+1. Use the available tools to gather evidence about the changes
+2. Analyze the repository and memory diffs to find relevant changes
+3. Examine how the changes relate to the specific validation criterion
+4. Determine if the changes satisfy the criterion
+5. Provide clear reasoning with specific references to parts of the diffs
+
+When analyzing diffs:
+- Look for file additions, modifications, and deletions
+- Check file content changes and their relationship to the criteria
+- Examine memory documents that were added or modified
+- Consider both the quantity and quality of changes
+
+Focus on the SPECIFIC CHANGES that occurred from initial to final state, not just the final state in isolation.
+Your validation must explicitly reference evidence from the diffs when available.
 
 Your response must be in JSON format with these fields:
 {
@@ -96,10 +121,10 @@ Your response must be in JSON format with these fields:
             "criterion": "string",
             "passed": boolean,
             "reasoning": "string",
-            "evidence": ["string"]
+            "evidence": ["string"]  // Specific references to parts of the diffs
         }
     ],
-    "overall_score": float,  # Between 0 and 1
+    "overall_score": float,  // Between 0 and 1
     "overall_reasoning": "string"
 }"""
 
@@ -108,152 +133,191 @@ Your response must be in JSON format with these fields:
 
     async def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
         """
-        Validate an execution result against a goal using LLM.
+        Validate execution results against a goal using LLM.
         
-        This method MUST NOT contain any task-specific validation logic.
-        All validation decisions should be made by the LLM.
+        This method takes a goal and execution result and validates the execution
+        results against the goal using an LLM. This method handles repository
+        state validation and content validation.
         
         Args:
-            goal: The goal to validate against
-            execution_result: The result of task execution
-            
+            goal: The goal to validate
+            execution_result: The execution result to validate
+        
         Returns:
-            ValidationResult containing the validation outcome
+            ValidationResult object containing validation details
         """
-        # If execution failed, validation fails
+        # If the execution failed, we don't need to validate
         if not execution_result.success:
             return ValidationResult(
-                success=False,
-                score=0.0,
-                reasoning="Execution failed: " + (execution_result.error_message or "Unknown error"),
+                goal_id=goal.id,
+                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
                 criteria_results=[],
-                git_hash=execution_result.git_hash,
-                branch_name=execution_result.branch_name
+                score=0.0,
+                validated_by="System",
+                automated=True,
+                repository_state=None,
             )
         
         # Validate repository state
+        repo_info = {}
         try:
-            await validate_repository_state(
-                execution_result.repository_path,
-                execution_result.git_hash
-            )
-        except ValueError as e:
-            # Repository state validation can fail if we're not on the right branch
-            # Let's try to check out the branch first and then validate
-            pass
+            current_branch = get_current_branch(execution_result.repository_path)
+            if current_branch != execution_result.branch_name:
+                logging.info(f"Current branch {current_branch} does not match execution branch {execution_result.branch_name}")
+                # Try to switch to correct branch using subprocess
+                try:
+                    proc = subprocess.run(
+                        ["git", "checkout", execution_result.branch_name],
+                        cwd=execution_result.repository_path,
+                        capture_output=True,
+                        text=True
+                    )
+                    if proc.returncode == 0:
+                        logging.info(f"Switched to branch {execution_result.branch_name}")
+                    else:
+                        raise ValueError(f"Failed to checkout branch: {proc.stderr}")
+                except Exception as e:
+                    logging.error(f"Failed to switch to branch {execution_result.branch_name}: {e}")
+                    # Return failed validation
+                    return ValidationResult(
+                        goal_id=goal.id,
+                        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                        criteria_results=[],
+                        score=0.0,
+                        validated_by="System",
+                        automated=True,
+                        repository_state=None,
+                    )
         
-        # Check which branch we're on
-        current_branch = await get_current_branch(execution_result.repository_path)
+            # Get repository info
+            current_hash = get_current_hash(execution_result.repository_path)
+            repo_info = {
+                "current_hash": current_hash,
+                "current_branch": current_branch,
+                "timestamp": str(datetime.now().isoformat()),
+                "goal_id": goal.id,
+            }
+        except Exception as e:
+            logging.error(f"Failed to get repository info: {e}")
         
-        # Switch to the execution branch if needed
-        if current_branch != execution_result.branch_name:
-            try:
-                await run_terminal_cmd(
-                    command=["git", "checkout", execution_result.branch_name],
-                    cwd=execution_result.repository_path
-                )
-            except Exception as e:
-                return ValidationResult(
-                    success=False,
-                    score=0.0,
-                    reasoning=f"Failed to checkout branch {execution_result.branch_name}: {str(e)}",
-                    criteria_results=[],
-                    git_hash=execution_result.git_hash,
-                    branch_name=execution_result.branch_name
-                )
-        
+        # Get any diffs between initial and final states
+        repo_diff = None
         try:
-            # Get repository information
-            try:
-                repository_files = await list_directory(execution_result.repository_path, ".")
-                if isinstance(repository_files, dict) and "files" in repository_files:
-                    repository_files = repository_files["files"]
-                else:
-                    repository_files = []
-            except Exception:
-                repository_files = []
-            
-            # Prepare the context for the LLM
-            context = f"""
-Repository: {execution_result.repository_path}
-Branch: {execution_result.branch_name}
-Git Hash: {execution_result.git_hash}
+            if (hasattr(goal, 'initial_state') and goal.initial_state and 
+                hasattr(goal.initial_state, 'git_hash') and goal.initial_state.git_hash):
+                initial_hash = goal.initial_state.git_hash
+                # Using a different approach to get the diff since get_diff is not available
+                proc = subprocess.run(
+                    ["git", "diff", initial_hash, current_hash],
+                    cwd=execution_result.repository_path,
+                    capture_output=True,
+                    text=True
+                )
+                if proc.returncode == 0:
+                    repo_diff = proc.stdout
+        except Exception as e:
+            logging.error(f"Failed to get repo diff: {e}")
+        
+        memory_diff = None
+        try:
+            if (hasattr(goal, 'initial_state') and goal.initial_state and 
+                hasattr(goal.initial_state, 'memory_hash') and goal.initial_state.memory_hash and
+                hasattr(goal, 'current_state') and goal.current_state and
+                hasattr(goal.current_state, 'memory_hash') and goal.current_state.memory_hash):
+                memory_diff = get_memory_diff(goal.initial_state.memory_hash, 
+                                            goal.current_state.memory_hash,
+                                            execution_result.repository_path)
+        except Exception as e:
+            logging.error(f"Failed to get memory diff: {e}")
+        
+        # Prepare context for LLM
+        messages = [
+            {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
+            {"role": "user", "content": f"""
+You are tasked with validating whether the execution results match the goal criteria.
 
-Goal: {goal.description}
+### Goal
+{goal.description}
 
-Validation Criteria:
-{chr(10).join([f"{i+1}. {criterion}" for i, criterion in enumerate(goal.validation_criteria)])}
+### Validation Criteria
+{json.dumps(goal.validation_criteria, indent=2)}
 
-Success Threshold: {goal.success_threshold}
+### Evidence
+""" + (f"""
+#### Repository Changes
+```diff
+{repo_diff}
+```
+""" if repo_diff else "") + (f"""
+#### Memory Changes
+```diff
+{memory_diff}
+```
+""" if memory_diff else "") + """
+
+Provide a detailed validation, analyzing each criterion to determine if it has been met.
+Your response MUST be a valid JSON object with the following structure:
+{
+  "criteria_results": [
+    {
+      "criterion": "The first criterion text",
+      "passed": true or false,
+      "reasoning": "Explanation of why the criterion is passed or failed",
+      "evidence": ["Supporting evidence from the diffs or execution"]
+    },
+    // ... for each criterion
+  ]
+}
 """
-            
-            # Create messages for the LLM
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": context}
-            ]
-            
-            # Get validation from LLM using tool processor
-            logger.info(f"Validating goal: {goal.description}")
-            logger.info(f"Number of criteria: {len(goal.validation_criteria)}")
-            
-            # Call LLM with tools
+            }
+        ]
+        
+        try:
+            logging.info(f"Validating goal {goal.id} with LLM")
+            # Run LLM with tools
             response, tool_calls = await self.tool_processor.run_llm_with_tools(
                 messages=messages,
-                model=self.model,
-                validate_json_format=True
+                model=self.model
             )
             
-            # Extract the response content
-            if isinstance(response, list):
-                # If we got a list of messages, get the last one's content
-                content = response[-1]["content"] if response else "{}"
-            else:
-                # If we got a single message object
-                content = response.get("content", "{}") if isinstance(response, dict) else response.content
-            
-            # Parse the validation result
-            try:
-                validation_data = json.loads(content)
-                criteria_results = validation_data.get("criteria_results", [])
-                overall_score = validation_data.get("overall_score", 0.0)
-                overall_reasoning = validation_data.get("overall_reasoning", "No reasoning provided")
-                
-                # Calculate success based on threshold
-                success = overall_score >= goal.success_threshold
-                
-                # Create ValidationResult
-                return ValidationResult(
-                    success=success,
-                    score=overall_score,
-                    reasoning=overall_reasoning,
-                    criteria_results=criteria_results,
-                    git_hash=execution_result.git_hash,
-                    branch_name=execution_result.branch_name
-                )
-            except json.JSONDecodeError:
-                # If we can't parse the response, create a fallback result
-                logger.error(f"Failed to parse LLM response as JSON: {content[:100]}...")
-                
-                # Generate fallback criteria results
-                criteria_results = []
-                for criterion in goal.validation_criteria:
-                    criteria_results.append({
-                        "criterion": criterion,
-                        "passed": False,
-                        "reasoning": "Failed to parse LLM response",
-                        "evidence": ["Invalid response format"]
-                    })
-                
-                return ValidationResult(
-                    success=False,
-                    score=0.0,
-                    reasoning="Failed to parse validation response from LLM",
-                    criteria_results=criteria_results,
-                    git_hash=execution_result.git_hash,
-                    branch_name=execution_result.branch_name
-                )
-            
+            # Extract response from LLM
+            if response and len(response) > 0:
+                assistant_message = next((msg for msg in response if msg["role"] == "assistant"), None)
+                if assistant_message:
+                    content = assistant_message.get("content", "")
+                    if content:
+                        try:
+                            # Try to extract JSON from the response
+                            validation_data = self._extract_validation_json(content)
+                            
+                            # Create validation result
+                            criteria_results = []
+                            for result in validation_data.get("criteria_results", []):
+                                criteria_results.append(
+                                    CriterionResult(
+                                        criterion=result["criterion"],
+                                        passed=result["passed"],
+                                        reasoning=result["reasoning"],
+                                        evidence=result["evidence"]
+                                    )
+                                )
+                            
+                            # Calculate score
+                            num_passed = sum(1 for cr in criteria_results if cr.passed)
+                            total_criteria = len(criteria_results)
+                            score = (num_passed / total_criteria) * 100 if total_criteria > 0 else 0
+                            
+                            return ValidationResult(
+                                goal_id=goal.id,
+                                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                                criteria_results=criteria_results,
+                                score=score,
+                                validated_by="LLM",
+                                automated=True,
+                                repository_state=repo_info,
+                            )
+                        except Exception as e:
+                            logging.error(f"Failed to parse LLM response as JSON: {content[:500]}...")
         except Exception as e:
             logger.error(f"Error during goal validation: {str(e)}")
             return ValidationResult(
@@ -267,9 +331,11 @@ Success Threshold: {goal.success_threshold}
         finally:
             # Always switch back to main branch
             try:
-                await run_terminal_cmd(
-                    command=["git", "checkout", "main"],
-                    cwd=execution_result.repository_path
+                subprocess.run(
+                    ["git", "checkout", "main"],
+                    cwd=execution_result.repository_path,
+                    capture_output=True,
+                    text=True
                 )
             except:
                 pass
@@ -301,63 +367,108 @@ Success Threshold: {goal.success_threshold}
         
         return "\n".join(reasoning)
 
-    async def validate_goal(self, goal_id: str, repository_path: str = None, auto: bool = True) -> ValidationResult:
+    async def validate_goal(self, goal_path: str, repository_path: str = ".") -> ValidationResult:
         """
-        Validate a goal by ID.
-        
-        This is a convenience method that:
-        1. Loads the goal data from the goal file
-        2. Creates a Goal object with the validation criteria
-        3. Creates an ExecutionResult for the current state
-        4. Calls validate_execution
+        Validate a goal using a dummy execution result.
         
         Args:
-            goal_id: The ID of the goal to validate
-            repository_path: Optional repository path (defaults to current directory)
-            auto: Whether this is an automated validation
+            goal_path: Path to the goal JSON file
+            repository_path: Path to the repository
             
         Returns:
-            ValidationResult containing the validation outcome
+            ValidationResult object containing validation details
         """
-        # Use current directory if no repository path provided
-        if not repository_path:
-            repository_path = os.getcwd()
+        try:
+            # Load goal data
+            with open(goal_path, 'r') as f:
+                goal_data = json.load(f)
             
-        # Load goal file
-        from midpoint.goal_cli import ensure_goal_dir
-        goal_path = ensure_goal_dir()
-        goal_file = goal_path / f"{goal_id}.json"
-        
-        if not goal_file.exists():
-            raise ValueError(f"Goal not found: {goal_id}")
+            # Extract initial and current state information
+            initial_state = goal_data.get('initial_state', {})
+            current_state = goal_data.get('current_state', {})
             
-        # Load goal data
-        with open(goal_file, 'r') as f:
-            goal_data = json.load(f)
+            initial_git_hash = initial_state.get('git_hash')
+            initial_memory_hash = initial_state.get('memory_hash')
+            initial_timestamp = initial_state.get('timestamp')
             
-        # Get validation criteria
-        criteria = goal_data.get("validation_criteria", [])
-        if not criteria:
-            raise ValueError(f"No validation criteria found for goal {goal_id}")
+            current_git_hash = current_state.get('git_hash')
+            current_memory_hash = current_state.get('memory_hash')
+            current_timestamp = current_state.get('timestamp')
             
-        # Create Goal object
-        goal = Goal(
-            description=goal_data.get("description", ""),
-            validation_criteria=criteria,
-            success_threshold=goal_data.get("success_threshold", 0.8)
-        )
+            # Log hashes for debugging
+            logging.debug(f"Initial hash: {initial_git_hash}")
+            logging.debug(f"Current hash: {current_git_hash}")
+            
+            # Create Goal object
+            goal = Goal(
+                id=goal_data.get('goal_id', ''),
+                description=goal_data.get('description', ''),
+                validation_criteria=goal_data.get('validation_criteria', []),
+                success_threshold=80.0,  # Default threshold
+                initial_state=State(
+                    git_hash=initial_git_hash,
+                    memory_hash=initial_memory_hash,
+                    timestamp=initial_timestamp
+                ),
+                current_state=State(
+                    git_hash=current_git_hash,
+                    memory_hash=current_memory_hash,
+                    timestamp=current_timestamp
+                )
+            )
+            
+            # Create dummy execution result
+            execution_result = ExecutionResult(
+                success=True,
+                repository_path=repository_path,
+                branch_name=get_current_branch(repository_path),
+                git_hash=current_git_hash,
+                task_id='',
+                goal_id=goal_data.get('goal_id', ''),
+                error_message=None
+            )
+            
+            # Validate execution
+            return await self.validate_execution(goal, execution_result)
+        except Exception as e:
+            logging.error(f"Error validating goal: {e}")
+            raise
+
+    def _extract_validation_json(self, content: str) -> Dict[str, Any]:
+        """
+        Extract JSON validation data from LLM response.
         
-        # Get current git state
-        git_hash = await get_current_hash(repository_path)
-        branch_name = await get_current_branch(repository_path)
+        Args:
+            content: Raw content from LLM response
+            
+        Returns:
+            Parsed JSON data as a dictionary
+        """
+        # Try direct JSON parsing
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
         
-        # Create ExecutionResult
-        execution_result = ExecutionResult(
-            success=True,
-            branch_name=branch_name,
-            git_hash=git_hash,
-            repository_path=repository_path
-        )
+        # Try extracting JSON from markdown code blocks
+        json_pattern = r'```(?:json)?\s*([\s\S]*?)\s*```'
+        matches = re.findall(json_pattern, content)
         
-        # Validate execution
-        return await self.validate_execution(goal, execution_result) 
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+        
+        # Try finding JSON objects using regex
+        json_object_pattern = r'{[\s\S]*}'
+        matches = re.findall(json_object_pattern, content)
+        
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+        
+        # If all attempts fail, raise an exception
+        raise ValueError("Could not extract valid JSON from LLM response") 

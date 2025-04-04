@@ -22,8 +22,12 @@ class State:
 class Goal:
     """Represents a goal to be achieved."""
     description: str
+    id: str = ""  # Goal ID
     validation_criteria: List[str] = field(default_factory=list)  # Make optional with default empty list
     success_threshold: float = 0.8
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Metadata including initial and final hashes
+    initial_state: Optional['State'] = None  # Initial state before execution
+    current_state: Optional['State'] = None  # Current state after execution
 
 class SubgoalPlan(BaseModel):
     """Represents the next step toward achieving a goal."""
@@ -90,9 +94,19 @@ class ExecutionResult:
 @dataclass
 class ValidationResult:
     """Represents the result of goal validation."""
-    success: bool  # Whether the validation passed
-    score: float  # Score between 0 and 1
-    reasoning: str  # Explanation of the validation result
+    goal_id: str  # ID of the goal
+    timestamp: str  # Timestamp of validation
     criteria_results: List[Dict[str, Any]]  # Results for each validation criterion
-    git_hash: str  # The git hash that was validated
-    branch_name: str  # The branch that was validated 
+    score: float  # Score between 0 and 100
+    validated_by: str  # Who validated (LLM, Human, System)
+    automated: bool  # Whether validation was automated
+    repository_state: Optional[Dict[str, Any]] = None  # Repository state during validation
+    reasoning: str = "Validation completed"  # Explanation of the validation result
+
+@dataclass
+class CriterionResult:
+    """Represents the result of validating a single criterion."""
+    criterion: str  # The validation criterion text
+    passed: bool  # Whether the criterion was passed
+    reasoning: str  # Explanation of why the criterion passed or failed
+    evidence: List[str] = field(default_factory=list)  # Evidence supporting the result 

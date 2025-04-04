@@ -396,4 +396,93 @@ async def create_commit(repo_path: str, message: str, add_all: bool = True) -> D
         repo_path=repo_path, 
         message=message, 
         add_all=add_all
-    ) 
+    )
+
+async def get_repository_diff(repo_path: str, start_hash: str, end_hash: str, 
+                             max_size: int = 50000) -> Dict[str, Any]:
+    """
+    Get a diff between two repository states.
+    
+    Args:
+        repo_path: Path to the Git repository
+        start_hash: Starting commit hash
+        end_hash: Ending commit hash
+        max_size: Maximum diff size in characters
+        
+    Returns:
+        Dictionary containing:
+        - diff_summary: Summary of changes
+        - changed_files: List of files changed
+        - diff_content: Actual diff content (truncated if too large)
+        - truncated: Whether the diff was truncated
+    """
+    result = {
+        "diff_summary": "",
+        "changed_files": [],
+        "diff_content": "",
+        "truncated": False
+    }
+    
+    try:
+        # Get list of changed files
+        cmd = ["git", "diff", "--name-only", start_hash, end_hash]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=repo_path
+        )
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise ValueError(f"Failed to get changed files: {error_msg}")
+        
+        result["changed_files"] = [
+            file for file in stdout.decode().strip().split("\n") 
+            if file.strip()
+        ]
+        
+        # Get diff summary (stats)
+        cmd = ["git", "diff", "--stat", start_hash, end_hash]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=repo_path
+        )
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise ValueError(f"Failed to get diff stats: {error_msg}")
+        
+        result["diff_summary"] = stdout.decode().strip()
+        
+        # Get complete diff
+        cmd = ["git", "diff", start_hash, end_hash]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=repo_path
+        )
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise ValueError(f"Failed to get diff: {error_msg}")
+        
+        diff_content = stdout.decode()
+        
+        # Truncate if too large
+        if len(diff_content) > max_size:
+            result["diff_content"] = diff_content[:max_size] + "\n[...TRUNCATED...]"
+            result["truncated"] = True
+        else:
+            result["diff_content"] = diff_content
+        
+        return result
+        
+    except Exception as e:
+        raise ValueError(f"Error getting repository diff: {str(e)}") from e 

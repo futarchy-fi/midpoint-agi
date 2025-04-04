@@ -98,6 +98,60 @@ async def validate_goal_cli(goal_id: str,
         bool: True if validation was successful, False otherwise
     """
     try:
+        # Get repository state
+        repo_state = await get_repository_state(goal_id, debug)
+        
+        # Load goal data
+        goal_path = ensure_goal_dir()
+        goal_file = goal_path / f"{goal_id}.json"
+        
+        if not goal_file.exists():
+            logger.error(f"Goal file not found: {goal_file}")
+            return False
+        
+        try:
+            with open(goal_file, 'r') as f:
+                goal_data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse goal file: {str(e)}")
+            return False
+        
+        # Extract goal metadata
+        goal_metadata = {}
+        
+        # Get initial repository hash
+        if "initial_hash" in goal_data:
+            goal_metadata["initial_hash"] = goal_data["initial_hash"]
+        
+        # Get initial memory hash if available
+        if "memory" in goal_data and "initial_hash" in goal_data["memory"]:
+            goal_metadata["initial_memory_hash"] = goal_data["memory"]["initial_hash"]
+        
+        # Get final memory hash if available
+        if "memory" in goal_data and "final_hash" in goal_data["memory"]:
+            goal_metadata["final_memory_hash"] = goal_data["memory"]["final_hash"]
+        elif "memory" in goal_data and "hash" in goal_data["memory"]:
+            goal_metadata["final_memory_hash"] = goal_data["memory"]["hash"]
+        
+        # Current hash is the final hash
+        goal_metadata["final_hash"] = repo_state["current_hash"]
+            
+        # Create Goal object with metadata
+        goal = Goal(
+            description=goal_data.get("description", ""),
+            validation_criteria=goal_data.get("validation_criteria", []),
+            success_threshold=goal_data.get("success_threshold", 0.8),
+            metadata=goal_metadata
+        )
+        
+        # Create mock execution result
+        execution_result = ExecutionResult(
+            success=True,
+            branch_name=repo_state["current_branch"],
+            git_hash=repo_state["current_hash"],
+            repository_path=repository_path or os.getcwd()
+        )
+        
         # Use the GoalValidator to validate the goal
         validator = GoalValidator(model=model)
         
@@ -109,16 +163,13 @@ async def validate_goal_cli(goal_id: str,
         
         if not quiet:
             print(f"Validating goal {goal_id} using model {model}...")
+            if goal_metadata.get("initial_hash") and goal_metadata.get("final_hash"):
+                print(f"Repository diff: {goal_metadata['initial_hash'][:7]} → {goal_metadata['final_hash'][:7]}")
+            if goal_metadata.get("initial_memory_hash") and goal_metadata.get("final_memory_hash"):
+                print(f"Memory diff: {goal_metadata['initial_memory_hash'][:7]} → {goal_metadata['final_memory_hash'][:7]}")
         
         # Validate the goal
-        validation_result = await validator.validate_goal(
-            goal_id=goal_id,
-            repository_path=repository_path,
-            auto=True
-        )
-        
-        # Get repository state
-        repo_state = await get_repository_state(goal_id, debug)
+        validation_result = await validator.validate_execution(goal, execution_result)
         
         # Create validation record
         from midpoint.validation import create_validation_record, save_validation_record

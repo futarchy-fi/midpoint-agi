@@ -519,3 +519,110 @@ def retrieve_recent_memory(memory_hash, char_limit=5000, repo_path=None):
                 )
             except Exception as e:
                 logging.warning(f"Memory: Failed to restore original branch: {str(e)}") 
+
+async def get_memory_diff(initial_hash: str, final_hash: str, memory_repo_path: str = None, max_size: int = 50000) -> Dict[str, Any]:
+    """
+    Get a diff between two memory repository states.
+    
+    Args:
+        initial_hash: Starting memory hash
+        final_hash: Ending memory hash
+        memory_repo_path: Path to the memory repository (optional)
+        max_size: Maximum diff size in characters
+        
+    Returns:
+        Dictionary containing:
+        - diff_summary: Summary of changes
+        - changed_files: List of files changed
+        - diff_content: Actual diff content (truncated if too large)
+        - truncated: Whether the diff was truncated
+    """
+    result = {
+        "diff_summary": "",
+        "changed_files": [],
+        "diff_content": "",
+        "truncated": False
+    }
+    
+    try:
+        # Get repository path
+        memory_repo_path = memory_repo_path or system_get_repo_path()
+        
+        # Save the current state
+        try:
+            current_hash = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=memory_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            ).stdout.strip()
+        except Exception as e:
+            current_hash = None
+            logging.warning(f"Failed to get current memory hash: {str(e)}")
+        
+        try:
+            # Get list of changed files
+            cmd = ["git", "diff", "--name-only", initial_hash, final_hash]
+            proc = subprocess.run(
+                cmd,
+                cwd=memory_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            result["changed_files"] = [
+                file for file in proc.stdout.strip().split("\n") 
+                if file.strip()
+            ]
+            
+            # Get diff summary (stats)
+            cmd = ["git", "diff", "--stat", initial_hash, final_hash]
+            proc = subprocess.run(
+                cmd,
+                cwd=memory_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            result["diff_summary"] = proc.stdout.strip()
+            
+            # Get complete diff
+            cmd = ["git", "diff", initial_hash, final_hash]
+            proc = subprocess.run(
+                cmd,
+                cwd=memory_repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            diff_content = proc.stdout
+            
+            # Truncate if too large
+            if len(diff_content) > max_size:
+                result["diff_content"] = diff_content[:max_size] + "\n[...TRUNCATED...]"
+                result["truncated"] = True
+            else:
+                result["diff_content"] = diff_content
+                
+        finally:
+            # Restore original state if needed
+            if current_hash and current_hash != final_hash:
+                try:
+                    subprocess.run(
+                        ["git", "checkout", current_hash],
+                        cwd=memory_repo_path,
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                except:
+                    logging.warning(f"Failed to restore original memory hash state")
+        
+        return result
+        
+    except Exception as e:
+        raise ValueError(f"Error getting memory diff: {str(e)}") from e 
