@@ -49,7 +49,6 @@ asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 # Filter warnings
 filterwarnings = [
-    "ignore::urllib3.exceptions.NotOpenSSLWarning",
     "ignore::DeprecationWarning"
 ]
 

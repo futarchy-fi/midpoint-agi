@@ -4,14 +4,13 @@ Pytest configuration file for handling warnings and fixtures.
 
 import warnings
 import pytest
-from urllib3.exceptions import NotOpenSSLWarning
 from _pytest.warning_types import PytestDeprecationWarning
 
 # Create a pytest plugin to capture urllib3 warnings
 def pytest_runtest_setup():
     """Set up for each test - suppress specific warnings."""
-    # Suppress the NotOpenSSLWarning specifically
-    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
+    # Suppress the OpenSSL warning
+    warnings.filterwarnings("ignore", message=".*OpenSSL 1.1.1.*")
     # Also suppress the asyncio warning
     warnings.filterwarnings("ignore", message=".*asyncio_default_fixture_loop_scope.*")
 
@@ -27,11 +26,11 @@ def event_loop():
 
 def pytest_configure(config):
     """Set up pytest configuration."""
-    # Suppress the NotOpenSSLWarning
+    # Suppress the OpenSSL warning
     warnings.filterwarnings(
         "ignore",
         category=Warning,
-        message="urllib3 v2 only supports OpenSSL 1.1.1\\+.*"
+        message=".*OpenSSL 1.1.1.*"
     )
     
     # Set up default fixture loop scope for asyncio

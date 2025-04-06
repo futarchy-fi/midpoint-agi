@@ -6,10 +6,28 @@ This module provides a processor for handling LLM tool calls and executing the a
 
 import json
 import logging
+import os
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 
 from midpoint.agents.tools.registry import ToolRegistry
+
+# Add a dedicated logger for LLM responses
+llm_logger = logging.getLogger("llm_responses")
+llm_logger.setLevel(logging.DEBUG)
+
+# Ensure we have a logs directory
+if not os.path.exists("logs"):
+    os.makedirs("logs")
+
+# Create a file handler for LLM responses
+llm_log_filename = f"logs/llm_responses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+llm_file_handler = logging.FileHandler(llm_log_filename)
+llm_file_handler.setLevel(logging.DEBUG)
+llm_file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+llm_file_handler.setFormatter(llm_file_formatter)
+llm_logger.addHandler(llm_file_handler)
 
 class ToolProcessor:
     """Handles LLM tool calls and executes appropriate tools."""
@@ -180,12 +198,72 @@ class ToolProcessor:
                 if isinstance(tool_call, dict):
                     if "function" in tool_call:
                         function_name = tool_call["function"]["name"]
-                        function_args = json.loads(tool_call["function"]["arguments"])
+                        try:
+                            function_args = json.loads(tool_call["function"]["arguments"])
+                        except json.JSONDecodeError as json_err:
+                            # Attempt to repair common JSON issues
+                            try:
+                                # Log the original error position for debugging
+                                logging.error(f"JSON parse error at position {json_err.pos}: {json_err}")
+                                
+                                # Log a snippet of the problematic JSON for context
+                                error_pos = json_err.pos
+                                start_pos = max(0, error_pos - 20)
+                                end_pos = min(len(tool_call["function"]["arguments"]), error_pos + 20)
+                                context_str = tool_call["function"]["arguments"][start_pos:end_pos]
+                                logging.error(f"JSON context around error: '{context_str}'")
+                                
+                                # Try to repair common issues
+                                fixed_json = tool_call["function"]["arguments"]
+                                
+                                # If missing colon, try to fix
+                                if "Expecting ':' delimiter" in str(json_err):
+                                    # Insert a colon at the error position
+                                    fixed_json = fixed_json[:error_pos] + ":" + fixed_json[error_pos:]
+                                
+                                # Attempt to parse the fixed JSON
+                                function_args = json.loads(fixed_json)
+                                logging.info(f"Successfully repaired malformed JSON for tool: {function_name}")
+                            except Exception as repair_err:
+                                # If repair fails, use empty dict and log detailed error
+                                logging.error(f"Failed to repair JSON for tool {function_name}: {repair_err}")
+                                logging.error(f"Original arguments: {tool_call['function']['arguments']}")
+                                function_args = {}
                     tool_call_id = tool_call.get("id", "")
                 else:
                     if hasattr(tool_call, "function"):
                         function_name = tool_call.function.name
-                        function_args = json.loads(tool_call.function.arguments)
+                        try:
+                            function_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError as json_err:
+                            # Attempt to repair common JSON issues
+                            try:
+                                # Log the original error position for debugging
+                                logging.error(f"JSON parse error at position {json_err.pos}: {json_err}")
+                                
+                                # Log a snippet of the problematic JSON for context
+                                error_pos = json_err.pos
+                                start_pos = max(0, error_pos - 20)
+                                end_pos = min(len(tool_call.function.arguments), error_pos + 20)
+                                context_str = tool_call.function.arguments[start_pos:end_pos]
+                                logging.error(f"JSON context around error: '{context_str}'")
+                                
+                                # Try to repair common issues
+                                fixed_json = tool_call.function.arguments
+                                
+                                # If missing colon, try to fix
+                                if "Expecting ':' delimiter" in str(json_err):
+                                    # Insert a colon at the error position
+                                    fixed_json = fixed_json[:error_pos] + ":" + fixed_json[error_pos:]
+                                
+                                # Attempt to parse the fixed JSON
+                                function_args = json.loads(fixed_json)
+                                logging.info(f"Successfully repaired malformed JSON for tool: {function_name}")
+                            except Exception as repair_err:
+                                # If repair fails, use empty dict and log detailed error
+                                logging.error(f"Failed to repair JSON for tool {function_name}: {repair_err}")
+                                logging.error(f"Original arguments: {tool_call.function.arguments}")
+                                function_args = {}
                     tool_call_id = tool_call.id if hasattr(tool_call, "id") else ""
                 
                 # Get the tool from registry
@@ -310,6 +388,18 @@ class ToolProcessor:
                     log_content = raw_content
                 logging.debug(f"Raw LLM response content: {log_content}")
                 
+                # Log the full response to the dedicated LLM log file
+                if assistant_message.tool_calls:
+                    llm_logger.debug(f"[TOOL CALL RESPONSE] Model: {model}")
+                    for i, tc in enumerate(assistant_message.tool_calls):
+                        tool_name = tc.function.name
+                        tool_args = tc.function.arguments
+                        llm_logger.debug(f"Tool Call #{i+1}: {tool_name}")
+                        llm_logger.debug(f"Arguments: {tool_args}")
+                else:
+                    llm_logger.debug(f"[TEXT RESPONSE] Model: {model}")
+                    llm_logger.debug(f"Content: {assistant_message.content}")
+                
                 # Create a serializable copy of the message for our message history
                 assistant_message_dict = {
                     "role": "assistant",
@@ -337,7 +427,38 @@ class ToolProcessor:
                 if assistant_message.tool_calls:
                     for tc in assistant_message.tool_calls:
                         tool_name = tc.function.name
-                        tool_args = json.loads(tc.function.arguments)
+                        try:
+                            tool_args = json.loads(tc.function.arguments)
+                        except json.JSONDecodeError as json_err:
+                            # Attempt to repair common JSON issues
+                            try:
+                                # Log the original error position for debugging
+                                logging.error(f"JSON parse error at position {json_err.pos}: {json_err}")
+                                
+                                # Log a snippet of the problematic JSON for context
+                                error_pos = json_err.pos
+                                start_pos = max(0, error_pos - 20)
+                                end_pos = min(len(tc.function.arguments), error_pos + 20)
+                                context_str = tc.function.arguments[start_pos:end_pos]
+                                logging.error(f"JSON context around error: '{context_str}'")
+                                
+                                # Try to repair common issues
+                                fixed_json = tc.function.arguments
+                                
+                                # If missing colon, try to fix
+                                if "Expecting ':' delimiter" in str(json_err):
+                                    # Insert a colon at the error position
+                                    fixed_json = fixed_json[:error_pos] + ":" + fixed_json[error_pos:]
+                                
+                                # Attempt to parse the fixed JSON
+                                tool_args = json.loads(fixed_json)
+                                logging.info(f"Successfully repaired malformed JSON for tool: {tool_name}")
+                            except Exception as repair_err:
+                                # If repair fails, use empty dict and log detailed error
+                                logging.error(f"Failed to repair JSON for tool {tool_name}: {repair_err}")
+                                logging.error(f"Original arguments: {tc.function.arguments}")
+                                tool_args = {}
+                        
                         tool_usage.append({
                             "tool": tool_name,
                             "args": tool_args
@@ -377,7 +498,48 @@ class ToolProcessor:
                     break
             except Exception as e:
                 logging.error(f"Error in LLM tool processing: {str(e)}")
-                raise
+                
+                # Log the exception details to the dedicated LLM log file
+                llm_logger.error(f"Error processing LLM response: {str(e)}")
+                
+                # For JSONDecodeError, log more details about the error
+                if isinstance(e, json.JSONDecodeError):
+                    # Get the most recent assistant message with tool calls if available
+                    recent_assistant_msg = next((msg for msg in reversed(current_messages) 
+                                               if msg.get('role') == 'assistant' and 'tool_calls' in msg), None)
+                    
+                    if recent_assistant_msg and 'tool_calls' in recent_assistant_msg:
+                        llm_logger.error(f"JSON error position: {e.pos}")
+                        for i, tc in enumerate(recent_assistant_msg['tool_calls']):
+                            if 'function' in tc:
+                                func_name = tc['function'].get('name', 'unknown')
+                                args = tc['function'].get('arguments', '')
+                                
+                                # Log the problematic JSON with context around the error
+                                error_pos = e.pos
+                                start_pos = max(0, error_pos - 100)
+                                end_pos = min(len(args), error_pos + 100)
+                                
+                                llm_logger.error(f"Tool #{i+1}: {func_name}")
+                                llm_logger.error(f"Error location (position {error_pos}):")
+                                llm_logger.error(f"JSON context: {args[start_pos:end_pos]}")
+                                
+                                # Save the full problematic JSON to the log file
+                                llm_logger.error(f"Full JSON arguments:")
+                                llm_logger.error(args)
+                    
+                    # Create a generic error message for the LLM
+                    error_message = {
+                        "role": "tool",
+                        "tool_call_id": "error",
+                        "name": "error",
+                        "content": f"Error in processing tool call: {str(e)}"
+                    }
+                    current_messages.append(error_message)
+                    continue
+                else:
+                    # For other types of errors, re-raise
+                    raise
         
         return current_messages, tool_usage
         

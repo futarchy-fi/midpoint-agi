@@ -350,10 +350,7 @@ Your response must be in JSON format with these fields:
             logging.error(f"Failed to get memory diff: {e}")
             memory_diff_content = f"Error getting memory diff: {str(e)}"
         
-        # Prepare additional evidence if needed
-        additional_evidence = []
-
-        # If memory hashes are different but no diff content, provide additional context
+        # If memory hashes are different but no diff content, fail validation immediately
         if (hasattr(goal, 'initial_state') and goal.initial_state and 
             hasattr(goal.initial_state, 'memory_hash') and goal.initial_state.memory_hash and
             hasattr(goal, 'current_state') and goal.current_state and
@@ -361,28 +358,30 @@ Your response must be in JSON format with these fields:
             goal.initial_state.memory_hash != goal.current_state.memory_hash and
             (memory_diff_content == "No memory changes detected" or memory_diff_content.startswith("Error getting memory diff"))):
             
-            additional_evidence.append(f"Memory hash changed from {goal.initial_state.memory_hash} to {goal.current_state.memory_hash}")
+            logging.error(f"Memory hash changed from {goal.initial_state.memory_hash} to {goal.current_state.memory_hash} but diffs could not be obtained correctly")
             
-            # Try to get changed files directly
-            try:
-                memory_repo_path = execution_result.repository_path
-                if hasattr(goal.initial_state, 'memory_repository_path') and goal.initial_state.memory_repository_path:
-                    memory_repo_path = goal.initial_state.memory_repository_path
-                    
-                cmd = ["git", "diff", "--name-only", goal.initial_state.memory_hash, goal.current_state.memory_hash]
-                proc = subprocess.run(
-                    cmd,
-                    cwd=memory_repo_path,
-                    capture_output=True,
-                    text=True
+            # Auto-fail validation
+            failed_criteria = []
+            for criterion in goal.validation_criteria:
+                failed_criteria.append(
+                    CriterionResult(
+                        criterion=criterion,
+                        passed=False,
+                        reasoning="Validation failed because memory diffs could not be obtained correctly",
+                        evidence=[f"Memory hash changed from {goal.initial_state.memory_hash} to {goal.current_state.memory_hash} but diff tools failed to show changes"]
+                    )
                 )
-                
-                if proc.returncode == 0 and proc.stdout.strip():
-                    changed_files = proc.stdout.strip().split("\n")
-                    additional_evidence.append(f"Changed files: {', '.join(changed_files)}")
-            except Exception as e:
-                logging.error(f"Failed to get direct changed files: {e}")
-
+            return ValidationResult(
+                goal_id=goal.id,
+                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                criteria_results=failed_criteria,
+                score=0.0,
+                validated_by="System",
+                automated=True,
+                repository_state=State(**repo_info) if repo_info else None,
+                reasoning="Memory diffs could not be obtained correctly"
+            )
+        
         # Prepare context for LLM
         messages = [
             {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
@@ -410,7 +409,7 @@ You are tasked with validating whether the execution results match the goal crit
 #### Memory Changed Files
 {json.dumps(memory_diff_files, indent=2) if memory_diff_files else "No files changed in memory"}
 
-{("#### Additional Evidence\n" + "\n".join(additional_evidence)) if additional_evidence else ""}
+{additional_evidence_section}
 
 Evaluate the evidence above to determine if the goal's validation criteria are met. 
 Do not perform any new actions or tool calls to satisfy the criteria.
