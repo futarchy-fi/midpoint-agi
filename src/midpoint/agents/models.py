@@ -88,6 +88,9 @@ class ExecutionResult:
     error_message: Optional[str] = None  # Error message if execution failed
     execution_time: float = 0.0  # Time taken to execute the task
     repository_path: Optional[str] = None  # Path to the repository
+    memory_repository_path: Optional[str] = None  # Path to the memory repository
+    task_id: Optional[str] = None  # ID of the task that was executed
+    goal_id: Optional[str] = None  # ID of the goal that was executed
     validation_results: List[str] = field(default_factory=list)  # Results of validation steps
     final_state: Optional['State'] = None  # Final state after execution (git_hash, memory_hash, etc.)
 

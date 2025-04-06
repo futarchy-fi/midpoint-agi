@@ -167,6 +167,32 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
     return str(validation_file)
 
 
+async def save_validation_context(goal_id: str, timestamp: str, messages: List[Dict[str, Any]]) -> str:
+    """
+    Save the full validation context (including prompts) to a separate file.
+    
+    Args:
+        goal_id: ID of the goal being validated
+        timestamp: Timestamp to use in the filename
+        messages: The messages including system and user prompts sent to the LLM
+        
+    Returns:
+        str: Path to the saved context file
+    """
+    # Create validation history directory if it doesn't exist
+    goal_path = ensure_goal_dir()
+    validation_dir = goal_path / "validation_history"
+    if not validation_dir.exists():
+        validation_dir.mkdir()
+    
+    # Save validation context
+    context_file = validation_dir / f"{goal_id}_{timestamp}_context.json"
+    with open(context_file, 'w') as f:
+        json.dump(messages, f, indent=2)
+    
+    return str(context_file)
+
+
 async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any], 
                                      debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
     """
@@ -202,10 +228,49 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
     # Create a Goal object from the goal data
     from midpoint.agents.models import Goal, ExecutionResult, State
     
+    # Get memory repository path and hash information
+    memory_repo_path = None
+    memory_hash = None
+    initial_memory_hash = None
+    
+    if "initial_state" in goal_data and "memory_repository_path" in goal_data["initial_state"]:
+        memory_repo_path = goal_data["initial_state"]["memory_repository_path"]
+    elif "memory" in goal_data and "repository_path" in goal_data["memory"]:
+        memory_repo_path = goal_data["memory"]["repository_path"]
+    
+    if "current_state" in goal_data and "memory_hash" in goal_data["current_state"]:
+        memory_hash = goal_data["current_state"]["memory_hash"]
+    elif "memory" in goal_data and "hash" in goal_data["memory"]:
+        memory_hash = goal_data["memory"]["hash"]
+        
+    if "initial_state" in goal_data and "memory_hash" in goal_data["initial_state"]:
+        initial_memory_hash = goal_data["initial_state"]["memory_hash"]
+    elif "memory" in goal_data and "initial_hash" in goal_data["memory"]:
+        initial_memory_hash = goal_data["memory"]["initial_hash"]
+    
+    if debug and memory_repo_path:
+        print(f"Debug: Using memory repository path: {memory_repo_path}")
+    if debug and memory_hash:
+        print(f"Debug: Final memory hash: {memory_hash}")
+    if debug and initial_memory_hash:
+        print(f"Debug: Initial memory hash: {initial_memory_hash}")
+    
     goal = Goal(
         description=goal_data.get("description", ""),
         validation_criteria=criteria,
-        success_threshold=goal_data.get("success_threshold", 0.8)
+        success_threshold=goal_data.get("success_threshold", 0.8),
+        initial_state=State(
+            git_hash=goal_data.get("initial_state", {}).get("git_hash"),
+            memory_hash=initial_memory_hash,
+            repository_path=repo_path,
+            memory_repository_path=memory_repo_path
+        ),
+        current_state=State(
+            git_hash=current_hash,
+            memory_hash=memory_hash,
+            repository_path=repo_path,
+            memory_repository_path=memory_repo_path
+        )
     )
     
     # Create a mock ExecutionResult to use with the goal validator
@@ -213,7 +278,8 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         success=True,
         branch_name=branch_name,
         git_hash=current_hash,
-        repository_path=repo_path
+        repository_path=repo_path,
+        memory_repository_path=memory_repo_path
     )
     
     # Initialize the GoalValidator
@@ -227,14 +293,23 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         
         validation_result = await validator.validate_execution(goal, execution_result)
         
+        # Generate timestamp for file naming
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save the validation context (including system prompt and other prompts)
+        if hasattr(validator, 'last_validation_messages') and validator.last_validation_messages:
+            await save_validation_context(goal_id, timestamp, validator.last_validation_messages)
+            if not quiet:
+                print("Saved validation context to file")
+        
         # Convert the validation result to criteria_results format
         criteria_results = []
         for result in validation_result.criteria_results:
             criteria_results.append({
-                "criterion": result.get("criterion", ""),
-                "passed": result.get("passed", False),
-                "reasoning": result.get("reasoning", ""),
-                "evidence": result.get("evidence", [])
+                "criterion": result.criterion if hasattr(result, 'criterion') else "",
+                "passed": result.passed if hasattr(result, 'passed') else False,
+                "reasoning": result.reasoning if hasattr(result, 'reasoning') else "",
+                "evidence": result.evidence if hasattr(result, 'evidence') else []
             })
         
         if debug:
@@ -243,7 +318,8 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         
         return {
             "criteria_results": criteria_results,
-            "score": validation_result.score
+            "score": validation_result.score,
+            "timestamp": timestamp
         }
     except Exception as e:
         if debug:
@@ -262,7 +338,8 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         
         return {
             "criteria_results": criteria_results,
-            "score": 0.0
+            "score": 0.0,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         }
 
 

@@ -1,0 +1,227 @@
+JSON Extraction Test Results
+==========================
+
+Test 1
+------------------------------
+Mock Response:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully ...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved.",
+      "evidence": [
+        "Directory listing showing README.md, Makefile, and Python scripts"
+      ]
+    },
+    {
+      "criterion": "Potential files containing hardcoded LLM model configurations are identified.",
+      "passed": true,
+      "reasoning": "Files with potential hardcoded model configurations were identified.",
+      "evidence": [
+        "Found relevant files in the config directory"
+      ]
+    }
+  ]
+}
+
+Found 2 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+  Criterion 2: Potential files containing hardcoded LLM model configurations are identified.
+    Passed: True
+
+
+Test 2
+------------------------------
+Mock Response:
+```json
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was succe...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved.",
+      "evidence": [
+        "Directory listing showing README.md, Makefile, and Python scripts"
+      ]
+    },
+    {
+      "criterion": "Potential files containing hardcoded LLM model configurations are identified.",
+      "passed": true,
+      "reasoning": "Files with potential hardcoded model configurations were identified.",
+      "evidence": [
+        "Found relevant files in the config directory"
+      ]
+    }
+  ]
+}
+
+Found 2 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+  Criterion 2: Potential files containing hardcoded LLM model configurations are identified.
+    Passed: True
+
+
+Test 3
+------------------------------
+Mock Response:
+I've evaluated the goal criteria and here's my assessment:
+
+```json
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+     ...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved.",
+      "evidence": [
+        "Directory listing showing README.md, Makefile, and Python scripts"
+      ]
+    },
+    {
+      "criterion": "Potential files containing hardcoded LLM model configurations are identified.",
+      "passed": true,
+      "reasoning": "Files with potential hardcoded model configurations were identified.",
+      "evidence": [
+        "Found relevant files in the config directory"
+      ]
+    }
+  ]
+}
+
+Found 2 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+  Criterion 2: Potential files containing hardcoded LLM model configurations are identified.
+    Passed: True
+
+
+Test 4
+------------------------------
+Mock Response:
+```json
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was succe...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved, showing a comprehensive directory structure with various files and directories.",
+      "evidence": [
+        "The directory listing includes files such as 'README.md', 'Makefile', and multiple Python scripts in the 'agents' directory."
+      ]
+    }
+  ],
+  "score": 1.0,
+  "all_passed": true
+}
+
+Found 1 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+
+
+Test 5
+------------------------------
+Mock Response:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully ...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved.",
+      "evidence": [
+        "Directory listing showing README.md, Makefile, and Python scripts"
+      ]
+    }
+  ]
+}
+
+Found 1 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+
+
+Test 6
+------------------------------
+Mock Response:
+root: DEBUG: Raw LLM response content: ```json
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The li...
+
+Extracted JSON:
+{
+  "criteria_results": [
+    {
+      "criterion": "A list of all files in the repository is obtained.",
+      "passed": true,
+      "reasoning": "The list of files in the repository was successfully retrieved, showing a comprehensive directory structure with various files and directories.",
+      "evidence": [
+        "The directory listing includes files such as 'README.md', 'Makefile', and multiple Python scripts in the 'agents' directory."
+      ]
+    },
+    {
+      "criterion": "Potential files containing hardcoded LLM model configurations are identified based on file names and extensions.",
+      "passed": true,
+      "reasoning": "Files that might contain hardcoded LLM model configurations were identified by examining file names and extensions.",
+      "evidence": [
+        "Files like 'config.py', 'llm_config.py', and others with configuration-related names were identified as potential locations for hardcoded LLM model settings."
+      ]
+    }
+  ],
+  "score": 1.0,
+  "reasoning": "The goal was successfully achieved. All files in the repository were listed, and potential files containing hardcoded LLM model configurations were identified based on their names and extensions. The evidence shows that the system correctly identified configuration files that might contain LLM model settings."
+}
+
+Found 2 criteria results
+  Criterion 1: A list of all files in the repository is obtained.
+    Passed: True
+  Criterion 2: Potential files containing hardcoded LLM model configurations are identified based on file names and extensions.
+    Passed: True
+
+
