@@ -1673,7 +1673,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                     "repository_path": os.getcwd(),
                     "description": "State after goal decomposition",
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "memory_hash": updated_memory_hash,
+                    "memory_hash": memory_hash,  # Keep the parent's original memory hash
                     "memory_repository_path": memory_repo_path
                 }
             })
