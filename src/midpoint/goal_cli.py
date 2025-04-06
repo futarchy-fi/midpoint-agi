@@ -2254,6 +2254,13 @@ def main():
     validate_parser.add_argument("--auto", action="store_true", help="Perform automated validation using LLM")
     validate_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use for validation (with --auto)")
     
+    # goal validate-history <goal-id>
+    validate_history_parser = subparsers.add_parser("validate-history", help="Show validation history for a goal")
+    validate_history_parser.add_argument("goal_id", help="ID of the goal to show validation history for")
+    validate_history_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    validate_history_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    
+    # Add new subparser for updating parent from child
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
     update_parent_parser.add_argument('child_id', help='ID of the child goal/task to use for updating parent')
@@ -2796,6 +2803,116 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
         
     except Exception as e:
         logging.error(f"Failed to validate goal {goal_id}: {e}")
+        return False
+
+
+async def show_validation_history(goal_id: str, debug: bool = False, quiet: bool = False) -> bool:
+    """
+    Show validation history for a goal.
+    
+    Args:
+        goal_id: ID of the goal to show validation history for
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and result
+        
+    Returns:
+        bool: True if validation history was shown successfully, False otherwise
+    """
+    try:
+        # Configure logging
+        if debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+        elif quiet:
+            logging.getLogger().setLevel(logging.WARNING)
+        
+        # Import validation module for the function
+        from midpoint.validation import ensure_validation_history_dir
+        
+        # Get the validation history directory
+        validation_dir = ensure_validation_history_dir()
+        
+        # List all validation files for this goal
+        validation_files = list(validation_dir.glob(f"{goal_id}_*.json"))
+        
+        # Filter out context files
+        validation_records = [f for f in validation_files if not f.name.endswith("_context.json")]
+        
+        if not validation_records:
+            print(f"No validation history found for goal {goal_id}")
+            return True
+        
+        # Sort by timestamp (newest first)
+        validation_records.sort(reverse=True)
+        
+        print(f"\nValidation History for Goal {goal_id}:")
+        print("=" * 80)
+        
+        for i, record_file in enumerate(validation_records, 1):
+            try:
+                with open(record_file, 'r') as f:
+                    record = json.load(f)
+                
+                # Extract key information
+                timestamp = record.get("timestamp", "Unknown")
+                score = record.get("score", 0.0)
+                validated_by = record.get("validated_by", "Unknown")
+                git_hash = record.get("git_hash", "Unknown")
+                criteria_results = record.get("criteria_results", [])
+                
+                # Format timestamp for display
+                if timestamp != "Unknown":
+                    display_time = timestamp.replace("_", " ")
+                else:
+                    display_time = timestamp
+                
+                # Count passed criteria
+                passed = sum(1 for c in criteria_results if c.get("passed", False))
+                total = len(criteria_results)
+                
+                print(f"{i}. {display_time} - Score: {score:.2%} ({passed}/{total}) - By: {validated_by}")
+                print(f"   Git Hash: {git_hash[:8]}")
+                
+                # Ask if user wants to see details
+                if i < len(validation_records):  # Not the last record
+                    choice = input("   Show details? (y/n/q): ").lower().strip()
+                    if choice == 'q':
+                        break
+                    if choice == 'y':
+                        print("\n   Criteria Results:")
+                        for j, criterion in enumerate(criteria_results, 1):
+                            crit_text = criterion.get("criterion", "Unknown")
+                            passed = criterion.get("passed", False)
+                            reasoning = criterion.get("reasoning", "")
+                            
+                            print(f"   {j}. {crit_text}")
+                            print(f"      {'✅ Passed' if passed else '❌ Failed'}")
+                            if reasoning:
+                                print(f"      Reason: {reasoning}")
+                        print()
+                else:  # Last record, show details by default
+                    print("\n   Criteria Results:")
+                    for j, criterion in enumerate(criteria_results, 1):
+                        crit_text = criterion.get("criterion", "Unknown")
+                        passed = criterion.get("passed", False)
+                        reasoning = criterion.get("reasoning", "")
+                        
+                        print(f"   {j}. {crit_text}")
+                        print(f"      {'✅ Passed' if passed else '❌ Failed'}")
+                        if reasoning:
+                            print(f"      Reason: {reasoning}")
+                    print()
+                
+                print("-" * 80)
+                
+            except Exception as e:
+                if debug:
+                    logging.error(f"Error reading validation record {record_file}: {e}")
+                print(f"{i}. {record_file.name} - Error reading file")
+                
+        return True
+    
+    except Exception as e:
+        logging.error(f"Failed to show validation history: {e}")
         return False
 
 

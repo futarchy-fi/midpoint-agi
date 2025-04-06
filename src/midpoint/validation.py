@@ -22,6 +22,16 @@ from midpoint.goal_cli import (
 from midpoint.agents.goal_validator import GoalValidator
 
 
+# Function to ensure the validation history directory exists
+def ensure_validation_history_dir():
+    """Ensure the logs/validation_history directory exists."""
+    validation_dir = Path("logs/validation_history")
+    if not validation_dir.exists():
+        validation_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Created validation history directory: {validation_dir}")
+    return validation_dir
+
+
 async def get_repository_state(goal_id: str, debug: bool = False) -> Dict[str, Any]:
     """
     Gather comprehensive repository state information for validation.
@@ -133,10 +143,9 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
         str: Path to the saved validation record file
     """
     # Create validation history directory if it doesn't exist
-    goal_path = ensure_goal_dir()
-    validation_dir = goal_path / "validation_history"
+    validation_dir = Path("logs/validation_history")
     if not validation_dir.exists():
-        validation_dir.mkdir()
+        validation_dir.mkdir(parents=True, exist_ok=True)
     
     # Save validation record
     validation_file = validation_dir / f"{goal_id}_{validation_record['timestamp']}.json"
@@ -144,6 +153,7 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
         json.dump(validation_record, f, indent=2)
     
     # Update goal data with validation status
+    goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
     if goal_file.exists():
         try:
@@ -180,10 +190,9 @@ async def save_validation_context(goal_id: str, timestamp: str, messages: List[D
         str: Path to the saved context file
     """
     # Create validation history directory if it doesn't exist
-    goal_path = ensure_goal_dir()
-    validation_dir = goal_path / "validation_history"
+    validation_dir = Path("logs/validation_history")
     if not validation_dir.exists():
-        validation_dir.mkdir()
+        validation_dir.mkdir(parents=True, exist_ok=True)
     
     # Save validation context
     context_file = validation_dir / f"{goal_id}_{timestamp}_context.json"
