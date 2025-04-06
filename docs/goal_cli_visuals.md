@@ -11,13 +11,13 @@ The `goal tree` command shows the hierarchical structure of your goals and subgo
 ```
 Goal Tree:
 └── ✅ G1: Implement authentication system
-    ├── ✅ G1-S1: Implement user registration
-    │   └── 🔘 G1-S1-S1: Design registration form
-    ├── 🟠 G1-S2: Implement login/logout
-    │   ├── ✅ G1-S2-S1: Create login form
-    │   └── ✅ G1-S2-S2: Implement session management
-    └── ⚪ G1-S3: Implement password reset
-        └── 🔘 G1-S3-S1: Design password reset flow
+    ├── ✅ S1: Implement user registration
+    │   └── 🔘 S4: Design registration form
+    ├── 🟠 S2: Implement login/logout
+    │   ├── ✅ S5: Create login form
+    │   └── ✅ S6: Implement session management
+    └── ⚪ S3: Implement password reset
+        └── 🔘 S7: Design password reset flow
 
 Status Legend:
 ✅ Complete
@@ -34,19 +34,19 @@ The `goal status` command provides a detailed view of the completion status with
 Goal Status:
 ✅ G1: Implement authentication system
    Completed: 20250401_143022
-   Merged: G1-S1 at 20250401_142800
-   Merged: G1-S2 at 20250401_143000
-  ✅ G1-S1: Implement user registration
+   Merged: S1 at 20250401_142800
+   Merged: S2 at 20250401_143000
+  ✅ S1: Implement user registration
      Completed: 20250330_091522
-    🔘 G1-S1-S1: Design registration form
-  🟠 G1-S2: Implement login/logout
+    🔘 S4: Design registration form
+  🟠 S2: Implement login/logout
      Completed: 20250331_161034
-    ✅ G1-S2-S1: Create login form
+    ✅ S5: Create login form
        Completed: 20250331_142210
-    ✅ G1-S2-S2: Implement session management
+    ✅ S6: Implement session management
        Completed: 20250331_155522
-  ⚪ G1-S3: Implement password reset
-    🔘 G1-S3-S1: Design password reset flow
+  ⚪ S3: Implement password reset
+    🔘 S7: Design password reset flow
 
 Status Legend:
 ✅ Complete
@@ -64,44 +64,44 @@ Goal History:
 =============
 [2025-03-28 10:15:22] G1: Implement authentication system
 
-[2025-03-28 14:30:45] G1-S1: Implement user registration
+[2025-03-28 14:30:45] S1: Implement user registration
   └── Subgoal of: G1
 
-[2025-03-28 16:20:11] G1-S2: Implement login/logout
+[2025-03-28 16:20:11] S2: Implement login/logout
   └── Subgoal of: G1
 
-[2025-03-29 09:45:33] G1-S3: Implement password reset
+[2025-03-29 09:45:33] S3: Implement password reset
   └── Subgoal of: G1
 
-[2025-03-29 11:22:18] G1-S1-S1: Design registration form
-  └── Subgoal of: G1-S1
+[2025-03-29 11:22:18] S4: Design registration form
+  └── Subgoal of: S1
 
-[2025-03-30 09:15:22] G1-S1: Implement user registration
+[2025-03-30 09:15:22] S1: Implement user registration
   └── Completed: 2025-03-30 09:15:22
 
-[2025-03-30 14:25:37] G1-S2-S1: Create login form
-  └── Subgoal of: G1-S2
+[2025-03-30 14:25:37] S5: Create login form
+  └── Subgoal of: S2
 
-[2025-03-30 15:40:22] G1-S2-S2: Implement session management
-  └── Subgoal of: G1-S2
+[2025-03-30 15:40:22] S6: Implement session management
+  └── Subgoal of: S2
 
-[2025-03-31 14:22:10] G1-S2-S1: Create login form
+[2025-03-31 14:22:10] S5: Create login form
   └── Completed: 2025-03-31 14:22:10
 
-[2025-03-31 15:55:22] G1-S2-S2: Implement session management
+[2025-03-31 15:55:22] S6: Implement session management
   └── Completed: 2025-03-31 15:55:22
 
-[2025-03-31 16:10:34] G1-S2: Implement login/logout
+[2025-03-31 16:10:34] S2: Implement login/logout
   └── Completed: 2025-03-31 16:10:34
 
-[2025-04-01 09:22:15] G1-S3-S1: Design password reset flow
-  └── Subgoal of: G1-S3
+[2025-04-01 09:22:15] S7: Design password reset flow
+  └── Subgoal of: S3
 
 [2025-04-01 14:28:00] G1: Implement authentication system
-  └── Merged: G1-S1 at 2025-04-01 14:28:00
+  └── Merged: S1 at 2025-04-01 14:28:00
 
 [2025-04-01 14:30:00] G1: Implement authentication system
-  └── Merged: G1-S2 at 2025-04-01 14:30:00
+  └── Merged: S2 at 2025-04-01 14:30:00
 
 [2025-04-01 14:30:22] G1: Implement authentication system
   └── Completed: 2025-04-01 14:30:22
@@ -124,21 +124,21 @@ digraph Goals {
   edge [fontname=Arial];
   
   "G1" [label="G1\nImplement authentication system", fillcolor=green];
-  "G1-S1" [label="G1-S1\nImplement user registration", fillcolor=green];
-  "G1-S1-S1" [label="G1-S1-S1\nDesign registration form", fillcolor=gray];
-  "G1-S2" [label="G1-S2\nImplement login/logout", fillcolor=orange];
-  "G1-S2-S1" [label="G1-S2-S1\nCreate login form", fillcolor=green];
-  "G1-S2-S2" [label="G1-S2-S2\nImplement session management", fillcolor=green];
-  "G1-S3" [label="G1-S3\nImplement password reset", fillcolor=lightblue];
-  "G1-S3-S1" [label="G1-S3-S1\nDesign password reset flow", fillcolor=gray];
+  "S1" [label="S1\nImplement user registration", fillcolor=green];
+  "S4" [label="S4\nDesign registration form", fillcolor=gray];
+  "S2" [label="S2\nImplement login/logout", fillcolor=orange];
+  "S5" [label="S5\nCreate login form", fillcolor=green];
+  "S6" [label="S6\nImplement session management", fillcolor=green];
+  "S3" [label="S3\nImplement password reset", fillcolor=lightblue];
+  "S7" [label="S7\nDesign password reset flow", fillcolor=gray];
   
-  "G1" -> "G1-S1";
-  "G1" -> "G1-S2";
-  "G1" -> "G1-S3";
-  "G1-S1" -> "G1-S1-S1";
-  "G1-S2" -> "G1-S2-S1";
-  "G1-S2" -> "G1-S2-S2";
-  "G1-S3" -> "G1-S3-S1";
+  "G1" -> "S1";
+  "G1" -> "S2";
+  "G1" -> "S3";
+  "S1" -> "S4";
+  "S2" -> "S5";
+  "S2" -> "S6";
+  "S3" -> "S7";
 }
 ```
 
@@ -162,15 +162,15 @@ When rendered, this graph shows:
           ┌────────────┬────┼────────────┐
           │            │                 │
 ┌─────────▼────────┐ ┌─▼──────────────┐ ┌▼───────────────┐
-│       G1-S1      │ │      G1-S2     │ │     G1-S3      │
+│       S1         │ │      S2        │ │     S3         │
 │ Implement user   │ │ Implement      │ │ Implement      │
 │ registration     │ │ login/logout   │ │ password reset │
 └────────┬─────────┘ └───────┬────────┘ └───────┬────────┘
          │                   │                  │
 ┌────────▼─────────┐    ┌────┴───────┐   ┌─────▼────────┐
-│    G1-S1-S1      │    │            │   │   G1-S3-S1   │
+│      S4          │    │            │   │     S7       │
 │ Design           │ ┌──▼───────┐ ┌──▼───┐ Design       │
-│ registration form│ │ G1-S2-S1 │ │G1-S2-S2│ password    │
+│ registration form│ │   S5     │ │  S6    │ password    │
 └──────────────────┘ │ Create   │ │Implement│ reset flow │
                      │ login    │ │session │ └────────────┘
                      │ form     │ │mgmt    │

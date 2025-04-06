@@ -13,10 +13,12 @@ pip install -e .
 ## Core Concepts
 
 ### Goal IDs
-Goals are identified using a simple ID system:
+Goals are identified using a simple flat ID system:
 - Top-level goals: `G1`, `G2`, etc.
-- Subgoals: `G1-S1`, `G1-S2`, etc.
-- Nested subgoals: `G1-S1-S1`, etc.
+- Subgoals: `S1`, `S2`, etc.
+- Tasks: `T1`, `T2`, etc.
+
+Each goal or task has a unique ID regardless of its position in the hierarchy. Parent-child relationships are tracked internally through metadata.
 
 ### Goal Metadata
 Goal metadata is stored in `.goal` directory with JSON files named after the goal ID.
@@ -145,6 +147,7 @@ For detailed examples of the visualization outputs, please see the [Goal CLI Vis
 ```bash
 goal convert
 ```
+This command converts any remaining goal files that might be using the legacy hierarchical ID system (like G1-S1-S1) to the new flat ID system (G1, S1, T1). This is primarily for backward compatibility and should only be needed if upgrading from an older version of the tool.
 
 #### Revert a goal's current state back to its initial state
 ```bash
@@ -172,22 +175,22 @@ goal new "Implement authentication system"
 
 # Create subgoals
 goal sub G1 "Implement user registration"
-# G1-S1 is created
+# S1 is created
 goal sub G1 "Implement login/logout"
-# G1-S2 is created
+# S2 is created
 goal sub G1 "Implement password reset"
-# G1-S3 is created
+# S3 is created
 
-# Create a nested subgoal
-goal sub G1-S1 "Design registration form"
-# G1-S1-S1 is created
+# Create a task under a subgoal
+goal sub S1 "Design registration form"
+# S4 is created (or goal task S1 "Design registration form" would create T1)
 ```
 
 ### Navigate the goal hierarchy
 
 ```bash
 # Go to a specific subgoal
-goal down G1-S1
+goal down S1
 
 # Go back to parent
 goal up
@@ -209,7 +212,7 @@ goal complete
 goal status
 
 # Merge a completed subgoal into its parent
-goal merge G1-S1
+goal merge S1
 ```
 
 ### Visualize the goal hierarchy
@@ -272,9 +275,9 @@ The goal management system is designed to work seamlessly with Git:
 
 1. Create a top-level goal: `goal new "Feature X"`
 2. Create subgoals: `goal sub G1 "Component A"`
-3. Navigate to a subgoal branch: `goal down G1-S1`
+3. Navigate to a subgoal branch: `goal down S1`
 4. Make changes on the subgoal branch
 5. Mark subgoal as complete: `goal complete`
 6. Navigate to parent: `goal up`
-7. Merge the subgoal: `goal merge G1-S1`
+7. Merge the subgoal: `goal merge S1`
 8. Repeat until the top-level goal is complete 

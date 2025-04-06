@@ -2522,10 +2522,16 @@ def revert_goal(goal_id):
             return False
     
     try:
+        # Clean up the description by removing the context about completed tasks
+        description = goal_data["description"]
+        if "\n\nContext: The following tasks have already been completed:" in description:
+            description = description.split("\n\nContext: The following tasks have already been completed:")[0]
+            logging.info(f"Removed context about completed tasks from goal description")
+        
         # Store essential fields that should be preserved
         preserved_fields = {
             "goal_id": goal_data["goal_id"],
-            "description": goal_data["description"],
+            "description": description,
             "parent_goal": goal_data.get("parent_goal"),
             "timestamp": goal_data["timestamp"],
             "is_task": goal_data.get("is_task", False),
