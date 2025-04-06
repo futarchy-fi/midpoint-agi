@@ -1645,6 +1645,19 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 
                 print(f"\nGoal file: {result['goal_file']}")
             
+            # Get updated memory hash after decomposition
+            updated_memory_hash = memory_hash
+            if memory_repo_path:
+                try:
+                    # Import the function to get the current hash
+                    from .agents.tools.git_tools import get_current_hash
+                    # Get the current hash in the memory repo
+                    updated_memory_hash = await get_current_hash(memory_repo_path)
+                    if updated_memory_hash != memory_hash:
+                        logging.info(f"Memory hash updated during decomposition: {updated_memory_hash[:8]}")
+                except Exception as e:
+                    logging.warning(f"Failed to get updated memory hash: {e}")
+            
             # Update the goal file with the decomposition result
             goal_data.update({
                 "goal_completed": result.get("goal_completed", False),
@@ -1660,7 +1673,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                     "repository_path": os.getcwd(),
                     "description": "State after goal decomposition",
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
+                    "memory_hash": updated_memory_hash,
                     "memory_repository_path": memory_repo_path
                 }
             })
@@ -1684,7 +1697,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 subgoal_id = generate_goal_id(goal_id, is_task=not result["can_be_decomposed"])
                 subgoal_file = goal_path / f"{subgoal_id}.json"
                 
-                # Create subgoal data with memory state from parent
+                # Create subgoal data with updated memory state
                 subgoal_data = {
                     "goal_id": subgoal_id,
                     "description": result["next_step"],
@@ -1700,7 +1713,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                         "repository_path": os.getcwd(),
                         "description": "Initial state before executing subgoal",
                         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                        "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
+                        "memory_hash": updated_memory_hash,
                         "memory_repository_path": memory_repo_path
                     },
                     "current_state": {
@@ -1708,7 +1721,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                         "repository_path": os.getcwd(),
                         "description": "Initial state before executing subgoal",
                         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                        "memory_hash": memory_hash or goal_data["current_state"].get("memory_hash"),
+                        "memory_hash": updated_memory_hash,
                         "memory_repository_path": memory_repo_path
                     }
                 }

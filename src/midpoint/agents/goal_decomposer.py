@@ -1474,6 +1474,15 @@ async def decompose_goal(
     # Get current git hash
     git_hash = await get_current_hash(repo_path)
     
+    # Get current memory hash if available
+    current_memory_hash = None
+    if context.state.memory_repository_path:
+        try:
+            current_memory_hash = await get_current_hash(context.state.memory_repository_path)
+            logging.info(f"Current memory hash after decomposition: {current_memory_hash[:8] if current_memory_hash else 'None'}")
+        except Exception as e:
+            logging.warning(f"Failed to get current memory hash: {str(e)}")
+    
     # Sanity check: Verify that the final git hash is a descendant of the initial git hash
     if initial_git_hash and git_hash and initial_git_hash != git_hash:
         is_descendant = await is_git_ancestor(
@@ -1495,7 +1504,9 @@ async def decompose_goal(
             "reasoning": subgoal_plan.reasoning,
             "git_hash": git_hash,
             "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-            "initial_git_hash": initial_git_hash
+            "initial_git_hash": initial_git_hash,
+            "memory_hash": current_memory_hash,  # Include current memory hash in the result
+            "memory_repository_path": context.state.memory_repository_path
         }
     else:
         return {
@@ -1509,7 +1520,9 @@ async def decompose_goal(
             "git_hash": git_hash,
             "is_task": not subgoal_plan.can_be_decomposed,
             "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-            "initial_git_hash": initial_git_hash
+            "initial_git_hash": initial_git_hash,
+            "memory_hash": current_memory_hash,  # Include current memory hash in the result
+            "memory_repository_path": context.state.memory_repository_path
         }
 
 # Create a separate async entry point for CLI to avoid nesting asyncio.run() calls
