@@ -55,9 +55,9 @@ class SearchCodeTool(Tool):
     
     @property
     def required_parameters(self) -> List[str]:
-        return ["repo_path", "pattern"]
+        return ["pattern"]
     
-    async def execute(self, repo_path: str, pattern: str, file_pattern: str = "*", max_results: int = 20) -> str:
+    async def execute(self, pattern: str, repo_path: str = ".", file_pattern: str = "*", max_results: int = 20) -> str:
         """Search the codebase for patterns."""
         # Sanitize inputs
         if not pattern:
