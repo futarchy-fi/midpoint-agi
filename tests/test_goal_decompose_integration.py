@@ -117,7 +117,7 @@ if __name__ == "__main__":
             "requires_further_decomposition": True,
             "git_hash": "abcdef123456",
             "memory_hash": None,
-            "goal_file": "G1-S1.json"
+            "goal_file": "S1.json"
         }
         mock_decompose_goal.return_value = mock_result
         
@@ -134,7 +134,7 @@ async def decompose_goal(**kwargs):
         "git_hash": "abcdef123456",
         "memory_hash": "memhash123456",
         "is_task": False,
-        "goal_file": "G1-S1.json",
+        "goal_file": "S1.json",
         "reasoning": "This is the reasoning for the implementation",
         "relevant_context": "This is the relevant context for implementation",
         "initial_memory_hash": "memhash123456",
@@ -200,7 +200,7 @@ if __name__ == "__main__":
             "- Code passes tests",
             "- Feature works as expected",
             "Requires further decomposition: Yes",
-            "Goal file: G1-S1.json"
+            "Goal file: S1.json"
         ]
         
         # Check for expected messages

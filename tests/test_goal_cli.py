@@ -204,7 +204,7 @@ def test_create_new_subgoal(goal_dir, capsys):
     parent_file = goal_dir / f"{parent_id}.json"
     parent_file.write_text(json.dumps({"goal_id": parent_id, "description": "Parent goal"}))
     
-    with patch('midpoint.goal_cli.generate_goal_id', return_value=f"{parent_id}-S1"):
+    with patch('midpoint.goal_cli.generate_goal_id', return_value="S1"):
         subgoal_id = create_new_subgoal(parent_id, description)
     
     # Check output
@@ -227,7 +227,7 @@ def test_list_goals(goal_dir, capsys):
     # Create test goal files
     goals = [
         {"goal_id": "G1", "description": "First goal", "parent_goal": ""},
-        {"goal_id": "G1-S1", "description": "First subgoal", "parent_goal": "G1"},
+        {"goal_id": "S1", "description": "First subgoal", "parent_goal": "G1"},
         {"goal_id": "G2", "description": "Second goal", "parent_goal": ""}
     ]
     
@@ -242,45 +242,35 @@ def test_list_goals(goal_dir, capsys):
     captured = capsys.readouterr()
     assert "Goal Tree:" in captured.out
     assert "• G1: First goal" in captured.out
-    assert "  • G1-S1: First subgoal" in captured.out
+    assert "  • S1: First subgoal" in captured.out
     assert "• G2: Second goal" in captured.out
 
 
 @pytest.mark.asyncio
 async def test_execute_task(goal_dir, capsys):
     """Test executing a task."""
-    # Create test task file
-    task_id = "G1-S1-T1"
+    # Create test goal files
+    goals = [
+        {"goal_id": "G1", "description": "First goal", "parent_goal": ""},
+        {"goal_id": "S1", "description": "First subgoal", "parent_goal": "G1"}
+    ]
+    
+    for goal in goals:
+        goal_file = goal_dir / f"{goal['goal_id']}.json"
+        goal_file.write_text(json.dumps(goal))
+    
+    # Create a task
+    task_id = "T1"
+    parent_id = "S1"
     task_file = goal_dir / f"{task_id}.json"
-    
-    # Create top-level goal file
-    top_level_id = "G1"
-    top_level_file = goal_dir / f"{top_level_id}.json"
-    
-    # Write test data
-    with open(task_file, 'w') as f:
-        json.dump({
-            "goal_id": task_id,
-            "description": "Test task",
-            "parent_goal": "G1-S1",
-            "timestamp": "20250324_000000",
-            "is_task": True,
-            "requires_further_decomposition": False,
-            "initial_state": {
-                "git_hash": "abcdef123456",
-                "repository_path": "/test/repo",
-                "description": "Initial state",
-                "timestamp": "20250324_000000"
-            }
-        }, f)
-    
-    with open(top_level_file, 'w') as f:
-        json.dump({
-            "goal_id": top_level_id,
-            "description": "Test goal",
-            "branch_name": "goal-G1",
-            "timestamp": "20250324_000000"
-        }, f)
+    task_data = {
+        "goal_id": task_id,
+        "description": "First task",
+        "parent_goal": parent_id,
+        "is_task": True,
+        "validation_criteria": ["Task should be completed"]
+    }
+    task_file.write_text(json.dumps(task_data))
     
     # Mock git commands
     with patch('subprocess.run') as mock_run, patch('midpoint.goal_cli.get_current_branch') as mock_get_branch:
@@ -326,7 +316,15 @@ async def test_execute_task(goal_dir, capsys):
             assert mock_run.call_args_list[1][0][0] == ["git", "checkout", "goal-G1"]
             assert mock_run.call_args_list[2][0][0] == ["git", "checkout", "main"]
             
+            # Check that git checkout was called correctly
+            mock_run.assert_called_with(
+                ["git", "checkout", "goal-S1"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
             # Check output
             captured = capsys.readouterr()
-            assert "Task G1-S1-T1 executed successfully" in captured.out
+            assert "Task T1 executed successfully" in captured.out
             assert "Task completed successfully" in captured.out 

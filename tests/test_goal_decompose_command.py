@@ -114,7 +114,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
                 "User can log in with correct credentials"
             ],
             "requires_further_decomposition": True,
-            "goal_file": ".goal/G1-S1.json"
+            "goal_file": ".goal/S1.json"
         }
         mock_decompose_goal.return_value = mock_result
         
@@ -132,7 +132,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             }, f)
         
         # Then create the subgoal file
-        self.test_goal_id = "G1-S1"
+        self.test_goal_id = "S1"
         self.test_goal_file = self.test_dir / f"{self.test_goal_id}.json"
         
         with open(self.test_goal_file, 'w') as f:
@@ -162,7 +162,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
                     "User can log in with correct credentials"
                 ],
                 "requires_further_decomposition": True,
-                "goal_file": ".goal/G1-S1.json"
+                "goal_file": ".goal/S1.json"
             }
 
             # Create a MagicMock for subprocess.run that returns different results based on the command

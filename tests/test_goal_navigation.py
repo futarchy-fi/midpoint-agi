@@ -237,9 +237,9 @@ def test_list_checkpoints(git_repo, capsys):
 def test_go_to_parent_goal(git_repo, mock_subprocess_run):
     """Test going to parent goal."""
     # Mock get_current_branch
-    with patch('midpoint.goal_cli.get_current_branch', return_value="goal-G1-S1-test"):
+    with patch('midpoint.goal_cli.get_current_branch', return_value="goal-S1-test"):
         # Mock get_goal_id_from_branch
-        with patch('midpoint.goal_cli.get_goal_id_from_branch', return_value="G1-S1"):
+        with patch('midpoint.goal_cli.get_goal_id_from_branch', return_value="S1"):
             # Mock get_parent_goal_id
             with patch('midpoint.goal_cli.get_parent_goal_id', return_value="G1"):
                 # Mock find_branch_for_goal
@@ -256,39 +256,39 @@ def test_go_to_parent_goal(git_repo, mock_subprocess_run):
 
 
 def test_go_to_child(git_repo, mock_subprocess_run):
-    """Test going to a specific subgoal."""
-    # Patch GOAL_DIR
-    with patch('midpoint.goal_cli.GOAL_DIR', str(git_repo.goal_dir)):
-        # Mock find_branch_for_goal
-        with patch('midpoint.goal_cli.find_branch_for_goal', return_value="goal-G1-S1-test"):
-            assert go_to_child("S1") is True
-            
-            # Check that git checkout was called correctly
-            mock_subprocess_run.assert_called_with(
-                ["git", "checkout", "goal-G1-S1-test"],
-                check=True,
-                capture_output=True,
-                text=True
-            )
+    """Test going to child goal."""
+    # Mock find_branch_for_goal
+    with patch('midpoint.goal_cli.find_branch_for_goal', return_value="goal-S1-test"):
+        assert go_to_child("S1") is True
+        
+        # Check that git checkout was called correctly
+        mock_subprocess_run.assert_called_with(
+            ["git", "checkout", "goal-S1-test"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
 
 
 def test_go_to_root_goal(git_repo, mock_subprocess_run):
-    """Test going to the root goal."""
+    """Test going to root goal."""
     # Mock get_current_branch
-    with patch('midpoint.goal_cli.get_current_branch', return_value="goal-G1-S1-S1-test"):
+    with patch('midpoint.goal_cli.get_current_branch', return_value="goal-S2-test"):
         # Mock get_goal_id_from_branch
-        with patch('midpoint.goal_cli.get_goal_id_from_branch', return_value="G1-S1-S1"):
-            # Mock find_branch_for_goal
-            with patch('midpoint.goal_cli.find_branch_for_goal', return_value="goal-G1-test"):
-                assert go_to_root_goal() is True
-                
-                # Check that git checkout was called correctly
-                mock_subprocess_run.assert_called_with(
-                    ["git", "checkout", "goal-G1-test"],
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
+        with patch('midpoint.goal_cli.get_goal_id_from_branch', return_value="S2"):
+            # Mock get_parent_goal_id
+            with patch('midpoint.goal_cli.get_parent_goal_id', side_effect=["S1", "G1", ""]):
+                # Mock find_branch_for_goal
+                with patch('midpoint.goal_cli.find_branch_for_goal', return_value="goal-G1-test"):
+                    assert go_to_root_goal() is True
+                    
+                    # Check that git checkout was called correctly
+                    mock_subprocess_run.assert_called_with(
+                        ["git", "checkout", "goal-G1-test"],
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
 
 
 def test_list_subgoals(git_repo, capsys):

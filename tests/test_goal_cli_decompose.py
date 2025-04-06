@@ -102,7 +102,7 @@ class TestGoalCliDecompose(unittest.TestCase):
             "git_hash": "abcdef123456",
             "memory_hash": "abcdef123456",
             "is_task": False,
-            "goal_file": "G1-S1.json",
+            "goal_file": "S1.json",
             "reasoning": "This is the reasoning",
             "relevant_context": "This is the relevant context",
             "initial_memory_hash": "abcdef123456",
