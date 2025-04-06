@@ -57,8 +57,10 @@ class SearchCodeTool(Tool):
     def required_parameters(self) -> List[str]:
         return ["pattern"]
     
-    async def execute(self, pattern: str, repo_path: str = ".", file_pattern: str = "*", max_results: int = 20) -> str:
-        """Search the codebase for patterns."""
+    def execute(self, pattern: str, repo_path: str = ".", file_pattern: str = "*", max_results: int = 20) -> str:
+        """
+        Search code for the given pattern.
+        """
         # Sanitize inputs
         if not pattern:
             raise ValueError("Search pattern cannot be empty")
@@ -72,16 +74,16 @@ class SearchCodeTool(Tool):
         
         for search_method in search_methods:
             try:
-                result = await search_method(repo_path, pattern, file_pattern, max_results)
+                result = search_method(repo_path, pattern, file_pattern, max_results)
                 return result
             except Exception as e:
                 logging.debug(f"Search method {search_method.__name__} failed: {str(e)}")
                 continue
                 
         # If all methods fail, use a simple Python-based search
-        return await self._search_python(repo_path, pattern, file_pattern, max_results)
+        return self._search_python(repo_path, pattern, file_pattern, max_results)
     
-    async def _search_ripgrep(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
+    def _search_ripgrep(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
         """Search using ripgrep if available."""
         cmd = ["rg", "--no-heading", "--line-number", "--max-count", str(max_results)]
         
@@ -108,7 +110,7 @@ class SearchCodeTool(Tool):
             
         return f"Search results for '{pattern}':\n\n{result.stdout}"
     
-    async def _search_grep(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
+    def _search_grep(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
         """Search using grep if available."""
         # Prepare the file pattern
         file_glob = ""
@@ -135,7 +137,7 @@ class SearchCodeTool(Tool):
             
         return f"Search results for '{pattern}':\n\n{result.stdout}"
     
-    async def _search_findstr(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
+    def _search_findstr(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
         """Search using findstr on Windows."""
         # Prepare the file pattern
         file_glob = "*.*"
@@ -165,7 +167,7 @@ class SearchCodeTool(Tool):
         
         return f"Search results for '{pattern}':\n\n" + "\n".join(lines)
     
-    async def _search_python(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
+    def _search_python(self, repo_path: str, pattern: str, file_pattern: str, max_results: int) -> str:
         """Fallback Python-based search implementation."""
         results = []
         pattern_re = re.compile(pattern)

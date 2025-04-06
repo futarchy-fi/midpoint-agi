@@ -64,7 +64,7 @@ except Exception as e:
             print("Using fallback get_repo_path")
         return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
     
-    async def store_memory_document(content, category, metadata=None, repo_path=None, memory_hash=None):
+    def store_memory_document(content, category, metadata=None, repo_path=None, memory_hash=None):
         """Fallback implementation to store a document."""
         logging.warning("Using fallback store_memory_document implementation.")
         # Get repository path
@@ -94,7 +94,7 @@ import json
 import asyncio
 import argparse
 from typing import List, Dict, Any, Optional, Tuple
-from openai import AsyncOpenAI
+from openai import OpenAI
 from midpoint.agents.models import State, Goal, SubgoalPlan, TaskContext, MemoryState
 from midpoint.agents.tools import initialize_all_tools
 from midpoint.agents.tools.processor import ToolProcessor
@@ -336,7 +336,7 @@ class GoalDecomposer:
             raise ValueError("OpenAI API key not found in config or environment")
         
         # Initialize OpenAI client
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
         
         # Initialize tool processor
         initialize_all_tools()
@@ -348,7 +348,7 @@ class GoalDecomposer:
         # Generate system prompt with dynamic tool descriptions
         self.system_prompt = self._generate_system_prompt()
         
-    async def _save_interaction_to_memory(
+    def _save_interaction_to_memory(
             self,
             interaction_type: str,
             content: str,
@@ -400,7 +400,7 @@ Timestamp: {timestamp}
                 category = f"goal_decomposition_{safe_goal_name}"
             
             # Store document using high-level store_memory_document
-            result = await store_memory_document(
+            result = store_memory_document(
                 content=doc_content,
                 category=category,
                 metadata={
@@ -429,7 +429,7 @@ Timestamp: {timestamp}
             logging.info(f"  Repository path: {repo_path}")
             return None
 
-    async def _save_conversation_to_memory(
+    def _save_conversation_to_memory(
         self,
         messages: List[Dict[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
@@ -478,7 +478,7 @@ Timestamp: {timestamp}
                 category = f"goal_decomposition_{safe_goal_name}"
             
             # Store document using high-level store_memory_document
-            result = await store_memory_document(
+            result = store_memory_document(
                 content=content,
                 category=category,
                 metadata={
@@ -608,7 +608,7 @@ You have access to these tools:
             logging.error(f"Error retrieving memory context: {str(e)}")
             return ""
 
-    async def determine_next_step(self, context: TaskContext, setup_logging=False, debug=False, quiet=False) -> SubgoalPlan:
+    def determine_next_step(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False, memory_repo_path: Optional[str] = None) -> SubgoalPlan:
         """Determine the next step toward achieving the goal."""
         # Set up logging if requested (only when called directly, not from orchestrator)
         if setup_logging:
@@ -692,7 +692,7 @@ You have access to these tools:
         
         try:
             # Get the next step from the model
-            message, tool_calls = await self.tool_processor.run_llm_with_tools(
+            message, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages,
                 model=self.model,
                 validate_json_format=True,
@@ -741,7 +741,7 @@ You have access to these tools:
                     "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
                 })
                 # Get a new response from the model
-                message, tool_calls = await self.tool_processor.run_llm_with_tools(
+                message, tool_calls = self.tool_processor.run_llm_with_tools(
                     messages,
                     model=self.model,
                     validate_json_format=True,
@@ -823,7 +823,7 @@ You have access to these tools:
                 logging.debug("API call history: %s", json.dumps(serialized_messages, indent=2))
                 
                 # Save only the complete conversation to memory
-                await self._save_conversation_to_memory(
+                self._save_conversation_to_memory(
                     messages,
                     metadata={
                         "goal": context.goal.description, 
@@ -885,7 +885,7 @@ You have access to these tools:
             
         except Exception as e:
             # Log the error to memory
-            await self._save_conversation_to_memory(
+            self._save_conversation_to_memory(
                 messages,
                 metadata={
                     "error_type": type(e).__name__, 
@@ -1182,7 +1182,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         
         return filename
 
-async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
+def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
     """Validate that the repository is in a good state for goal decomposition."""
     logging.info("Validating repository state for path: %s", repo_path)
     
@@ -1201,19 +1201,17 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     
     # Check if the repository has uncommitted changes
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git", "status", "--porcelain",
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
             cwd=repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            capture_output=True,
+            check=False
         )
-        stdout, stderr = await process.communicate()
         
-        if process.returncode != 0:
-            raise ValueError(f"Failed to check git status: {stderr.decode()}")
-            
-        if stdout.decode().strip():
-            raise ValueError(f"Repository has uncommitted changes: {repo_path}")
+        if result.stdout and not skip_clean_check:
+            uncommitted = result.stdout.decode().strip()
+            warning_message = f"Repository has uncommitted changes:\n{uncommitted}"
+            logging.warning(warning_message)
     except Exception as e:
         logging.error("Failed to check git status: %s", str(e))
         raise ValueError(f"Failed to check git status: {str(e)}")
@@ -1221,7 +1219,7 @@ async def validate_repository_state(repo_path, git_hash=None, skip_clean_check=F
     # If git_hash is provided, check that it matches the current hash
     if git_hash:
         try:
-            current_hash = await get_current_hash(repo_path)
+            current_hash = get_current_hash(repo_path)
             if current_hash != git_hash:
                 raise ValueError(f"Repository hash mismatch: expected {git_hash}, got {current_hash}")
         except Exception as e:
@@ -1258,7 +1256,7 @@ def list_subgoal_files(logs_dir="logs"):
     subgoal_files.sort(key=lambda x: x[1] if x[1] else "", reverse=True)
     return subgoal_files
 
-async def load_input_file(input_file: str, context: TaskContext) -> None:
+def load_input_file(input_file: str, context: TaskContext) -> None:
     """Load goal details from an input file."""
     try:
         # Log the start of file loading
@@ -1364,7 +1362,7 @@ async def load_input_file(input_file: str, context: TaskContext) -> None:
         logging.error(f"Failed to load input file: {str(e)}")
         raise RuntimeError(f"Failed to load input file: {str(e)}")
 
-async def is_git_ancestor(repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
+def is_git_ancestor(repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
     """
     Check if one hash is an ancestor of another in a git repository.
     
@@ -1381,73 +1379,86 @@ async def is_git_ancestor(repo_path: str, ancestor_hash: str, descendant_hash: s
         
     try:
         # Use git merge-base --is-ancestor to check if one hash is an ancestor of another
-        process = await asyncio.create_subprocess_exec(
-            "git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash,
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash],
             cwd=repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            capture_output=True,
+            check=False
         )
         
-        # Wait for the command to complete
-        await process.communicate()
-        
         # The command returns 0 if it's an ancestor, 1 if not
-        return process.returncode == 0
+        return result.returncode == 0
     except Exception as e:
         logging.error(f"Error checking git ancestry: {str(e)}")
         return False
 
-async def decompose_goal(
+def decompose_goal(
     repo_path: str,
     goal: str,
-    input_file: Optional[str] = None,
-    parent_goal: Optional[str] = None,
-    goal_id: Optional[str] = None,
-    memory_repo: Optional[str] = None,
-    debug: bool = False,
+    validation_criteria: List[str] = None,
+    parent_goal_id: str = None,
+    max_iterations: int = 20,
+    goal_id: str = None,
+    memory_hash: str = None,
+    memory_repo_path: str = None,
+    no_commit: bool = False,
+    debug: bool = False, 
     quiet: bool = False,
     bypass_validation: bool = False,
-    logs_dir: str = "logs"
+    logs_dir: str = "logs",
+    input_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Asynchronous function to decompose a goal into subgoals.
+    Decompose a goal into subgoals.
     """
     # Configure logging - always use logs_dir for actual logs
     configure_logging(debug, quiet, logs_dir)
     
+    logging.info(f"Decomposing goal: {goal}")
+    
+    # Get the current git hash
+    from .tools.git_tools import get_current_hash
+    git_hash = get_current_hash(repo_path)
+    logging.info(f"Current git hash: {git_hash[:8]}")
+    
     # Initialize state and context
     state = State(
+        git_hash=git_hash,
         repository_path=repo_path,
         description="Initial state before goal decomposition",
-        memory_hash=None,  # Will be set from parent goal if available
-        memory_repository_path=memory_repo
+        memory_hash=memory_hash,  # Set from parameter
+        memory_repository_path=memory_repo_path
     )
     
-    # Create context before loading input file
+    # Create memory state
+    from .models import MemoryState
+    memory_state = MemoryState(
+        memory_hash=memory_hash,
+        repository_path=memory_repo_path
+    )
+    
+    # Create a TaskContext for the decomposition agent
     context = TaskContext(
-        state=state,
-        goal=Goal(description=goal),
-        memory_state=MemoryState(
-            memory_hash=state.memory_hash or "",  # Use empty string as default if None
-            repository_path=state.memory_repository_path or ""  # Use empty string as default if None
-        ),
         iteration=0,
+        goal=Goal(description=goal, validation_criteria=validation_criteria or []),
+        state=state,
+        memory_state=memory_state,  # Add memory_state here
         execution_history=[],
         metadata={}
     )
     
     # Load input file if specified - this will override state with values from the file
     if input_file:
-        await load_input_file(input_file, context)
+        load_input_file(input_file, context)
     else:
-        # Only set memory_repository_path if memory_repo is provided and we don't have input file
-        if memory_repo:
-            logging.info(f"Setting memory repository path to: {memory_repo}")
-            state.memory_repository_path = memory_repo
+        # Only set memory_repository_path if memory_repo_path is provided and we don't have input file
+        if memory_repo_path:
+            logging.info(f"Setting memory repository path to: {memory_repo_path}")
+            state.memory_repository_path = memory_repo_path
     
     # Add metadata for parent goals and goal IDs
-    if parent_goal:
-        context.metadata["parent_goal"] = parent_goal
+    if parent_goal_id:
+        context.metadata["parent_goal"] = parent_goal_id
     if goal_id:
         context.metadata["goal_id"] = goal_id
     
@@ -1457,7 +1468,7 @@ async def decompose_goal(
     # Validate repository state
     if not bypass_validation:
         try:
-            await validate_repository_state(repo_path)
+            validate_repository_state(repo_path)
         except Exception as e:
             logging.error(f"Error: {str(e)}")
             return {
@@ -1465,35 +1476,43 @@ async def decompose_goal(
                 "error": str(e)
             }
     
-    # Initialize goal decomposer
+    # Create the goal decomposer
     decomposer = GoalDecomposer()
     
     # Determine next step with logging enabled
-    subgoal_plan = await decomposer.determine_next_step(context, setup_logging=True, debug=debug, quiet=quiet)
+    subgoal_plan = decomposer.determine_next_step(context, setup_logging=True, debug=debug, quiet=quiet)
     
     # Get current git hash
-    git_hash = await get_current_hash(repo_path)
+    try:
+        from .tools.git_tools import get_current_hash
+        updated_git_hash = get_current_hash(repo_path)
+        if updated_git_hash != context.state.git_hash:
+            logging.info(f"Git hash changed during decomposition: {updated_git_hash[:8]}")
+            context.state.git_hash = updated_git_hash
+    except Exception as e:
+        logging.error(f"Failed to get current git hash: {str(e)}")
     
-    # Get current memory hash if available
-    current_memory_hash = None
-    if context.state.memory_repository_path:
+    # Get current memory state if needed
+    if memory_repo_path:
         try:
-            current_memory_hash = await get_current_hash(context.state.memory_repository_path)
-            logging.info(f"Current memory hash after decomposition: {current_memory_hash[:8] if current_memory_hash else 'None'}")
+            from .tools.git_tools import get_current_hash
+            current_memory_hash = get_current_hash(memory_repo_path)
+            logging.info(f"Updated memory hash: {current_memory_hash[:8]}")
+            context.memory_state.memory_hash = current_memory_hash
         except Exception as e:
-            logging.warning(f"Failed to get current memory hash: {str(e)}")
+            logging.error(f"Failed to get current memory hash: {str(e)}")
     
     # Sanity check: Verify that the final git hash is a descendant of the initial git hash
-    if initial_git_hash and git_hash and initial_git_hash != git_hash:
-        is_descendant = await is_git_ancestor(
+    if initial_git_hash and updated_git_hash and initial_git_hash != updated_git_hash:
+        is_descendant = is_git_ancestor(
             repo_path,
             initial_git_hash,
-            git_hash
+            updated_git_hash
         )
         if not is_descendant:
-            logging.warning(f"REPO ANCESTRY CHECK FAILED: Final git hash {git_hash} is not a descendant of initial git hash {initial_git_hash}")
+            logging.warning(f"REPO ANCESTRY CHECK FAILED: Final git hash {updated_git_hash} is not a descendant of initial git hash {initial_git_hash}")
         else:
-            logging.info(f"Repo ancestry check passed: {git_hash} is a descendant of {initial_git_hash}")
+            logging.info(f"Repo ancestry check passed: {updated_git_hash} is a descendant of {initial_git_hash}")
     
     # Return the decomposition result without creating any files
     if subgoal_plan.goal_completed:
@@ -1502,7 +1521,7 @@ async def decompose_goal(
             "goal_completed": True,
             "completion_summary": subgoal_plan.completion_summary,
             "reasoning": subgoal_plan.reasoning,
-            "git_hash": git_hash,
+            "git_hash": updated_git_hash,
             "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
             "initial_git_hash": initial_git_hash,
             "memory_hash": current_memory_hash,  # Include current memory hash in the result
@@ -1517,7 +1536,7 @@ async def decompose_goal(
             "reasoning": subgoal_plan.reasoning,
             "can_be_decomposed": subgoal_plan.can_be_decomposed,
             "relevant_context": subgoal_plan.relevant_context,
-            "git_hash": git_hash,
+            "git_hash": updated_git_hash,
             "is_task": not subgoal_plan.can_be_decomposed,
             "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
             "initial_git_hash": initial_git_hash,
@@ -1549,7 +1568,7 @@ async def async_main():
         input_file=args.input_file,
         parent_goal=args.parent_goal,
         goal_id=args.goal_id,
-        memory_repo=args.memory_repo,
+        memory_repo_path=args.memory_repo,
         debug=args.debug,
         quiet=args.quiet,
         bypass_validation=args.bypass_validation,
@@ -1561,4 +1580,41 @@ async def async_main():
 
 if __name__ == "__main__":
     # Only use asyncio.run at the top level
-    asyncio.run(async_main()) 
+    asyncio.run(async_main())
+
+# Convert to synchronous
+# Create a CLI entry point
+def main():
+    """Entry point for CLI"""
+    parser = argparse.ArgumentParser(description="Decompose a goal into subgoals")
+    parser.add_argument("repo_path", help="Path to the target repository")
+    parser.add_argument("goal", help="Description of the goal to achieve")
+    parser.add_argument("--input-file", help="Path to input file with goal context")
+    parser.add_argument("--parent-goal", help="Parent goal ID")
+    parser.add_argument("--goal-id", help="Goal ID")
+    parser.add_argument("--memory-repo", help="Path to memory repository")
+    parser.add_argument("--debug", action="store_true", help="Show debug output")
+    parser.add_argument("--quiet", action="store_true", help="Only show warnings and final result")
+    parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
+    parser.add_argument("--logs-dir", default="logs", help="Directory to store log files")
+    
+    args = parser.parse_args()
+    
+    # Call the function directly
+    result = decompose_goal(
+        repo_path=args.repo_path,
+        goal=args.goal,
+        input_file=args.input_file,
+        parent_goal_id=args.parent_goal,
+        goal_id=args.goal_id,
+        memory_repo_path=args.memory_repo,
+        debug=args.debug,
+        quiet=args.quiet,
+        bypass_validation=args.bypass_validation
+    )
+    
+    # Print result as JSON
+    print(json.dumps(result, indent=2))
+
+if __name__ == "__main__":
+    main() 

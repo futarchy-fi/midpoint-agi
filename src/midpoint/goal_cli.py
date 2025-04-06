@@ -1508,7 +1508,7 @@ def generate_graph():
     return True
 
 
-async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
+def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
     """Decompose an existing goal into subgoals."""
     # Get the goal file path
     goal_path = ensure_goal_dir()
@@ -1610,16 +1610,18 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
             logging.warning("No memory repository path found in context state")
         
         # Call the goal decomposer with the goal file as input
-        result = await agent_decompose_goal(
+        result = agent_decompose_goal(
             repo_path=os.getcwd(),
             goal=goal_data["description"],
-            parent_goal=goal_id,
-            goal_id=None,
-            memory_repo=memory_repo_path,
-            input_file=str(goal_file),  # Pass the goal file as input
+            validation_criteria=goal_data.get("validation_criteria", []),
+            parent_goal_id=goal_data.get("parent_goal", None),
+            goal_id=goal_id,
+            memory_hash=memory_hash,
+            memory_repo_path=memory_repo_path,
             debug=debug,
             quiet=quiet,
-            bypass_validation=bypass_validation
+            bypass_validation=bypass_validation,
+            logs_dir="logs"
         )
         
         if result["success"]:
@@ -1652,7 +1654,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                     # Import the function to get the current hash
                     from .agents.tools.git_tools import get_current_hash
                     # Get the current hash in the memory repo
-                    updated_memory_hash = await get_current_hash(memory_repo_path)
+                    updated_memory_hash = get_current_hash(memory_repo_path)
                     if updated_memory_hash != memory_hash:
                         logging.info(f"Memory hash updated during decomposition: {updated_memory_hash[:8]}")
                 except Exception as e:
@@ -1668,14 +1670,8 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
                 "can_be_decomposed": result.get("can_be_decomposed", result.get("requires_further_decomposition", True)),
                 "relevant_context": result.get("relevant_context", {}),
                 "decomposed": True,  # Mark the goal as decomposed
-                "current_state": {
-                    "git_hash": result["git_hash"],
-                    "repository_path": os.getcwd(),
-                    "description": "State after goal decomposition",
-                    "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "memory_hash": memory_hash,  # Keep the parent's original memory hash
-                    "memory_repository_path": memory_repo_path
-                }
+                # Don't update current_state automatically during decomposition
+                # The line that updated "current_state" has been removed
             })
             
             # If goal is completed, mark it as completed in the goal file
@@ -1765,7 +1761,7 @@ async def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_vali
     return False
 
 
-async def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
+def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
     """Execute a task using the TaskExecutor."""
     # Get the task file path
     goal_path = ensure_goal_dir()
@@ -1869,7 +1865,7 @@ async def execute_task(task_id, debug=False, quiet=False, bypass_validation=Fals
         
         # Create and run the executor
         executor = TaskExecutor()
-        result = await executor.execute_task(context)
+        result = executor.execute_task(context, task_data["description"])
         
         if result.success:
             # Get current git hash
@@ -2082,13 +2078,13 @@ def get_child_tasks(parent_id):
     return child_tasks
 
 
-async def async_main(args):
+def main_command(args):
     """Async entry point for CLI commands."""
     # Handle async commands
     if args.command == "decompose":
-        return await decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
+        return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
-        return await execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+        return execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -2136,7 +2132,7 @@ async def async_main(args):
     elif args.command == "update-parent":
         return update_parent_from_child(args.child_id)
     elif args.command == "validate-history":
-        return await show_validation_history(args.goal_id, args.debug, args.quiet)
+        return show_validation_history(args.goal_id, args.debug, args.quiet)
     else:
         return None
 
@@ -2280,66 +2276,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Handle async commands with a single asyncio.run call
-    if args.command == "decompose":
-        asyncio.run(async_main(args))
-    elif args.command == "execute":
-        asyncio.run(async_main(args))
-    elif args.command == "memory":
-        asyncio.run(show_memory_history(args.goal_id, args.debug, args.quiet))
-    elif args.command == "validate":
-        # Use the GoalValidator directly
-        asyncio.run(validate_goal(args.goal_id, args.debug, args.quiet, args.auto))
-    else:
-        # Handle synchronous commands directly
-        if args.command == "new":
-            create_new_goal(args.description)
-        elif args.command == "delete":
-            delete_goal(args.goal_id)
-        elif args.command == "sub":
-            create_new_subgoal(args.parent_id, args.description)
-        elif args.command == "task":
-            create_new_task(args.parent_id, args.description)
-        elif args.command == "list":
-            list_goals()
-        elif args.command == "back":
-            go_back_commits(args.steps)
-        elif args.command == "reset":
-            reset_to_commit(args.commit_id)
-        elif args.command == "checkpoint":
-            create_checkpoint(args.message)
-        elif args.command == "checkpoints":
-            list_checkpoints()
-        elif args.command == "up":
-            go_to_parent_goal()
-        elif args.command == "down":
-            go_to_child(args.subgoal_id)
-        elif args.command == "root":
-            go_to_root_goal()
-        elif args.command == "subs":
-            list_subgoals()
-        elif args.command == "complete":
-            mark_goal_complete()
-        elif args.command == "merge":
-            merge_subgoal(args.subgoal_id)
-        elif args.command == "status":
-            show_goal_status()
-        elif args.command == "tree":
-            show_goal_tree()
-        elif args.command == "history":
-            show_goal_history()
-        elif args.command == "graph":
-            generate_graph()
-        elif args.command == "convert":
-            convert_goal_ids()
-        elif args.command == "normalize":
-            normalize_goal_relationships()
-        elif args.command == "revert":
-            revert_goal(args.goal_id)
-        elif args.command == "update-parent":
-            update_parent_from_child(args.child_id)
-        else:
-            parser.print_help()
+    # Run the main function
+    main_command(args)
 
 
 def delete_goal(goal_id):
@@ -2625,201 +2563,7 @@ def update_parent_from_child(child_id):
         return False
 
 
-async def show_memory_history(goal_id: str, debug: bool = False, quiet: bool = False):
-    """Show memory history for a goal/subgoal/task."""
-    # Configure logging
-    if debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    elif quiet:
-        logging.getLogger().setLevel(logging.WARNING)
-    
-    # Get goal file path
-    goal_path = ensure_goal_dir() / f"{goal_id}.json"
-    if not goal_path.exists():
-        logging.error(f"Goal file not found: {goal_path}")
-        return False
-    
-    # Load goal data
-    try:
-        with open(goal_path, 'r') as f:
-            goal_data = json.load(f)
-    except Exception as e:
-        logging.error(f"Failed to load goal file: {e}")
-        return False
-    
-    # Get memory state from current_state
-    if "current_state" not in goal_data:
-        logging.error("No current state found in goal file")
-        return False
-    
-    current_state = goal_data["current_state"]
-    memory_hash = current_state.get("memory_hash")
-    memory_repo_path = current_state.get("memory_repository_path")
-    
-    if not memory_hash or not memory_repo_path:
-        logging.error("No memory hash or repository path found in goal state")
-        return False
-    
-    logging.info(f"Showing memory history for {goal_id}")
-    logging.info(f"Memory repository: {memory_repo_path}")
-    logging.info(f"Memory hash: {memory_hash[:8]}")
-    
-    try:
-        # Use git log to show history up to the memory hash
-        process = await asyncio.create_subprocess_exec(
-            "git", "log", "--oneline", memory_hash,
-            cwd=memory_repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            logging.error(f"Failed to get git log: {stderr.decode()}")
-            return False
-        
-        # Print the log
-        print("\nMemory Repository History:")
-        print("=" * 80)
-        print(stdout.decode())
-        print("=" * 80)
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Error showing memory history: {e}")
-        return False
-
-
-async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> bool:
-    """
-    Validate a goal by checking its completion criteria.
-    
-    Args:
-        goal_id: ID of the goal to validate
-        debug: Whether to show debug output
-        quiet: Whether to only show warnings and result
-        auto: Whether to use automated LLM validation
-        
-    Returns:
-        bool: True if validation succeeded, False otherwise
-    """
-    try:
-        # Import validation module
-        from midpoint.validation import (
-            validate_goal as validate_goal_core,
-        )
-        
-        # Call the validation function
-        success, result = await validate_goal_core(goal_id, debug, quiet, auto)
-        
-        if not success:
-            logging.error(f"Failed to validate goal {goal_id}")
-            return False
-        
-        if auto:
-            # We've already performed automated validation in the validation module
-            # and saved the record, now let's display the results
-            
-            # Check if we have validation results
-            if "criteria_results" in result and "score" in result:
-                # Extract key data
-                score = result["score"]
-                criteria_results = result["criteria_results"]
-                
-                # Display results
-                print(f"\nValidation Results for goal {goal_id}:")
-                print(f"Overall Score: {score:.2%}")
-                
-                passed_count = sum(1 for criteria in criteria_results if criteria.get("passed", False))
-                total_count = len(criteria_results)
-                print(f"Passed: {passed_count}/{total_count} criteria")
-                
-                # Get success threshold
-                success_threshold = 0.8  # Default
-                if "goal_data" in result:
-                    success_threshold = result["goal_data"].get("success_threshold", 0.8)
-                
-                if score >= success_threshold:
-                    print("\n✅ Goal validation passed!")
-                else:
-                    print("\n❌ Goal validation failed.")
-                
-                # Show individual criteria results
-                print("\nCriteria Results:")
-                for i, criterion_result in enumerate(criteria_results, 1):
-                    criterion = criterion_result["criterion"]
-                    passed = criterion_result["passed"]
-                    reasoning = criterion_result.get("reasoning", "")
-                    
-                    print(f"{i}. {criterion}")
-                    print(f"   {'✅ Passed' if passed else '❌ Failed'}")
-                    if reasoning:
-                        print(f"   Reason: {reasoning}")
-                
-                return True
-        else:
-            # Manual validation - handle user interaction
-            goal_data = result["goal_data"]
-            repo_state = result["repo_state"]
-            criteria = result["criteria"]
-            
-            # Display validation criteria
-            print(f"\nValidating goal {goal_id}: {goal_data['description']}")
-            print("\nValidation Criteria:")
-            for i, criterion in enumerate(criteria, 1):
-                print(f"{i}. {criterion}")
-            
-            # Manual validation
-            criteria_results = []
-            for i, criterion in enumerate(criteria, 1):
-                while True:
-                    response = input(f"\nDoes criterion {i} pass? (y/n/s): ").lower()
-                    if response in ['y', 'n', 's']:
-                        break
-                    print("Please enter 'y' for yes, 'n' for no, or 's' to skip")
-                
-                if response == 's':
-                    continue
-                    
-                passed = response == 'y'
-                reasoning = input("Reasoning (optional): ").strip()
-                evidence = input("Evidence (optional, comma-separated): ").strip()
-                
-                criteria_results.append({
-                    "criterion": criterion,
-                    "passed": passed,
-                    "reasoning": reasoning,
-                    "evidence": [e.strip() for e in evidence.split(",")] if evidence else []
-                })
-            
-            # Create and save validation record
-            validation_record = create_validation_record(goal_id, criteria_results, repo_state, auto=False)
-            await save_validation_record(goal_id, validation_record)
-            
-            # Display results
-            print("\nValidation Results:")
-            print(f"Overall Score: {validation_record['score']:.2%}")
-            
-            passed_count = sum(1 for result in criteria_results if result.get("passed", False))
-            total_count = len(criteria_results)
-            print(f"Passed: {passed_count}/{total_count} criteria")
-            
-            success_threshold = goal_data.get("success_threshold", 0.8)
-            if validation_record["score"] >= success_threshold:
-                print("\n✅ Goal validation passed!")
-            else:
-                print("\n❌ Goal validation failed.")
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Failed to validate goal {goal_id}: {e}")
-        return False
-
-
-async def show_validation_history(goal_id: str, debug: bool = False, quiet: bool = False) -> bool:
+def show_validation_history(goal_id, debug=False, quiet=False):
     """
     Show validation history for a goal.
     

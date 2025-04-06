@@ -203,7 +203,8 @@ class StoreMemoryDocumentTool(Tool):
     def required_parameters(self) -> List[str]:
         return ["content", "memory_hash"]
     
-    async def execute(self, content: str, memory_hash: str, category: str = "general", metadata: Dict[str, Any] = None, memory_repo_path: str = None) -> Dict[str, Any]:
+    def execute(self, content: str, category: str = "general", metadata: Dict[str, Any] = None, 
+                    memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
         """Store a document in the memory repository."""
         try:
             # Initialize metadata if None
@@ -274,7 +275,7 @@ class RetrieveMemoryDocumentsTool(Tool):
     def required_parameters(self) -> List[str]:
         return ["memory_hash"]
     
-    async def execute(self, memory_hash: str, category: str = None, limit: int = 10, memory_repo_path: str = None) -> Dict[str, Any]:
+    def execute(self, memory_hash: str, category: str = None, limit: int = 10, memory_repo_path: str = None) -> Dict[str, Any]:
         """Retrieve documents from the memory repository."""
         try:
             # Call the implementation with memory_hash
@@ -317,7 +318,8 @@ ToolRegistry.register_tool(store_memory_document_tool)
 ToolRegistry.register_tool(retrieve_memory_documents_tool)
 
 # Export tool functions
-async def store_memory_document(content: str, category: str, metadata: Dict[str, Any] = None, memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
+def store_memory_document(content: str, category: str, metadata: Dict[str, Any] = None, 
+                         memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
     """
     Store a document in the memory repository.
     
@@ -338,7 +340,7 @@ async def store_memory_document(content: str, category: str, metadata: Dict[str,
         else:
             raise ValueError("memory_hash is required - either as parameter or in metadata['memory_hash']")
             
-    return await store_memory_document_tool.execute(
+    return store_memory_document_tool.execute(
         content=content,
         category=category,
         metadata=metadata,
@@ -346,7 +348,7 @@ async def store_memory_document(content: str, category: str, metadata: Dict[str,
         memory_hash=memory_hash
     )
 
-async def retrieve_memory_documents(category: str = None, limit: int = 10, memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
+def retrieve_memory_documents(category: str = None, limit: int = 10, memory_repo_path: str = None, memory_hash: str = None) -> Dict[str, Any]:
     """
     Retrieve documents from the memory repository.
     
@@ -363,7 +365,7 @@ async def retrieve_memory_documents(category: str = None, limit: int = 10, memor
     if not memory_hash:
         raise ValueError("memory_hash is required")
         
-    return await retrieve_memory_documents_tool.execute(
+    return retrieve_memory_documents_tool.execute(
         category=category,
         limit=limit,
         memory_repo_path=memory_repo_path,

@@ -6,7 +6,6 @@ This module contains tools for interacting with Git repositories.
 
 import os
 import subprocess
-import asyncio
 import random
 import string
 from pathlib import Path
@@ -43,24 +42,23 @@ class GetCurrentHashTool(Tool):
     def required_parameters(self) -> List[str]:
         return []
     
-    async def execute(self, repo_path: Optional[str] = None) -> str:
+    def execute(self, repo_path: Optional[str] = None) -> str:
         """Get the current git hash."""
         # If no repo_path provided, use current directory
         if not repo_path:
             repo_path = os.getcwd()
             
-        result = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "HEAD",
-            cwd=repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await result.communicate()
-        
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to get current hash: {stderr.decode()}")
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True
+            )
             
-        return stdout.decode().strip()
+            return result.stdout.decode().strip()
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to get current hash: {e.stderr.decode()}")
 
 class CheckRepoStateTool(Tool):
     """Tool for checking the state of a Git repository."""
@@ -90,7 +88,7 @@ class CheckRepoStateTool(Tool):
     def required_parameters(self) -> List[str]:
         return ["repo_path"]
     
-    async def execute(self, repo_path: str) -> Dict[str, bool]:
+    def execute(self, repo_path: str) -> Dict[str, bool]:
         """Check the current state of the repository."""
         repo_path = Path(repo_path)
         if not repo_path.exists():
@@ -101,18 +99,17 @@ class CheckRepoStateTool(Tool):
             raise ValueError(f"Not a git repository: {repo_path}")
             
         # Get git status
-        result = await asyncio.create_subprocess_exec(
-            "git", "status", "--porcelain",
-            cwd=repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await result.communicate()
-        
-        if result.returncode != 0:
-            raise RuntimeError(f"Git status failed: {stderr.decode()}")
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True
+            )
             
-        status = stdout.decode()
+            status = result.stdout.decode()
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Git status failed: {e.stderr.decode()}")
         
         # Check for various states
         has_uncommitted = bool(status)
@@ -154,20 +151,19 @@ class GetCurrentBranchTool(Tool):
     def required_parameters(self) -> List[str]:
         return ["repo_path"]
     
-    async def execute(self, repo_path: str) -> str:
+    def execute(self, repo_path: str) -> str:
         """Get the current branch name."""
-        result = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await result.communicate()
-        
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to get current branch: {stderr.decode()}")
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True
+            )
             
-        return stdout.decode().strip()
+            return result.stdout.decode().strip()
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to get current branch: {e.stderr.decode()}")
 
 class CreateBranchTool(Tool):
     """Tool for creating a new Git branch."""
@@ -201,7 +197,7 @@ class CreateBranchTool(Tool):
             "required": ["repo_path", "branch_name"]
         }
     
-    async def execute(self, repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
+    def execute(self, repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
         """Create a new Git branch."""
         if not os.path.exists(repo_path):
             raise ValueError(f"Repository path does not exist: {repo_path}")
@@ -213,16 +209,14 @@ class CreateBranchTool(Tool):
         safe_branch_name = "".join(c if c.isalnum() or c in ['-', '_', '/'] else '_' for c in branch_name)
         
         # Check if branch exists
-        process = await asyncio.create_subprocess_exec(
-            "git", "branch", "--list", safe_branch_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
+        result = subprocess.run(
+            ["git", "branch", "--list", safe_branch_name],
+            cwd=repo_path,
+            capture_output=True,
+            check=False
         )
         
-        stdout, _ = await process.communicate()
-        
-        if stdout.decode().strip():
+        if result.stdout.decode().strip():
             # Branch exists, append timestamp
             import time
             timestamp = int(time.time())
@@ -233,23 +227,21 @@ class CreateBranchTool(Tool):
         if from_branch:
             cmd.append(from_branch)
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode().strip()
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=repo_path,
+                capture_output=True,
+                check=True
+            )
+            
+            return {
+                "branch_name": safe_branch_name,
+                "message": result.stdout.decode().strip()
+            }
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode().strip()
             raise ValueError(f"Failed to create branch: {error_msg}")
-        
-        return {
-            "branch_name": safe_branch_name,
-            "message": stdout.decode().strip()
-        }
 
 class CreateCommitTool(Tool):
     """Tool for creating a Git commit."""
@@ -284,7 +276,7 @@ class CreateCommitTool(Tool):
             "required": ["repo_path", "message"]
         }
     
-    async def execute(self, repo_path: str, message: str, add_all: bool = True) -> Dict[str, Any]:
+    def execute(self, repo_path: str, message: str, add_all: bool = True) -> Dict[str, Any]:
         """Create a Git commit."""
         if not os.path.exists(repo_path):
             raise ValueError(f"Repository path does not exist: {repo_path}")
@@ -294,60 +286,54 @@ class CreateCommitTool(Tool):
         
         # Add all files if requested
         if add_all:
-            process = await asyncio.create_subprocess_exec(
-                "git", "add", ".",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=repo_path
-            )
-            
-            _, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode().strip()
+            try:
+                subprocess.run(
+                    ["git", "add", "."],
+                    cwd=repo_path,
+                    capture_output=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.decode().strip()
                 raise ValueError(f"Failed to add files: {error_msg}")
         
         # Create commit
-        process = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", message,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode().strip()
-            if "nothing to commit" in error_msg:
-                return {
-                    "success": False,
-                    "error": "Nothing to commit",
-                    "hash": None
-                }
-            raise ValueError(f"Failed to create commit: {error_msg}")
-        
-        # Get the commit hash
-        process = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "HEAD",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode().strip()
+        try:
+            result = subprocess.run(
+                ["git", "commit", "-m", message],
+                cwd=repo_path,
+                capture_output=True,
+                check=False  # Don't raise error for commit failure
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.decode().strip()
+                if "nothing to commit" in error_msg:
+                    return {
+                        "success": False,
+                        "error": "Nothing to commit",
+                        "hash": None
+                    }
+                raise ValueError(f"Failed to create commit: {error_msg}")
+            
+            # Get the commit hash
+            hash_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True
+            )
+            
+            commit_hash = hash_result.stdout.decode().strip()
+            
+            return {
+                "success": True,
+                "hash": commit_hash,
+                "message": message
+            }
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode().strip()
             raise ValueError(f"Failed to get commit hash: {error_msg}")
-        
-        commit_hash = stdout.decode().strip()
-        
-        return {
-            "success": True,
-            "hash": commit_hash,
-            "message": message
-        }
 
 # Instantiate and register the tools
 get_current_hash_tool = GetCurrentHashTool()
@@ -363,7 +349,7 @@ ToolRegistry.register_tool(create_branch_tool)
 ToolRegistry.register_tool(create_commit_tool)
 
 # Export tool functions
-async def get_current_hash(repo_path: Optional[str] = None) -> str:
+def get_current_hash(repo_path: Optional[str] = None) -> str:
     """Get the current git hash of the repository.
     
     Args:
@@ -372,34 +358,34 @@ async def get_current_hash(repo_path: Optional[str] = None) -> str:
     Returns:
         The current git hash as a string.
     """
-    return await get_current_hash_tool.execute(repo_path=repo_path or os.getcwd())
+    return get_current_hash_tool.execute(repo_path=repo_path or os.getcwd())
 
-async def check_repo_state(repo_path: str) -> Dict[str, bool]:
+def check_repo_state(repo_path: str) -> Dict[str, bool]:
     """Check the current state of the git repository."""
-    return await check_repo_state_tool.execute(repo_path=repo_path)
+    return check_repo_state_tool.execute(repo_path=repo_path)
 
-async def get_current_branch(repo_path: str) -> str:
+def get_current_branch(repo_path: str) -> str:
     """Get the current git branch name."""
-    return await get_current_branch_tool.execute(repo_path=repo_path)
+    return get_current_branch_tool.execute(repo_path=repo_path)
 
-async def create_branch(repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
+def create_branch(repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
     """Create a new Git branch."""
-    return await create_branch_tool.execute(
+    return create_branch_tool.execute(
         repo_path=repo_path, 
         branch_name=branch_name, 
         from_branch=from_branch
     )
 
-async def create_commit(repo_path: str, message: str, add_all: bool = True) -> Dict[str, Any]:
+def create_commit(repo_path: str, message: str, add_all: bool = True) -> Dict[str, Any]:
     """Create a Git commit."""
-    return await create_commit_tool.execute(
+    return create_commit_tool.execute(
         repo_path=repo_path, 
         message=message, 
         add_all=add_all
     )
 
-async def get_repository_diff(repo_path: str, start_hash: str, end_hash: str, 
-                             max_size: int = 50000) -> Dict[str, Any]:
+def get_repository_diff(repo_path: str, start_hash: str, end_hash: str, 
+                        max_size: int = 50000) -> Dict[str, Any]:
     """
     Get a diff between two repository states.
     
@@ -425,55 +411,49 @@ async def get_repository_diff(repo_path: str, start_hash: str, end_hash: str,
     
     try:
         # Get list of changed files
-        cmd = ["git", "diff", "--name-only", start_hash, end_hash]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", start_hash, end_hash],
+            cwd=repo_path,
+            capture_output=True,
+            check=False
         )
-        stdout, stderr = await proc.communicate()
         
         if proc.returncode != 0:
-            error_msg = stderr.decode().strip()
+            error_msg = proc.stderr.decode().strip()
             raise ValueError(f"Failed to get changed files: {error_msg}")
         
         result["changed_files"] = [
-            file for file in stdout.decode().strip().split("\n") 
+            file for file in proc.stdout.decode().strip().split("\n") 
             if file.strip()
         ]
         
         # Get diff summary (stats)
-        cmd = ["git", "diff", "--stat", start_hash, end_hash]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
+        proc = subprocess.run(
+            ["git", "diff", "--stat", start_hash, end_hash],
+            cwd=repo_path,
+            capture_output=True,
+            check=False
         )
-        stdout, stderr = await proc.communicate()
         
         if proc.returncode != 0:
-            error_msg = stderr.decode().strip()
+            error_msg = proc.stderr.decode().strip()
             raise ValueError(f"Failed to get diff stats: {error_msg}")
         
-        result["diff_summary"] = stdout.decode().strip()
+        result["diff_summary"] = proc.stdout.decode().strip()
         
         # Get complete diff
-        cmd = ["git", "diff", start_hash, end_hash]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=repo_path
+        proc = subprocess.run(
+            ["git", "diff", start_hash, end_hash],
+            cwd=repo_path,
+            capture_output=True,
+            check=False
         )
-        stdout, stderr = await proc.communicate()
         
         if proc.returncode != 0:
-            error_msg = stderr.decode().strip()
+            error_msg = proc.stderr.decode().strip()
             raise ValueError(f"Failed to get diff: {error_msg}")
         
-        diff_content = stdout.decode()
+        diff_content = proc.stdout.decode()
         
         # Truncate if too large
         if len(diff_content) > max_size:

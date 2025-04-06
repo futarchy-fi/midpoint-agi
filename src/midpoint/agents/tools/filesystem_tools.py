@@ -47,8 +47,8 @@ class ListDirectoryTool(Tool):
             "required": ["path"]
         }
     
-    async def execute(self, path: str, pattern: str = "*", recursive: bool = False) -> Dict[str, Any]:
-        """List contents of a directory."""
+    def execute(self, path: str, pattern: str = "*", recursive: bool = False) -> Dict[str, Any]:
+        """List files and directories at the given path."""
         try:
             # Validate path exists
             if not os.path.exists(path):
@@ -148,8 +148,8 @@ class ReadFileTool(Tool):
             "required": ["file_path"]
         }
     
-    async def execute(self, file_path: str, start_line: int = 0, max_lines: int = 100) -> Dict[str, Any]:
-        """Read the contents of a file."""
+    def execute(self, file_path: str, start_line: int = 0, max_lines: int = 100) -> Dict[str, Any]:
+        """Read a file and return its contents."""
         try:
             # Validate file exists
             if not os.path.exists(file_path):

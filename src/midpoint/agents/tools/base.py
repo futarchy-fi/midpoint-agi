@@ -51,8 +51,11 @@ class Tool(ABC):
         return []
     
     @abstractmethod
-    async def execute(self, **kwargs) -> Union[str, Dict[str, Any]]:
-        """Execute the tool with the provided parameters."""
+    def execute(self, **kwargs) -> Any:
+        """
+        Execute the tool with the given parameters.
+        This method must be implemented by subclasses.
+        """
         pass
     
     async def log_execution(self, **kwargs) -> None:

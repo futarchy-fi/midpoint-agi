@@ -16,6 +16,7 @@ import re
 import os
 import logging
 from pathlib import Path
+import subprocess
 
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
 from .tools import initialize_all_tools
@@ -28,7 +29,7 @@ from .tools.web_tools import web_search, web_scrape
 from .tools.terminal_tools import run_terminal_cmd
 from .tools.memory_tools import store_memory_document, retrieve_memory_documents
 from .config import get_openai_api_key
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 # Set up logging
 logger = logging.getLogger('TaskExecutor')
@@ -126,7 +127,7 @@ class TaskExecutor:
             raise ValueError("Invalid OpenAI API key format")
             
         # Initialize OpenAI client
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
         
         # Initialize tool registry and processor
         self.tool_registry = ToolRegistry()
@@ -198,7 +199,7 @@ class TaskExecutor:
                 category = f"task_execution_{safe_task_name}"
             
             # Store in memory
-            result = await store_memory_document(
+            result = store_memory_document(
                 content=content,
                 category=category,
                 metadata={
@@ -285,7 +286,7 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
         
         return system_prompt
 
-    async def execute_task(self, context: TaskContext, task_description: Optional[str] = None) -> ExecutionResult:
+    def execute_task(self, context: TaskContext, task_description: Optional[str] = None) -> ExecutionResult:
         """
         Execute a task using LLM-driven decision making.
         
@@ -351,7 +352,7 @@ Memory Repository: {memory_path}
 Memory Hash: {memory_hash}"""
             
             # Execute the task
-            result = await self._execute_task_with_llm(user_prompt, context)
+            result = self._execute_task_with_llm(user_prompt, context)
             
             # Get the current memory state if available
             current_memory_hash = None
@@ -364,7 +365,7 @@ Memory Hash: {memory_hash}"""
             
             if memory_repo_path:
                 try:
-                    current_memory_hash = await get_current_hash(memory_repo_path)
+                    current_memory_hash = get_current_hash(memory_repo_path)
                     logger.info(f"Updated memory hash: {current_memory_hash[:8]}")
                 except Exception as e:
                     logger.warning(f"Failed to get current memory hash: {e}")
@@ -398,7 +399,7 @@ Memory Hash: {memory_hash}"""
                 error_message=str(e)
             )
 
-    async def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> str:
+    def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> str:
         """Execute a task using the LLM."""
         # Initialize messages
         messages = [
@@ -460,7 +461,7 @@ Memory Hash: {memory_hash}"""
         
         try:
             # Get the task execution plan from the model
-            message, tool_calls = await self.tool_processor.run_llm_with_tools(
+            message, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages,
                 model="gpt-4o-mini",
                 validate_json_format=True,
@@ -525,7 +526,7 @@ Memory Hash: {memory_hash}"""
                 git_hash = output_data.get("git_hash")
                 
                 # Save the conversation to memory - do this regardless of outcome
-                await self._save_interaction_to_memory(context)
+                self._save_interaction_to_memory(context)
                 
                 # Log successful outcome
                 logger.info(f"✅ Task execution summary: {output_data['summary']}")
@@ -545,7 +546,7 @@ Memory Hash: {memory_hash}"""
                 }
                 
                 # Always save the conversation, even on failure
-                await self._save_interaction_to_memory(context)
+                self._save_interaction_to_memory(context)
                 
                 return json.dumps(default_response)
             
@@ -555,7 +556,7 @@ Memory Hash: {memory_hash}"""
             
             # Always attempt to save the conversation, even on error
             try:
-                await self._save_interaction_to_memory(context)
+                self._save_interaction_to_memory(context)
             except Exception as save_error:
                 logger.error(f"Failed to save conversation on error: {str(save_error)}")
                 
@@ -568,35 +569,21 @@ Memory Hash: {memory_hash}"""
             }
             return json.dumps(error_response)
 
-    async def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
+    def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
         """
         Check if one hash is an ancestor of another in a git repository.
-        
-        Args:
-            repo_path: Path to the git repository
-            ancestor_hash: The hash to check if it's an ancestor
-            descendant_hash: The hash to check if it's a descendant
-            
-        Returns:
-            True if ancestor_hash is an ancestor of descendant_hash, False otherwise
         """
-        if ancestor_hash == descendant_hash:
-            return True
-        
         try:
             # Use git merge-base --is-ancestor to check if one hash is an ancestor of another
-            process = await asyncio.create_subprocess_exec(
-                "git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash,
+            result = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", ancestor_hash, descendant_hash],
                 cwd=repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                capture_output=True,
+                check=False
             )
             
-            # Wait for the command to complete
-            await process.communicate()
-            
-            # The command returns 0 if it's an ancestor, 1 if not
-            return process.returncode == 0
+            # Return True if exit_code is 0, indicating ancestor relationship
+            return result.returncode == 0
         except Exception as e:
             logger.error(f"Error checking git ancestry: {str(e)}")
             return False 

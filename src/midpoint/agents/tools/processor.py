@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
+from openai import OpenAI
 
 from midpoint.agents.tools.registry import ToolRegistry
 
@@ -40,7 +41,7 @@ class ToolProcessor:
         "gpt-3.5-turbo": 16385,
     }
     
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self, client: OpenAI):
         self.client = client
         # Rough estimate: 4 characters per token
         self.chars_per_token = 4
@@ -172,7 +173,7 @@ class ToolProcessor:
         logging.info(f"Final token count: {current_tokens}")
         return recent_messages
     
-    async def process_tool_calls(self, message: Dict[str, Any], 
+    def process_tool_calls(self, message: Dict[str, Any], 
                                 context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Process tool calls from an LLM message and return results."""
         tool_responses = []
@@ -275,7 +276,7 @@ class ToolProcessor:
                 logging.info(f"Executing tool: {function_name}")
                 
                 # Execute the tool
-                result = await tool.execute(**function_args)
+                result = tool.execute(**function_args)
                 
                 # Format the result
                 if isinstance(result, dict):
@@ -318,7 +319,7 @@ class ToolProcessor:
                 
         return tool_responses
     
-    async def run_llm_with_tools(self, 
+    def run_llm_with_tools(self, 
                                messages: List[Dict[str, Any]], 
                                model: str = "gpt-4",
                                temperature: float = 0.1,
@@ -365,7 +366,7 @@ class ToolProcessor:
                 
                 # Call the LLM
                 try:
-                    response = await self.client.chat.completions.create(
+                    response = self.client.chat.completions.create(
                         model=model,
                         messages=current_messages,
                         tools=ToolRegistry.get_tool_schemas(),
@@ -465,7 +466,7 @@ class ToolProcessor:
                         })
                     
                     # Process tool calls
-                    tool_results = await self.process_tool_calls(assistant_message)
+                    tool_results = self.process_tool_calls(assistant_message)
                     
                     # Add tool results to messages
                     current_messages.extend(tool_results)
