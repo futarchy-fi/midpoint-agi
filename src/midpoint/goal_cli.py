@@ -30,7 +30,6 @@ logging.basicConfig(
 
 # Constants
 GOAL_DIR = ".goal"
-CHECKPOINT_DIR = f"{GOAL_DIR}/checkpoints"
 VISUALIZATION_DIR = f"{GOAL_DIR}/visualization"
 
 
@@ -41,15 +40,6 @@ def ensure_goal_dir():
         goal_path.mkdir()
         logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
-
-
-def ensure_checkpoint_dir():
-    """Ensure the checkpoints directory exists."""
-    checkpoint_path = Path(CHECKPOINT_DIR)
-    if not checkpoint_path.exists():
-        checkpoint_path.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Created checkpoint directory: {CHECKPOINT_DIR}")
-    return checkpoint_path
 
 
 def ensure_visualization_dir():
@@ -593,76 +583,6 @@ def reset_to_commit(commit_id):
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to reset to commit: {e}")
         return False
-
-
-def create_checkpoint(message):
-    """Create a labeled checkpoint for easy navigation."""
-    try:
-        # Get current hash
-        current_hash = get_current_hash()
-        if not current_hash:
-            return False
-        
-        # Get current branch
-        current_branch = get_current_branch()
-        if not current_branch:
-            return False
-        
-        # Create checkpoint file
-        checkpoint_path = ensure_checkpoint_dir()
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Sanitize message for filename
-        safe_message = "".join(c if c.isalnum() else "_" for c in message)
-        
-        checkpoint_file = checkpoint_path / f"{timestamp}_{safe_message}.json"
-        
-        # Prepare checkpoint data
-        checkpoint_data = {
-            "timestamp": timestamp,
-            "message": message,
-            "git_hash": current_hash,
-            "branch": current_branch
-        }
-        
-        # Save checkpoint file
-        with open(checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f, indent=2)
-        
-        print(f"Created checkpoint: {message}")
-        print(f"Branch: {current_branch}, Commit: {current_hash[:8]}")
-        return True
-    except Exception as e:
-        logging.error(f"Failed to create checkpoint: {e}")
-        return False
-
-
-def list_checkpoints():
-    """List all checkpoints."""
-    checkpoint_path = ensure_checkpoint_dir()
-    
-    checkpoint_files = list(checkpoint_path.glob("*.json"))
-    if not checkpoint_files:
-        print("No checkpoints found.")
-        return []
-    
-    checkpoints = []
-    for file_path in sorted(checkpoint_files, reverse=True):
-        try:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-                checkpoints.append(data)
-        except:
-            logging.warning(f"Failed to read checkpoint file: {file_path}")
-    
-    if checkpoints:
-        print("Checkpoints:")
-        for i, cp in enumerate(checkpoints):
-            print(f"{i+1}. [{cp['timestamp']}] {cp['message']} (Branch: {cp['branch']}, Commit: {cp['git_hash'][:8]})")
-    else:
-        print("No valid checkpoints found.")
-    
-    return checkpoints
 
 
 def go_to_parent_goal():
@@ -2099,10 +2019,6 @@ def main_command(args):
         return go_back_commits(args.steps)
     elif args.command == "reset":
         return reset_to_commit(args.commit_id)
-    elif args.command == "checkpoint":
-        return create_checkpoint(args.message)
-    elif args.command == "checkpoints":
-        return list_checkpoints()
     elif args.command == "up":
         return go_to_parent_goal()
     elif args.command == "down":
@@ -2123,12 +2039,6 @@ def main_command(args):
         return show_goal_history()
     elif args.command == "graph":
         return generate_graph()
-    elif args.command == "convert":
-        return convert_goal_ids()
-    elif args.command == "normalize":
-        return normalize_goal_relationships()
-    elif args.command == "revert":
-        return revert_goal(args.goal_id)
     elif args.command == "update-parent":
         return update_parent_from_child(args.child_id)
     elif args.command == "validate-history":
@@ -2184,15 +2094,6 @@ def main():
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
     
-    # goal normalize
-    subparsers.add_parser("normalize", help="Normalize case in goal IDs and relationships")
-    
-    # goal memory <goal-id>
-    memory_parser = subparsers.add_parser("memory", help="Show memory history for a goal/subgoal/task")
-    memory_parser.add_argument("goal_id", help="ID of the goal/subgoal/task to show memory history for")
-    memory_parser.add_argument("--debug", action="store_true", help="Show debug output")
-    memory_parser.add_argument("--quiet", action="store_true", help="Only show warnings and final result")
-    
     # State Navigation Commands
     # ------------------------
     # goal back [steps]
@@ -2202,13 +2103,6 @@ def main():
     # goal reset <commit-id>
     reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")
     reset_parser.add_argument("commit_id", help="Commit ID to reset to")
-    
-    # goal checkpoint "message"
-    checkpoint_parser = subparsers.add_parser("checkpoint", help="Create labeled checkpoint for easy navigation")
-    checkpoint_parser.add_argument("message", help="Checkpoint message")
-    
-    # goal checkpoints
-    subparsers.add_parser("checkpoints", help="List all checkpoints")
     
     # Hierarchy Navigation Commands
     # ---------------------------
@@ -2248,9 +2142,6 @@ def main():
     # goal graph
     subparsers.add_parser("graph", help="Generate graphical visualization")
     
-    # goal convert
-    subparsers.add_parser("convert", help="Convert existing hierarchical goal IDs to the new flat ID system")
-    
     # goal revert <goal-id>
     revert_parser = subparsers.add_parser("revert", help="Revert a goal's current state back to its initial state")
     revert_parser.add_argument("goal_id", help="ID of the goal to revert")
@@ -2269,7 +2160,6 @@ def main():
     validate_history_parser.add_argument("--debug", action="store_true", help="Show debug output")
     validate_history_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     
-    # Add new subparser for updating parent from child
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
     update_parent_parser.add_argument('child_id', help='ID of the child goal/task to use for updating parent')

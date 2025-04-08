@@ -58,15 +58,6 @@ Default is 1 step if not specified.
 goal reset <commit-id>
 ```
 
-#### Create a labeled checkpoint for easy navigation
-```bash
-goal checkpoint "Checkpoint message"
-```
-
-#### List all available checkpoints
-```bash
-goal checkpoints
-```
 
 ### Hierarchy Navigation
 
@@ -230,17 +221,6 @@ goal graph
 
 ## Advanced Usage
 
-### Checkpoints
-
-Create checkpoints to easily navigate back to important states:
-
-```bash
-# Create a checkpoint
-goal checkpoint "Before refactoring"
-
-# List all checkpoints
-goal checkpoints
-```
 
 ### Conflict Resolution
 
@@ -252,13 +232,13 @@ When merging subgoals, if conflicts occur:
    git merge <subgoal-branch>
    # Resolve conflicts
    git add <resolved-files>
-   git commit -m "Merge subgoal <id>"
+   git commit
    ```
 
 ## Tips
 
 1. Always mark a goal as complete (`goal complete`) before merging it into its parent
-2. Use checkpoints before making significant changes
+
 3. Use `goal tree` to quickly visualize the current state of your goals
 4. Use `goal graph` to generate diagrams for documentation or presentations
 
