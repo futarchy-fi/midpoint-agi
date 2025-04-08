@@ -170,10 +170,22 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         f.write(f"Task Summary Log - {timestamp}\n")
         f.write("=" * 50 + "\n\n")
     
-    # Create LLM responses file with header
-    with open(llm_responses_file, "w") as f:
-        f.write(f"LLM Responses Log - {timestamp}\n")
-        f.write("=" * 50 + "\n\n")
+    # === START EDIT ===
+    # Configure the dedicated LLM interactions logger
+    llm_logger = logging.getLogger('llm_interactions')
+    llm_logger.setLevel(logging.DEBUG)  # Capture all LLM interaction details
+    
+    # Create file handler specifically for LLM responses
+    llm_file_handler = logging.FileHandler(llm_responses_file)
+    llm_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    llm_file_handler.setLevel(logging.DEBUG)
+    
+    # Add the handler to the LLM logger ONLY
+    llm_logger.addHandler(llm_file_handler)
+    
+    # Prevent LLM logs from propagating to the root logger's handlers (console, main log file)
+    llm_logger.propagate = False
+    # === END EDIT ===
     
     # Set up a filter for console output to make it more concise
     class ConsoleFormatFilter(logging.Filter):
@@ -691,6 +703,18 @@ You have access to these tools:
         tool_usage = []
         
         try:
+            # === START EDIT ===
+            # Get the dedicated LLM logger
+            llm_logger = logging.getLogger('llm_interactions')
+            
+            # Log the request messages to the LLM log file
+            try:
+                serialized_request = self._serialize_messages(messages)
+                llm_logger.debug("LLM Request:\n%s", json.dumps(serialized_request, indent=2))
+            except Exception as log_e:
+                llm_logger.error("Failed to serialize request messages for logging: %s", str(log_e))
+            # === END EDIT ===
+
             # Get the next step from the model
             message, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages,
@@ -716,6 +740,11 @@ You have access to these tools:
                 # Log the raw response for debugging
                 logging.debug(f"Raw model response: {content}")
                 
+                # === START EDIT ===
+                # Log the raw response to the LLM log file
+                llm_logger.debug("LLM Raw Response:\n%s", content)
+                # === END EDIT ===
+
                 try:
                     output_data = json.loads(content)
                 except json.JSONDecodeError:
@@ -735,6 +764,11 @@ You have access to these tools:
                 
             except Exception as e:
                 logging.error(f"Error processing model response: {str(e)}")
+                # === START EDIT ===
+                # Log the error to the LLM log file as well
+                llm_logger.error("Error processing model response: %s\nRaw response was: %s", str(e), content)
+                # === END EDIT ===
+
                 # Add the error to messages and try again
                 messages.append({
                     "role": "user",
