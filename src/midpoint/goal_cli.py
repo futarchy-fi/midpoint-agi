@@ -22,6 +22,9 @@ from .agents.tools.git_tools import get_current_hash, get_current_branch
 # Import validator for automated validation
 from .agents.goal_validator import GoalValidator
 
+# Import the new Goal Analyzer agent function
+from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
+
 # Configure basic logging
 logging.basicConfig(
     level=logging.INFO,
@@ -2043,6 +2046,8 @@ def main_command(args):
         return update_parent_from_child(args.child_id)
     elif args.command == "validate-history":
         return show_validation_history(args.goal_id, args.debug, args.quiet)
+    elif args.command == "analyze":
+        return analyze_goal(args.goal_id, args.human)
     else:
         return None
 
@@ -2159,6 +2164,11 @@ def main():
     validate_history_parser.add_argument("goal_id", help="ID of the goal to show validation history for")
     validate_history_parser.add_argument("--debug", action="store_true", help="Show debug output")
     validate_history_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    
+    # Add new subparser for analyzing a goal
+    analyze_parser = subparsers.add_parser("analyze", help="Analyze a goal and suggest next steps")
+    analyze_parser.add_argument("goal_id", help="ID of the goal to analyze")
+    analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
     
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
@@ -2561,6 +2571,155 @@ def show_validation_history(goal_id, debug=False, quiet=False):
     except Exception as e:
         logging.error(f"Failed to show validation history: {e}")
         return False
+
+
+def _get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
+    """Get details of direct children (subgoals and tasks) for a given parent ID."""
+    goal_path = ensure_goal_dir()
+    children_details = []
+    try:
+        for file_path in goal_path.glob("*.json"):
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            # Check parent match (case-insensitive)
+            parent_match = False
+            file_parent = data.get("parent_goal", "")
+            if file_parent:
+                 if file_parent.upper() == parent_goal_id.upper() or \
+                   file_parent.upper() == f"{parent_goal_id.upper()}.json":
+                    parent_match = True
+
+            if parent_match:
+                child_info = {
+                    "goal_id": data.get("goal_id", "Unknown"),
+                    "description": data.get("description", "N/A"),
+                    "is_task": data.get("is_task", False),
+                    "complete": data.get("complete", False) or data.get("completed", False),
+                    # Add other relevant fields if needed, e.g., last validation score
+                    "validation_score": data.get("validation_status", {}).get("last_score")
+                }
+                children_details.append(child_info)
+                
+    except Exception as e:
+        logging.error(f"Error getting children details for {parent_goal_id}: {e}")
+        # Return potentially partial list or indicate error?
+        # For now, just return what we have.
+
+    # Sort by goal ID for consistent order
+    children_details.sort(key=lambda x: x["goal_id"])
+    return children_details
+
+
+def analyze_goal(goal_id, human_mode):
+    """Analyze a goal and suggest next steps using the GoalAnalyzer agent."""
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+
+    if not goal_file.exists():
+        logging.error(f"Goal {goal_id} not found")
+        return False
+
+    try:
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read goal file {goal_file}: {e}")
+        return False
+
+    # --- Prepare arguments for agent_analyze_goal ---
+    try:
+        # Get required state information from the loaded goal data
+        description = goal_data.get("description")
+        if not description:
+            logging.error(f"Goal {goal_id} is missing a description.")
+            return False
+        
+        validation_criteria = goal_data.get("validation_criteria")
+        parent_goal_id = goal_data.get("parent_goal")
+        
+        current_state = goal_data.get("current_state")
+        if not current_state:
+             logging.error(f"Goal {goal_id} is missing current_state information.")
+             return False
+             
+        repo_path = current_state.get("repository_path")
+        if not repo_path:
+             # Fallback to current working directory if not specified
+             repo_path = os.getcwd()
+             logging.warning(f"repository_path not found in goal state, using CWD: {repo_path}")
+             
+        memory_hash = current_state.get("memory_hash")
+        memory_repo_path = current_state.get("memory_repository_path")
+
+        # Optional args (assuming debug/quiet flags might be added to CLI later)
+        # For now, default them
+        debug_mode = False # Replace with args.debug if added
+        quiet_mode = False # Replace with args.quiet if added
+        bypass_validation = False # Replace with args.bypass_validation if added
+        
+        logging.info(f"Starting analysis for goal: {goal_id}")
+        logging.info(f"  Description: {description}")
+        logging.info(f"  Repo Path: {repo_path}")
+        logging.info(f"  Memory Path: {memory_repo_path}")
+        logging.info(f"  Memory Hash: {memory_hash}")
+
+        # --- Call the GoalAnalyzer Agent --- 
+        analysis_result = agent_analyze_goal(
+            repo_path=repo_path,
+            goal=description, # Pass the description
+            validation_criteria=validation_criteria,
+            parent_goal_id=parent_goal_id,
+            goal_id=goal_id,
+            memory_hash=memory_hash,
+            memory_repo_path=memory_repo_path,
+            debug=debug_mode,
+            quiet=quiet_mode,
+            bypass_validation=bypass_validation,
+            logs_dir="logs" # Assuming default logs dir
+            # input_file is not typically needed here as we load the goal data directly
+        )
+
+        # --- Process Result --- 
+        print("\n--- Analysis Result ---")
+        if analysis_result.get("success", False):
+            action = analysis_result.get("action", "unknown")
+            justification = analysis_result.get("justification", "No justification provided.")
+            print(f"Suggested Action: {action}")
+            print(f"Justification: {justification}")
+            
+            # Update the goal file with the analysis result
+            analysis_record = {
+                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "mode": "auto", # Since human_mode is removed
+                "suggested_action": action,
+                "justification": justification,
+                "final_memory_hash": analysis_result.get("memory_hash") # Record memory hash after analysis
+            }
+            goal_data["last_analysis"] = analysis_record
+
+            try:
+                with open(goal_file, 'w') as f:
+                    json.dump(goal_data, f, indent=2)
+                logging.info(f"Updated goal file {goal_file} with analysis results.")
+                return True # Indicate success
+            except Exception as e:
+                logging.error(f"Failed to update goal file {goal_file} after analysis: {e}")
+                return False # Indicate failure to update file
+        else:
+            error_msg = analysis_result.get("error", "Unknown analysis failure")
+            logging.error(f"Goal analysis failed for {goal_id}: {error_msg}")
+            print(f"Error during analysis: {error_msg}")
+            return False
+
+    except KeyError as e:
+         logging.error(f"Missing expected key in goal data for {goal_id}: {e}")
+         print(f"Error: Goal file {goal_file} is missing required information: {e}")
+         return False
+    except Exception as e:
+         logging.error(f"An unexpected error occurred during analysis setup for {goal_id}: {e}", exc_info=True)
+         print(f"An unexpected error occurred: {e}")
+         return False
 
 
 if __name__ == "__main__":
