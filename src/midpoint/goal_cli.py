@@ -2256,7 +2256,8 @@ def handle_solve_command(args):
             repository_path=os.getcwd(),
             branch_name=solve_branch,
             memory_hash=memory_hash,
-            memory_repository_path=memory_repo_path
+            memory_repository_path=memory_repo_path,
+            description=f"Current state of goal {goal_id} during auto-solve process"
         )
         
         # Create memory state object
