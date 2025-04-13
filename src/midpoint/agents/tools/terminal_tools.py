@@ -9,6 +9,7 @@ import os
 import asyncio
 import logging
 import shlex
+import subprocess
 from typing import List, Dict, Any, Optional, Union
 
 from .base import Tool
