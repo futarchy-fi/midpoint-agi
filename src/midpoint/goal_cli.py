@@ -2008,6 +2008,8 @@ def main_command(args):
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
         return execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+    elif args.command == "solve":
+        return handle_solve_command(args)
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -2050,6 +2052,621 @@ def main_command(args):
         return analyze_goal(args.goal_id, args.human)
     else:
         return None
+
+
+def handle_solve_command(args):
+    """
+    Automate the process of analyzing, decomposing, and executing tasks defined
+    in the .goal/ directory.
+    
+    Args:
+        args: Command-line arguments including goal_id and optional flags
+    """
+    # Import necessary agent functions at the beginning
+    from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
+    from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
+    from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
+    
+    # Configure logging based on args
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    elif args.quiet:
+        logging.basicConfig(level=logging.WARNING)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    
+    goal_id = args.goal_id
+    debug = args.debug
+    quiet = args.quiet
+    bypass_validation = args.bypass_validation
+    
+    logging.info(f"Starting automated solving for goal {goal_id}")
+    
+    # ===== Initial Setup =====
+    # Ensure goal directory exists
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.error(f"Goal {goal_id} not found")
+        return False
+    
+    try:
+        # Load goal data
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to read goal file: {e}")
+        return False
+    
+    # Validate that this is a goal that can be solved (not a task)
+    if goal_data.get("is_task", False):
+        logging.error(f"{goal_id} is a task, not a goal. Use 'goal execute {goal_id}' instead.")
+        return False
+    
+    # Extract initial and current state information
+    initial_state = goal_data.get("initial_state", {})
+    current_state = goal_data.get("current_state", {})
+    
+    initial_hash = initial_state.get("git_hash")
+    if not initial_hash:
+        logging.error(f"No initial git hash found in goal {goal_id}")
+        return False
+    
+    # Get memory repository information
+    memory_repo_path = current_state.get("memory_repository_path")
+    memory_hash = current_state.get("memory_hash")
+    
+    # Check if the goal is already complete
+    if goal_data.get("is_complete", False):
+        logging.warning(f"Goal {goal_id} is already marked as complete.")
+        response = input("Do you want to proceed anyway? (y/N): ")
+        if response.lower() != 'y':
+            logging.info("Solve operation cancelled.")
+            return False
+        logging.info("Proceeding with solving despite goal being marked complete.")
+    
+    # Record original branch and check working directory state
+    try:
+        original_branch = get_current_branch()
+        logging.info(f"Original branch: {original_branch}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to get original branch: {e}")
+        return False
+    
+    # Check for uncommitted changes and stash them if needed
+    stashed_changes = False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        has_changes = bool(result.stdout.strip())
+        if has_changes:
+            logging.info("Uncommitted changes detected. Stashing before proceeding.")
+            subprocess.run(
+                ["git", "stash", "push", "-m", f"Stashing changes before solving goal {goal_id}"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            stashed_changes = True
+            logging.info("Changes stashed successfully")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Git error while checking/stashing changes: {e}")
+        return False
+    
+    # Create logs directory to store progress information
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Create a progress file to track solving steps
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    progress_file = logs_dir / f"solve_{goal_id}_{timestamp}.log"
+    
+    with open(progress_file, 'w') as f:
+        f.write(f"Solve Progress Log for Goal {goal_id}\n")
+        f.write(f"Started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Description: {goal_data.get('description', 'No description')}\n")
+        f.write("=" * 80 + "\n\n")
+    
+    def log_progress(message):
+        """Helper function to log progress both to console and file"""
+        logging.info(message)
+        with open(progress_file, 'a') as f:
+            f.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+    
+    # ===== Git Checkout =====
+    # Create a timestamp for the new branch
+    solve_branch = f"solve-{goal_id}-{timestamp}"
+    
+    try:
+        # First checkout the initial commit hash
+        log_progress(f"Checking out commit {initial_hash[:8]}...")
+        subprocess.run(
+            ["git", "checkout", initial_hash],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Create a new solve branch from this commit
+        log_progress(f"Creating new branch {solve_branch}...")
+        subprocess.run(
+            ["git", "checkout", "-b", solve_branch],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Update the goal's branch_name property to include this solve branch
+        if "branch_name" not in goal_data:
+            goal_data["branch_name"] = solve_branch
+        
+        # Update the solve branch in the goal file
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+        
+        log_progress(f"Created and switched to branch {solve_branch}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Git error during checkout: {e}")
+        log_progress(f"ERROR: Git error during checkout: {e}")
+        # Cleanup and revert to original branch
+        try:
+            subprocess.run(
+                ["git", "checkout", original_branch],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            if stashed_changes:
+                subprocess.run(
+                    ["git", "stash", "pop"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+        except subprocess.CalledProcessError as cleanup_error:
+            logging.error(f"Error during cleanup after failed checkout: {cleanup_error}")
+        return False
+    
+    # ===== Solving Loop =====
+    max_iterations = 15  # Safety limit to prevent infinite loops
+    current_iteration = 0
+    current_goal_id = goal_id
+    success = False
+    
+    try:
+        # Create goal object with current properties
+        goal = Goal(
+            id=goal_id,
+            description=goal_data.get("description", ""),
+            metadata={
+                "parent_goal": goal_data.get("parent_goal", ""),
+                "requires_further_decomposition": goal_data.get("requires_further_decomposition", True),
+                "is_complete": goal_data.get("is_complete", False)
+            }
+        )
+        
+        # Create state object for the analysis context
+        state = State(
+            git_hash=get_current_hash(),
+            repository_path=os.getcwd(),
+            branch_name=solve_branch,
+            memory_hash=memory_hash,
+            memory_repository_path=memory_repo_path
+        )
+        
+        # Create memory state object
+        memory_state = MemoryState(
+            memory_hash=memory_hash if memory_hash else "",
+            repository_path=memory_repo_path if memory_repo_path else ""
+        )
+        
+        # Initialize TaskContext for agent calls
+        context = TaskContext(
+            goal=goal,
+            state=state,
+            memory_state=memory_state,
+            metadata={
+                "goal_id": goal_id,
+                "original_branch": original_branch,
+                "solving_branch": solve_branch,
+                "debug": debug,
+                "quiet": quiet,
+                "bypass_validation": bypass_validation
+            }
+        )
+        
+        log_progress(f"Starting solving loop for goal {goal_id}")
+        log_progress(f"Initial state: {state.git_hash[:8]} on branch {solve_branch}")
+        
+        while current_iteration < max_iterations:
+            current_iteration += 1
+            log_progress(f"ITERATION {current_iteration}: Processing goal {current_goal_id}")
+            
+            # ANALYZE: Determine what to do next with the current goal
+            log_progress(f"Analyzing goal {current_goal_id}")
+            try:
+                analysis_result = agent_analyze_goal(
+                    repo_path=os.getcwd(),
+                    goal=goal.description,
+                    goal_id=current_goal_id,
+                    memory_hash=state.memory_hash,
+                    memory_repo_path=state.memory_repository_path,
+                    debug=debug,
+                    quiet=quiet,
+                    bypass_validation=bypass_validation
+                )
+                
+                # Extract the recommended action from the analysis result
+                recommended_action = analysis_result.get("recommended_action", "")
+                recommended_action_type = analysis_result.get("action_type", "")
+                
+                log_progress(f"Analysis recommends: {recommended_action_type} - {recommended_action}")
+            except Exception as e:
+                log_progress(f"ERROR: Analysis failed: {e}")
+                logging.error(f"Analysis failed: {e}")
+                if debug:
+                    import traceback
+                    traceback.print_exc()
+                break
+            
+            # Take appropriate action based on the analysis
+            if recommended_action_type == "decompose":
+                # DECOMPOSE: Break down the goal into smaller subgoals
+                log_progress(f"Decomposing goal {current_goal_id}")
+                try:
+                    decompose_result = agent_decompose_goal(
+                        repo_path=os.getcwd(),
+                        goal=goal.description,
+                        goal_id=current_goal_id,
+                        memory_hash=state.memory_hash,
+                        memory_repo_path=state.memory_repository_path,
+                        debug=debug,
+                        quiet=quiet,
+                        bypass_validation=bypass_validation
+                    )
+                    
+                    # Handle decomposition result
+                    if decompose_result.get("success", False):
+                        # Get the new subgoal to work on
+                        new_subgoal_id = decompose_result.get("next_goal_id", "")
+                        if new_subgoal_id:
+                            log_progress(f"Decomposition created subgoal {new_subgoal_id}")
+                            current_goal_id = new_subgoal_id
+                            # Update context for next iteration with the new subgoal
+                            subgoal_file = goal_path / f"{new_subgoal_id}.json"
+                            if subgoal_file.exists():
+                                with open(subgoal_file, 'r') as f:
+                                    subgoal_data = json.load(f)
+                                
+                                # Create updated goal object
+                                goal = Goal(
+                                    id=new_subgoal_id,
+                                    description=subgoal_data.get("description", ""),
+                                    metadata={
+                                        "parent_goal": subgoal_data.get("parent_goal", ""),
+                                        "requires_further_decomposition": subgoal_data.get("requires_further_decomposition", True),
+                                        "is_complete": subgoal_data.get("is_complete", False)
+                                    }
+                                )
+                                context.goal = goal
+                                context.metadata["goal_id"] = new_subgoal_id
+                        else:
+                            log_progress("WARNING: Decomposition succeeded but no next subgoal was provided")
+                    else:
+                        log_progress(f"ERROR: Decomposition failed: {decompose_result.get('error', 'Unknown error')}")
+                        break
+                        
+                    # Update Git state and goal files after decomposition
+                    update_git_state(current_goal_id)
+                except Exception as e:
+                    log_progress(f"ERROR: Decomposition failed with exception: {e}")
+                    if debug:
+                        import traceback
+                        traceback.print_exc()
+                    break
+                
+            elif recommended_action_type == "execute":
+                # EXECUTE: Directly execute a task
+                if current_goal_id.startswith("T"):
+                    # This is already a task, execute it
+                    log_progress(f"Executing task {current_goal_id}")
+                    try:
+                        execution_result = execute_task(
+                            current_goal_id, 
+                            debug=debug, 
+                            quiet=quiet, 
+                            bypass_validation=bypass_validation,
+                            no_commit=False,  # Allow commits
+                            memory_repo=memory_repo_path
+                        )
+                        
+                        # Handle execution result
+                        if not execution_result or not execution_result.get("success", False):
+                            log_progress(f"ERROR: Task execution failed: {execution_result.get('error', 'Unknown error')}")
+                            break
+                        else:
+                            log_progress(f"Task {current_goal_id} executed successfully")
+                            
+                        # Update the parent goal with the task execution result
+                        parent_goal_id = goal.metadata["parent_goal"]
+                        if parent_goal_id:
+                            # Update parent goal state
+                            parent_file = goal_path / f"{parent_goal_id}.json"
+                            if parent_file.exists():
+                                try:
+                                    with open(parent_file, 'r') as f:
+                                        parent_data = json.load(f)
+                                    
+                                    # Update parent's current state
+                                    parent_data["current_state"]["git_hash"] = get_current_hash()
+                                    parent_data["current_state"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    
+                                    with open(parent_file, 'w') as f:
+                                        json.dump(parent_data, f, indent=2)
+                                        
+                                    log_progress(f"Updated parent goal {parent_goal_id} state")
+                                    
+                                    # Switch to parent goal for next iteration
+                                    current_goal_id = parent_goal_id
+                                    
+                                    # Update context for next iteration
+                                    goal = Goal(
+                                        id=parent_goal_id,
+                                        description=parent_data.get("description", ""),
+                                        metadata={
+                                            "parent_goal": parent_data.get("parent_goal", ""),
+                                            "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
+                                            "is_complete": parent_data.get("is_complete", False)
+                                        }
+                                    )
+                                    context.goal = goal
+                                    context.metadata["goal_id"] = parent_goal_id
+                                    
+                                except Exception as e:
+                                    log_progress(f"ERROR: Failed to update parent goal state: {e}")
+                        else:
+                            # This was a top-level task, mark it complete
+                            log_progress(f"Marking top-level task {current_goal_id} as complete")
+                            mark_goal_complete(current_goal_id)
+                            success = True
+                            break
+                    except Exception as e:
+                        log_progress(f"ERROR: Task execution failed with exception: {e}")
+                        if debug:
+                            import traceback
+                            traceback.print_exc()
+                        break
+                else:
+                    # This is not a task yet, convert it to a task first
+                    log_progress(f"Converting goal {current_goal_id} to a task")
+                    try:
+                        parent_id = goal.metadata["parent_goal"]
+                        if not parent_id:
+                            log_progress(f"ERROR: Goal {current_goal_id} has no parent to create task under")
+                            break
+                            
+                        task_id = create_new_task(parent_id, goal.description)
+                        if task_id:
+                            log_progress(f"Created task {task_id}")
+                            current_goal_id = task_id
+                            # Update context for next iteration
+                            task_file = goal_path / f"{task_id}.json"
+                            if task_file.exists():
+                                with open(task_file, 'r') as f:
+                                    task_data = json.load(f)
+                                
+                                # Create updated goal object for the task
+                                goal = Goal(
+                                    id=task_id,
+                                    description=task_data.get("description", ""),
+                                    metadata={
+                                        "parent_goal": task_data.get("parent_goal", ""),
+                                        "requires_further_decomposition": False,
+                                        "is_complete": False
+                                    }
+                                )
+                                context.goal = goal
+                                context.metadata["goal_id"] = task_id
+                        else:
+                            log_progress("ERROR: Failed to create task")
+                            break
+                    except Exception as e:
+                        log_progress(f"ERROR: Failed to create task: {e}")
+                        if debug:
+                            import traceback
+                            traceback.print_exc()
+                        break
+                
+            elif recommended_action_type == "complete":
+                # COMPLETE: Goal is considered complete
+                log_progress(f"Marking goal {current_goal_id} as complete")
+                try:
+                    mark_goal_complete(current_goal_id)
+                    
+                    # Check if this is a subgoal and needs to be merged to parent
+                    parent_goal_id = goal.metadata["parent_goal"]
+                    if parent_goal_id:
+                        # Try to merge the subgoal to parent
+                        log_progress(f"Merging subgoal {current_goal_id} to parent {parent_goal_id}")
+                        merge_result = merge_subgoal(current_goal_id)
+                        if merge_result:
+                            # Move up to parent goal
+                            log_progress(f"Successfully merged. Moving up to parent goal {parent_goal_id}")
+                            current_goal_id = parent_goal_id
+                            
+                            # Update context for next iteration with parent goal
+                            parent_file = goal_path / f"{parent_goal_id}.json"
+                            if parent_file.exists():
+                                with open(parent_file, 'r') as f:
+                                    parent_data = json.load(f)
+                                
+                                # Create updated goal object for the parent
+                                goal = Goal(
+                                    id=parent_goal_id,
+                                    description=parent_data.get("description", ""),
+                                    metadata={
+                                        "parent_goal": parent_data.get("parent_goal", ""),
+                                        "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
+                                        "is_complete": parent_data.get("is_complete", False)
+                                    }
+                                )
+                                context.goal = goal
+                                context.metadata["goal_id"] = parent_goal_id
+                        else:
+                            log_progress(f"WARNING: Failed to merge subgoal {current_goal_id} to parent {parent_goal_id}")
+                            break
+                    else:
+                        # This was a top-level goal, we're done
+                        log_progress(f"Top-level goal {current_goal_id} completed")
+                        success = True
+                        break
+                except Exception as e:
+                    log_progress(f"ERROR: Goal completion failed: {e}")
+                    if debug:
+                        import traceback
+                        traceback.print_exc()
+                    break
+            else:
+                # Unknown action type
+                log_progress(f"WARNING: Unknown action type: {recommended_action_type}")
+                break
+            
+            # Update state for next iteration
+            state.git_hash = get_current_hash()
+            context.state = state
+            
+            # Check if the goal is now complete
+            if goal.metadata.get("is_complete", False):
+                log_progress(f"Goal {current_goal_id} is now complete")
+                success = True
+                break
+                
+        # Check if we hit the iteration limit
+        if current_iteration >= max_iterations:
+            log_progress(f"WARNING: Reached maximum iteration limit of {max_iterations}")
+            
+    except Exception as e:
+        log_progress(f"ERROR: Unexpected error during solving loop: {e}")
+        logging.error(f"Error during solving loop: {e}")
+        if debug:
+            import traceback
+            traceback.print_exc()
+    
+    # ===== Cleanup =====
+    try:
+        # Return to original branch 
+        log_progress(f"Returning to original branch {original_branch}")
+        subprocess.run(
+            ["git", "checkout", original_branch],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Restore stashed changes if any
+        if stashed_changes:
+            log_progress("Restoring stashed changes")
+            subprocess.run(
+                ["git", "stash", "pop"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        
+        # Final status
+        if success:
+            log_progress(f"Goal solving process completed successfully on branch {solve_branch}")
+        else:
+            log_progress(f"Goal solving process completed with some issues on branch {solve_branch}")
+        
+        log_progress(f"To continue working with this goal, use: git checkout {solve_branch}")
+        log_progress(f"Progress log saved to: {progress_file}")
+        
+        # Print final message to user
+        if success:
+            logging.info(f"Goal {goal_id} solved successfully!")
+        else:
+            logging.warning(f"Goal solving process completed with some issues.")
+        
+        logging.info(f"Solution branch: {solve_branch}")
+        logging.info(f"Progress log: {progress_file}")
+    except Exception as e:
+        log_progress(f"ERROR: Cleanup failed: {e}")
+        logging.error(f"Error during cleanup: {e}")
+        if debug:
+            import traceback
+            traceback.print_exc()
+    
+    return success
+
+def update_git_state(goal_id):
+    """
+    Update the git state in the goal file after changes have been made.
+    
+    Args:
+        goal_id: ID of the goal to update
+    """
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    
+    if not goal_file.exists():
+        logging.warning(f"Goal file {goal_id}.json not found")
+        return False
+    
+    try:
+        # Check if there are uncommitted changes
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        has_changes = bool(result.stdout.strip())
+        if has_changes:
+            # Commit the changes
+            logging.info(f"Committing changes for goal {goal_id}")
+            subprocess.run(
+                ["git", "add", "."],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            subprocess.run(
+                ["git", "commit", "-m", f"feat({goal_id}): Progress from auto-solve process"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            logging.info("Changes committed successfully")
+        
+        # Get the current hash after potential commit
+        current_hash = get_current_hash()
+        
+        # Load the goal file
+        with open(goal_file, 'r') as f:
+            goal_data = json.load(f)
+        
+        # Update the current state with the new hash
+        goal_data["current_state"]["git_hash"] = current_hash
+        goal_data["current_state"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Write updated goal data
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+            
+        logging.info(f"Updated goal state for {goal_id} with new hash {current_hash[:8]}")
+        return True
+    except Exception as e:
+        logging.error(f"Error updating git state: {e}")
+        return False
 
 
 def main():
@@ -2098,6 +2715,13 @@ def main():
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
+    
+    # goal solve <goal-id>
+    solve_parser = subparsers.add_parser("solve", help="Automatically analyze, decompose, and execute tasks for a goal")
+    solve_parser.add_argument("goal_id", help="Goal ID to solve")
+    solve_parser.add_argument("--debug", action="store_true", help="Show debug output")
+    solve_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+    solve_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     
     # State Navigation Commands
     # ------------------------
