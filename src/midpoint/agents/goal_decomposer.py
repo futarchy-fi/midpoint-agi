@@ -212,7 +212,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     'validation_criteria',
                     'Requires further decomposition',
                     'relevant_context',
-                    'Determining next step for goal',
+                    'Determining next state for goal',
                     '===',
                     '====================',
                     '\n====================',
@@ -252,7 +252,7 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
                     return True
                 elif ('🔄 Next subgoal:' in msg) or ('✅ Next task:' in msg):
                     return True
-                elif 'Determining next step for goal:' in msg:
+                elif 'Determining next state for goal:' in msg:
                     try:
                         # Try to safely extract the goal description
                         if record.args and len(record.args) > 0:
@@ -325,9 +325,15 @@ def log_task_summary(task_summary_file: Path, context: TaskContext):
 
 class GoalDecomposer:
     """
-    Goal decomposition agent implementation.
+    This agent is responsible for determining the next state toward achieving a complex goal.
     
-    This agent is responsible for determining the next step toward achieving a complex goal.
+    The GoalDecomposer agent is a core component that implements the OODA loop
+    (Observe, Orient, Decide, Act) for strategic planning. It recursively handles goal
+    decomposition to break down complex tasks into manageable subgoals.
+    
+    For a given goal and repository state, it determines the most promising next state,
+    provides validation criteria for that state, and decides if the state requires further
+    decomposition.
     """
     
     def __init__(self, model: str = "gpt-4o-mini", max_history_entries: int = 5):
@@ -624,7 +630,7 @@ You have access to these tools:
         if setup_logging:
             log_file, task_summary_file, llm_responses_file = configure_logging(debug, quiet)
             
-        logging.info("Determining next step for goal: %s", context.goal.description)
+        logging.info("Determining next state for goal: %s", context.goal.description)
         
         # Log task summary at the start
         if setup_logging:
@@ -770,7 +776,7 @@ You have access to these tools:
                 # Add the error to messages and try again
                 messages.append({
                     "role": "user",
-                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with the fields: next_step, validation_criteria, reasoning, requires_further_decomposition, and relevant_context."
+                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with the fields: next_state, validation_criteria, reasoning, and relevant_context."
                 })
                 # Get a new response from the model
                 message, tool_calls = self.tool_processor.run_llm_with_tools(
@@ -809,8 +815,8 @@ You have access to these tools:
                     )
                 else:
                     # Handle incomplete goal case
-                    if not all(key in output_data for key in ["next_step", "validation_criteria", "reasoning"]):
-                        missing_fields = [field for field in ["next_step", "validation_criteria", "reasoning"] 
+                    if not all(key in output_data for key in ["next_state", "validation_criteria", "reasoning"]):
+                        missing_fields = [field for field in ["next_state", "validation_criteria", "reasoning"] 
                                         if field not in output_data]
                         error_msg = f"Incomplete goal response missing required fields: {', '.join(missing_fields)}"
                         logging.error(error_msg)
@@ -822,7 +828,7 @@ You have access to these tools:
                     
                     final_output = SubgoalPlan(
                         goal_completed=False,
-                        next_step=output_data["next_step"],
+                        next_state=output_data["next_state"],
                         validation_criteria=output_data["validation_criteria"],
                         reasoning=output_data["reasoning"],
                         relevant_context=relevant_context,
@@ -855,7 +861,7 @@ You have access to these tools:
                     metadata={
                         "goal": context.goal.description, 
                         "message_count": len(serialized_messages),
-                        "next_step": final_output.next_step,
+                        "next_state": final_output.next_state,
                         "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
                     memory_hash=memory_hash,
@@ -865,12 +871,12 @@ You have access to these tools:
             except Exception as e:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
 
-            # Log successful outcome at info level with a more complete message
+            # Log result at INFO level
             if final_output.goal_completed:
-                logging.info(f"✅ Goal completed: {final_output.completion_summary}")
+                logging.info(f"✅ Goal completed! {final_output.reasoning}")
                 logging.debug(f"Reasoning: {final_output.reasoning}")
             else:
-                logging.info(f"✅ Next step: {final_output.next_step}")
+                logging.info(f"✅ Next state: {final_output.next_state}")
                 
                 # Only log detailed validation criteria at debug level to avoid duplication
                 logging.debug("Validation criteria:")
@@ -897,7 +903,7 @@ You have access to these tools:
                         f.write(f"Goal completed: {final_output.completion_summary}\n")
                         f.write(f"Reasoning: {final_output.reasoning}\n")
                     else:
-                        f.write(f"Next step: {final_output.next_step}\n")
+                        f.write(f"Next state: {final_output.next_state}\n")
                         f.write("\nValidation criteria:\n")
                         for i, criterion in enumerate(final_output.validation_criteria, 1):
                             f.write(f"  {i}. {criterion}\n")
@@ -962,14 +968,12 @@ Memory State:
             for i, task in enumerate(completed_tasks, 1):
                 logging.info(f"Task {i}:")
                 logging.info(f"  Description: {task.get('description', 'No description')}")
-                logging.info(f"  Validation criteria: {task.get('validation_criteria', [])}")
-                logging.info(f"  Final state: {task.get('final_state', {}).get('description', 'No final state')}")
                 
-                prompt += f"{i}. {task['description']}\n"
                 if task.get('validation_criteria'):
                     prompt += "   Validation criteria:\n"
                     for criterion in task['validation_criteria']:
                         prompt += f"   - {criterion}\n"
+                
                 if task.get('final_state'):
                     prompt += f"   Final state: {task['final_state'].get('description', '')}\n"
                 prompt += "\n"  # Add blank line between tasks
@@ -986,25 +990,24 @@ Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
-Your task is to determine based on the completed tasks whether the validation criteria for the goal have been met.
+Your task is to identify a valuable midpoint state between the current state and the final goal state where validation criteria will be met.
 
-For uncompleted goals, you must explore the repository, reason and provide a SINGLE NEXT STEP toward achieving the goal.
+Think of this as a state space navigation problem:
+1. You are at the current state (the repository as it exists now)
+2. You need to reach a final state (where validation criteria are satisfied)
+3. Your job is to identify an optimal intermediate state that:
+   - Makes progress toward the final state
+   - Is easier to reach than trying to achieve the final state directly
+   - After reaching this state, the remaining journey to the final state becomes easier
 
-For complex goals, consider if the best next step is exploration, research, or a "study session" 
-rather than immediately jumping to implementation.
+For complex goals, consider whether the best midpoint state involves exploration, research, or establishing a "foundation state" before implementation.
 
 You MUST provide a structured response in JSON format with these fields:
-For completed goals:
-- goal_completed: true
-- completion_summary: A summary of what was accomplished and which task(s) satisfied the goal's validation criteria
-- reasoning: Explanation of why the goal is considered complete
-
-For incomplete goals:
 - goal_completed: false
-- next_step: A clear description of the single next step to take
-- validation_criteria: List of measurable criteria to validate this step's completion
-- reasoning: Explanation of why this is the most promising next action
-- relevant_context: Object containing relevant information to pass to child subgoals
+- next_state: A clear description of the midpoint state to achieve next
+- validation_criteria: List of measurable criteria to verify this state has been reached
+- reasoning: Explanation of why this midpoint state is optimal for progress
+- relevant_context: Object containing relevant information to pass to child goals (state transforms)
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
 """
@@ -1029,15 +1032,15 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
 
         # Check goal completion status
         if subgoal.goal_completed:
-            # For completed goals, we need a completion summary but not next_step or validation_criteria
+            # For completed goals, we need a completion summary but not next_state or validation_criteria
             if not subgoal.completion_summary:
                 raise ValueError("Completed goals must have a completion_summary")
-            if subgoal.next_step or subgoal.validation_criteria:
-                raise ValueError("Completed goals should not have next_step or validation_criteria")
+            if subgoal.next_state or subgoal.validation_criteria:
+                raise ValueError("Completed goals should not have next_state or validation_criteria")
         else:
-            # For incomplete goals, we need next_step and validation_criteria
-            if not subgoal.next_step:
-                raise ValueError("Incomplete goals must have next_step")
+            # For incomplete goals, we need next_state and validation_criteria
+            if not subgoal.next_state:
+                raise ValueError("Incomplete goals must have next_state")
             if not subgoal.validation_criteria:
                 raise ValueError("Incomplete goals must have validation_criteria")
             # Completion summary should not be present for incomplete goals
@@ -1188,7 +1191,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             "goal_id": goal_id,
             "parent_goal": "",
             "description": context.goal.description,
-            "next_step": context.goal.description,
+            "next_state": context.goal.description,
             "validation_criteria": context.goal.validation_criteria,
             "iteration": context.iteration,
             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1199,6 +1202,12 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             json.dump(goal_data, f, indent=2)
         
         return filename
+
+    def __str__(self):
+        if self.goal_completed:
+            return f"Goal completed. Reasoning: {self.reasoning}"
+        else:
+            return f"Next state: {self.next_state}\nValidation criteria: {self.validation_criteria}\nReasoning: {self.reasoning}"
 
 def validate_repository_state(repo_path, git_hash=None, skip_clean_check=False):
     """Validate that the repository is in a good state for goal decomposition."""
@@ -1263,10 +1272,10 @@ def list_subgoal_files(logs_dir="logs"):
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                     timestamp = data.get("timestamp", "")
-                    next_step = data.get("next_step", "")
+                    next_state = data.get("next_state", "")
                     parent_goal = data.get("parent_goal", "")
                     goal_id = data.get("goal_id", "")
-                    subgoal_files.append((file_path, timestamp, next_step, parent_goal, goal_id))
+                    subgoal_files.append((file_path, timestamp, next_state, parent_goal, goal_id))
             except:
                 continue
                 
@@ -1549,7 +1558,7 @@ def decompose_goal(
         return {
             "success": True,
             "goal_completed": False,
-            "next_step": subgoal_plan.next_step,
+            "next_state": subgoal_plan.next_state,
             "validation_criteria": subgoal_plan.validation_criteria,
             "reasoning": subgoal_plan.reasoning,
             "relevant_context": subgoal_plan.relevant_context,
