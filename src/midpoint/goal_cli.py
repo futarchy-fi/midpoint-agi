@@ -1058,7 +1058,7 @@ def show_goal_status():
                 print(f"{indent}   Last updated: {last_updated} by task {last_task}")
         
         # Print last analysis recommendation if available
-        if "last_analysis" in goal and not goal.get("complete", False):
+        if "last_analysis" in goal:
             last_analysis = goal["last_analysis"]
             action = last_analysis.get("suggested_action", "")
             timestamp = last_analysis.get("timestamp", "")
