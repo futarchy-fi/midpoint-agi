@@ -36,7 +36,6 @@ class SubgoalPlan(BaseModel):
     completion_summary: Optional[str] = None  # Summary of what was accomplished (for completed goals)
     next_step: str
     validation_criteria: List[str]
-    can_be_decomposed: bool = True  # Flag to indicate if more decomposition is needed
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     parent_goal: Optional[str] = None  # Reference to the parent goal file

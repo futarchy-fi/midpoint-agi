@@ -541,9 +541,7 @@ You have access to a memory repository where your responses will be automaticall
 The memory system captures your planning process and decisions automatically.
 
 For incomplete goals:
-- Determine if the next step CAN be broken down into smaller, meaningful steps
-- If the next step CAN be broken down into smaller steps, set 'can_be_decomposed' to TRUE
-- Only set 'can_be_decomposed' to FALSE if the step CANNOT be meaningfully broken down further
+- Determine the most focused and actionable next step
 - Identify relevant context that should be passed to child subgoals
 
 You have access to these tools:
@@ -804,7 +802,6 @@ You have access to these tools:
                         goal_completed=True,
                         completion_summary=output_data["completion_summary"],
                         reasoning=output_data["reasoning"],
-                        can_be_decomposed=False,  # Completed goals never need further decomposition
                         metadata={
                             "raw_response": content,
                             "tool_usage": tool_usage
@@ -820,9 +817,6 @@ You have access to these tools:
                         logging.error(f"Full response: {content}")
                         raise ValueError(error_msg)
                     
-                    # Extract can_be_decomposed (default to True if not provided)
-                    can_be_decomposed = output_data.get("can_be_decomposed", output_data.get("requires_further_decomposition", True))
-                    
                     # Extract relevant_context (default to empty dict if not provided)
                     relevant_context = output_data.get("relevant_context", {})
                     
@@ -831,7 +825,6 @@ You have access to these tools:
                         next_step=output_data["next_step"],
                         validation_criteria=output_data["validation_criteria"],
                         reasoning=output_data["reasoning"],
-                        can_be_decomposed=can_be_decomposed,
                         relevant_context=relevant_context,
                         metadata={
                             "raw_response": content,
@@ -863,7 +856,6 @@ You have access to these tools:
                         "goal": context.goal.description, 
                         "message_count": len(serialized_messages),
                         "next_step": final_output.next_step,
-                        "can_be_decomposed": final_output.can_be_decomposed,
                         "memory_hash": memory_hash  # Pass the memory hash to ensure we save to the correct state
                     },
                     memory_hash=memory_hash,
@@ -884,8 +876,6 @@ You have access to these tools:
                 logging.debug("Validation criteria:")
                 for i, criterion in enumerate(final_output.validation_criteria, 1):
                     logging.debug(f"  {i}. {criterion}")
-                
-                logging.debug(f"Can be decomposed: {final_output.can_be_decomposed}")
             
             # Add logging for the final output at debug level
             try:
@@ -908,7 +898,6 @@ You have access to these tools:
                         f.write(f"Reasoning: {final_output.reasoning}\n")
                     else:
                         f.write(f"Next step: {final_output.next_step}\n")
-                        f.write(f"Can be decomposed: {final_output.can_be_decomposed}\n")
                         f.write("\nValidation criteria:\n")
                         for i, criterion in enumerate(final_output.validation_criteria, 1):
                             f.write(f"  {i}. {criterion}\n")
@@ -999,7 +988,7 @@ Context:
 
 Your task is to determine based on the completed tasks whether the validation criteria for the goal have been met.
 
-For uncomplated goals, you must explore the repository, reason and provide a SINGLE NEXT STEP toward achieving the goal.
+For uncompleted goals, you must explore the repository, reason and provide a SINGLE NEXT STEP toward achieving the goal.
 
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
@@ -1015,7 +1004,6 @@ For incomplete goals:
 - next_step: A clear description of the single next step to take
 - validation_criteria: List of measurable criteria to validate this step's completion
 - reasoning: Explanation of why this is the most promising next action
-- can_be_decomposed: Boolean indicating if this step can be broken down further
 - relevant_context: Object containing relevant information to pass to child subgoals
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
@@ -1046,9 +1034,6 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
                 raise ValueError("Completed goals must have a completion_summary")
             if subgoal.next_step or subgoal.validation_criteria:
                 raise ValueError("Completed goals should not have next_step or validation_criteria")
-            # Completed goals should not require further decomposition
-            if subgoal.can_be_decomposed:
-                raise ValueError("Completed goals cannot require further decomposition")
         else:
             # For incomplete goals, we need next_step and validation_criteria
             if not subgoal.next_step:
@@ -1205,7 +1190,6 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
             "description": context.goal.description,
             "next_step": context.goal.description,
             "validation_criteria": context.goal.validation_criteria,
-            "can_be_decomposed": True,
             "iteration": context.iteration,
             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         }
@@ -1568,10 +1552,9 @@ def decompose_goal(
             "next_step": subgoal_plan.next_step,
             "validation_criteria": subgoal_plan.validation_criteria,
             "reasoning": subgoal_plan.reasoning,
-            "can_be_decomposed": subgoal_plan.can_be_decomposed,
             "relevant_context": subgoal_plan.relevant_context,
             "git_hash": updated_git_hash,
-            "is_task": not subgoal_plan.can_be_decomposed,
+            "is_task": False,  # Default to False (subgoal) - will be determined by goal_analyzer later
             "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
             "initial_git_hash": initial_git_hash,
             "memory_hash": current_memory_hash,  # Include current memory hash in the result

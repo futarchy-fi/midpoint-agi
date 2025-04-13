@@ -161,7 +161,6 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         "parent_goal": parent_id or "",
         "timestamp": timestamp,
         "is_task": False,
-        "requires_further_decomposition": True,
         "branch_name": branch_name,
         "initial_state": initial_state,
         "current_state": initial_state.copy()  # Set current_state to be same as initial_state
@@ -278,8 +277,7 @@ def create_new_goal(description):
             "description": description,
             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
             "branch_name": branch_name,
-            "is_task": False,
-            "requires_further_decomposition": True
+            "is_task": False
         }
         
         create_goal_file(goal_id, description, branch_name=branch_name)
@@ -375,7 +373,6 @@ def create_new_task(parent_id, description):
         "parent_goal": parent_id,
         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         "is_task": True,
-        "requires_further_decomposition": False,
         "initial_state": initial_state,
         "current_state": initial_state.copy()  # Set current_state to be same as initial_state
     }
@@ -1195,8 +1192,8 @@ def show_goal_tree():
                               v.get("parent_goal", "").upper() == f"{goal_id.upper()}.json"}
                 
                 if not subgoals:
-                    # Check if goal is a task or directly executable
-                    if goal.get("is_task", False) or goal.get("requires_further_decomposition") is False:
+                    # Check if goal is a task
+                    if goal.get("is_task", False):
                         if not states_equal:
                             status = "🔺"  # Branch task
                         else:
@@ -1374,7 +1371,7 @@ def generate_graph():
                          v.get("parent_goal") == f"{goal_id}.json"}
             
             if not subgoals:
-                if goal_data.get("is_task", False) or goal_data.get("requires_further_decomposition") is False:
+                if goal_data.get("is_task", False):
                     color = "yellow"  # Task/directly executable
                 else:
                     color = "gray"  # No subgoals (not yet decomposed)
@@ -1575,11 +1572,6 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 for criterion in result["validation_criteria"]:
                     print(f"- {criterion}")
                 
-                if result["can_be_decomposed"]:
-                    print("\nRequires further decomposition: Yes")
-                else:
-                    print("\nRequires further decomposition: No")
-                
                 print(f"\nGoal file: {result['goal_file']}")
             
             # Get updated memory hash after decomposition
@@ -1602,7 +1594,6 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 "next_step": result.get("next_step"),
                 "validation_criteria": result.get("validation_criteria", []),
                 "reasoning": result["reasoning"],
-                "can_be_decomposed": result.get("can_be_decomposed", result.get("requires_further_decomposition", True)),
                 "relevant_context": result.get("relevant_context", {}),
                 "decomposed": True,  # Mark the goal as decomposed
                 # Don't update current_state automatically during decomposition
@@ -1625,7 +1616,9 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
             # Only create subgoal if goal is not completed
             if not result.get("goal_completed", False):
                 # Create the subgoal file
-                subgoal_id = generate_goal_id(goal_id, is_task=not result["can_be_decomposed"])
+                # Assume it's not a task by default - will be determined by analyze later
+                is_task = False
+                subgoal_id = generate_goal_id(goal_id, is_task=is_task)
                 subgoal_file = goal_path / f"{subgoal_id}.json"
                 
                 # Create subgoal data with updated memory state
@@ -1634,8 +1627,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                     "description": result["next_step"],
                     "parent_goal": goal_id,
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    "is_task": not result["can_be_decomposed"],
-                    "can_be_decomposed": result["can_be_decomposed"],
+                    "is_task": is_task,
                     "validation_criteria": result["validation_criteria"],
                     "reasoning": result["reasoning"],
                     "relevant_context": result.get("relevant_context", {}),
@@ -1661,7 +1653,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 with open(subgoal_file, 'w') as f:
                     json.dump(subgoal_data, f, indent=2)
                 
-                print(f"Created {'task' if not result['can_be_decomposed'] else 'subgoal'} file: {subgoal_file}")
+                print(f"Created {'task' if is_task else 'subgoal'} file: {subgoal_file}")
             
             return True
         else:
@@ -2257,7 +2249,6 @@ def handle_solve_command(args):
             description=goal_data.get("description", ""),
             metadata={
                 "parent_goal": goal_data.get("parent_goal", ""),
-                "requires_further_decomposition": goal_data.get("requires_further_decomposition", True),
                 "is_complete": goal_data.get("is_complete", False)
             }
         )
@@ -2375,7 +2366,6 @@ def handle_solve_command(args):
                                     description=subgoal_data.get("description", ""),
                                     metadata={
                                         "parent_goal": subgoal_data.get("parent_goal", ""),
-                                        "requires_further_decomposition": subgoal_data.get("requires_further_decomposition", True),
                                         "is_complete": subgoal_data.get("is_complete", False)
                                     }
                                 )
@@ -2446,7 +2436,6 @@ def handle_solve_command(args):
                                         description=parent_data.get("description", ""),
                                         metadata={
                                             "parent_goal": parent_data.get("parent_goal", ""),
-                                            "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
                                             "is_complete": parent_data.get("is_complete", False)
                                         }
                                     )
@@ -2492,7 +2481,6 @@ def handle_solve_command(args):
                                     description=task_data.get("description", ""),
                                     metadata={
                                         "parent_goal": task_data.get("parent_goal", ""),
-                                        "requires_further_decomposition": False,
                                         "is_complete": False
                                     }
                                 )
@@ -2537,7 +2525,6 @@ def handle_solve_command(args):
                                     description=parent_data.get("description", ""),
                                     metadata={
                                         "parent_goal": parent_data.get("parent_goal", ""),
-                                        "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
                                         "is_complete": parent_data.get("is_complete", False)
                                     }
                                 )
@@ -2589,7 +2576,6 @@ def handle_solve_command(args):
                                     description=parent_data.get("description", ""),
                                     metadata={
                                         "parent_goal": parent_data.get("parent_goal", ""),
-                                        "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
                                         "is_complete": parent_data.get("is_complete", False)
                                     }
                                 )
@@ -2868,7 +2854,16 @@ def main():
     validate_history_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     
     # Add new subparser for analyzing a goal
-    analyze_parser = subparsers.add_parser("analyze", help="Analyze a goal and suggest next steps")
+    analyze_parser = subparsers.add_parser("analyze", 
+                                   help="Analyze a goal and suggest next steps (decompose, create_task, validate, etc.)",
+                                   description="""
+Intelligent analysis of a goal's current state to determine the best next action.
+Analysis considers child goals/tasks status, validation results, and remaining work.
+Primarily recommends "decompose" for complex goals that need further breakdown,
+or "validate" when enough children have been successfully completed to potentially
+satisfy all requirements. Other possible recommendations include "create_task" for
+simple remaining work, "mark_complete", "update_parent", or "give_up" in special cases.
+                                   """)
     analyze_parser.add_argument("goal_id", help="ID of the goal to analyze")
     analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
     
@@ -3095,7 +3090,6 @@ def revert_goal(goal_id):
             "parent_goal": goal_data.get("parent_goal"),
             "timestamp": goal_data["timestamp"],
             "is_task": goal_data.get("is_task", False),
-            "can_be_decomposed": goal_data.get("can_be_decomposed", goal_data.get("requires_further_decomposition", True)),
             "branch_name": goal_data.get("branch_name"),
             "initial_state": goal_data["initial_state"]
         }
@@ -3277,7 +3271,7 @@ def show_validation_history(goal_id, debug=False, quiet=False):
 
 def _get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
     """Get details of direct children (subgoals and tasks) for a given parent ID."""
-    goal_path = ensure_goal_dir()
+    goal_path = Path(".goal")
     children_details = []
     try:
         for file_path in goal_path.glob("*.json"):
@@ -3314,7 +3308,27 @@ def _get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
 
 
 def analyze_goal(goal_id, human_mode):
-    """Analyze a goal and suggest next steps using the GoalAnalyzer agent."""
+    """Analyze a goal and suggest next steps using the GoalAnalyzer agent.
+    
+    The analysis will recommend one of the following actions:
+    - "decompose": When goal needs new subgoals/subtasks. This is the default for most
+      incomplete complex goals, including cases where previous tasks failed validation
+      or when there's significant work remaining after some completed tasks.
+    - "create_task": Only for very specific, straightforward remaining work that can be
+      completed in a single atomic step.
+    - "validate": Only when sufficient children tasks have been completed AND
+      successfully validated, to confirm all requirements have been met.
+    - "mark_complete": When the goal is already validated or clearly finished.
+    - "update_parent": When a child was completed but parent state needs updating.
+    - "give_up": When the goal seems impossible, stuck, or no longer relevant.
+    
+    Args:
+        goal_id: ID of the goal to analyze
+        human_mode: Whether the analysis is being performed in human mode
+        
+    Returns:
+        bool: True if analysis was successful, False otherwise
+    """
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
 
@@ -3322,117 +3336,102 @@ def analyze_goal(goal_id, human_mode):
         logging.error(f"Goal {goal_id} not found")
         return False
 
-    try:
-        with open(goal_file, 'r') as f:
-            goal_data = json.load(f)
-    except Exception as e:
-        logging.error(f"Failed to read goal file {goal_file}: {e}")
-        return False
+    # Load the goal file - fail directly if this doesn't work
+    with open(goal_file, 'r') as f:
+        goal_data = json.load(f)
 
     # --- Prepare arguments for agent_analyze_goal ---
-    try:
-        # Get required state information from the loaded goal data
-        description = goal_data.get("description")
-        if not description:
-            logging.error(f"Goal {goal_id} is missing a description.")
-            return False
-        
-        validation_criteria = goal_data.get("validation_criteria")
-        parent_goal_id = goal_data.get("parent_goal")
-        
-        current_state = goal_data.get("current_state")
-        if not current_state:
-             logging.error(f"Goal {goal_id} is missing current_state information.")
-             return False
-             
-        repo_path = current_state.get("repository_path")
-        if not repo_path:
-             # Fallback to current working directory if not specified
-             repo_path = os.getcwd()
-             logging.warning(f"repository_path not found in goal state, using CWD: {repo_path}")
-             
-        memory_hash = current_state.get("memory_hash")
-        memory_repo_path = current_state.get("memory_repository_path")
-
-        # Optional args (assuming debug/quiet flags might be added to CLI later)
-        # For now, default them
-        debug_mode = False # Replace with args.debug if added
-        quiet_mode = False # Replace with args.quiet if added
-        bypass_validation = False # Replace with args.bypass_validation if added
-        
-        logging.info(f"Starting analysis for goal: {goal_id}")
-        logging.info(f"  Description: {description}")
-        logging.info(f"  Repo Path: {repo_path}")
-        logging.info(f"  Memory Path: {memory_repo_path}")
-        logging.info(f"  Memory Hash: {memory_hash}")
-
-        # --- Call the GoalAnalyzer Agent --- 
-        analysis_result = agent_analyze_goal(
-            repo_path=repo_path,
-            goal=description, # Pass the description
-            validation_criteria=validation_criteria,
-            parent_goal_id=parent_goal_id,
-            goal_id=goal_id,
-            memory_hash=memory_hash,
-            memory_repo_path=memory_repo_path,
-            debug=debug_mode,
-            quiet=quiet_mode,
-            bypass_validation=bypass_validation,
-            logs_dir="logs" # Assuming default logs dir
-            # input_file is not typically needed here as we load the goal data directly
-        )
-
-        # --- Process Result --- 
-        print("\n--- Analysis Result ---")
-        if analysis_result.get("success", False):
-            action = analysis_result.get("action", "unknown")
-            justification = analysis_result.get("justification", "No justification provided.")
-            print(f"Suggested Action: {action}")
-            print(f"Justification: {justification}")
-            
-            # Create analysis record
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Create a new analysis record
-            analysis_record = {
-                "timestamp": timestamp,
-                "mode": "human" if human_mode else "auto",
-                "suggested_action": action,
-                "justification": justification,
-                "final_memory_hash": analysis_result.get("memory_hash"), # Record memory hash after analysis
-                "confidence_score": analysis_result.get("confidence_score", 0.7),
-                "suggested_command": analysis_result.get("suggested_command", None)
-            }
-            
-            # Set as the most recent analysis
-            goal_data["last_analysis"] = analysis_record
-            
-            # Remove the old analysis_history array if it exists
-            if "analysis_history" in goal_data:
-                del goal_data["analysis_history"]
-
-            try:
-                with open(goal_file, 'w') as f:
-                    json.dump(goal_data, f, indent=2)
-                logging.info(f"Updated goal file {goal_file} with analysis results.")
-                return True # Indicate success
-            except Exception as e:
-                logging.error(f"Failed to update goal file {goal_file} after analysis: {e}")
-                return False # Indicate failure to update file
-        else:
-            error_msg = analysis_result.get("error", "Unknown analysis failure")
-            logging.error(f"Goal analysis failed for {goal_id}: {error_msg}")
-            print(f"Error during analysis: {error_msg}")
-            return False
-
-    except KeyError as e:
-         logging.error(f"Missing expected key in goal data for {goal_id}: {e}")
-         print(f"Error: Goal file {goal_file} is missing required information: {e}")
+    # Get required state information from the loaded goal data
+    description = goal_data.get("description")
+    if not description:
+        logging.error(f"Goal {goal_id} is missing a description.")
+        return False
+    
+    validation_criteria = goal_data.get("validation_criteria")
+    parent_goal_id = goal_data.get("parent_goal")
+    
+    current_state = goal_data.get("current_state")
+    if not current_state:
+         logging.error(f"Goal {goal_id} is missing current_state information.")
          return False
-    except Exception as e:
-         logging.error(f"An unexpected error occurred during analysis setup for {goal_id}: {e}", exc_info=True)
-         print(f"An unexpected error occurred: {e}")
+         
+    repo_path = current_state.get("repository_path")
+    if not repo_path:
+         # Fail if repo path is not specified
+         logging.error(f"repository_path not found in goal state.")
          return False
+         
+    memory_hash = current_state.get("memory_hash")
+    memory_repo_path = current_state.get("memory_repository_path")
+
+    # Optional args (assuming debug/quiet flags might be added to CLI later)
+    # For now, default them
+    debug_mode = False # Replace with args.debug if added
+    quiet_mode = False # Replace with args.quiet if added
+    bypass_validation = False # Replace with args.bypass_validation if added
+    
+    logging.info(f"Starting analysis for goal: {goal_id}")
+    logging.info(f"  Description: {description}")
+    logging.info(f"  Repo Path: {repo_path}")
+    logging.info(f"  Memory Path: {memory_repo_path}")
+    logging.info(f"  Memory Hash: {memory_hash}")
+
+    # --- Call the GoalAnalyzer Agent --- 
+    # No try/except here - let errors propagate up
+    analysis_result = agent_analyze_goal(
+        repo_path=repo_path,
+        goal=description, # Pass the description
+        validation_criteria=validation_criteria,
+        parent_goal_id=parent_goal_id,
+        goal_id=goal_id,
+        memory_hash=memory_hash,
+        memory_repo_path=memory_repo_path,
+        debug=debug_mode,
+        quiet=quiet_mode,
+        bypass_validation=bypass_validation,
+        logs_dir="logs" # Assuming default logs dir
+        # input_file is not typically needed here as we load the goal data directly
+    )
+
+    # --- Process Result --- 
+    print("\n--- Analysis Result ---")
+    if analysis_result.get("success", False):
+        action = analysis_result.get("action", "unknown")
+        justification = analysis_result.get("justification", "No justification provided.")
+        print(f"Suggested Action: {action}")
+        print(f"Justification: {justification}")
+        
+        # Create analysis record
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create a new analysis record
+        analysis_record = {
+            "timestamp": timestamp,
+            "mode": "human" if human_mode else "auto",
+            "suggested_action": action,
+            "justification": justification,
+            "final_memory_hash": analysis_result.get("memory_hash"), # Record memory hash after analysis
+            "confidence_score": analysis_result.get("confidence_score", 0.7),
+            "suggested_command": analysis_result.get("suggested_command", None)
+        }
+        
+        # Set as the most recent analysis
+        goal_data["last_analysis"] = analysis_record
+        
+        # Remove the old analysis_history array if it exists
+        if "analysis_history" in goal_data:
+            del goal_data["analysis_history"]
+
+        # Write updated goal file - fail directly if this doesn't work
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+        logging.info(f"Updated goal file {goal_file} with analysis results.")
+        return True # Indicate success
+    else:
+        error_msg = analysis_result.get("error", "Unknown analysis failure")
+        logging.error(f"Goal analysis failed for {goal_id}: {error_msg}")
+        print(f"Error during analysis: {error_msg}")
+        return False
 
 
 if __name__ == "__main__":

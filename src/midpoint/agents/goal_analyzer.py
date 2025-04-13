@@ -35,64 +35,23 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 # --- Robust Memory Tools Import --- 
 try:
-    # Try direct import first
-    import memory_tools
-    
-    # Create direct references to the functions we need
-    get_repo_path = memory_tools.get_repo_path
-    retrieve_recent_memory = memory_tools.retrieve_recent_memory # Assuming this exists now
-    store_memory_document = memory_tools.store_memory_document
+    # Import from the correct path with correct function names
+    from midpoint.agents.tools.memory_tools import system_get_repo_path as get_repo_path
+    from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+    from midpoint.agents.tools.memory_tools import system_store_document as store_memory_document
     
     # Log success
-    logging.debug("Successfully imported memory_tools directly")
+    logging.debug("Successfully imported memory_tools functions")
 except Exception as e:
-    logging.warning(f"Memory tools import failed. Using fallback implementations. Error: {e}")
+    # Log error and exit - no fallbacks
+    error_msg = f"Memory tools import failed: {e}"
+    logging.error(error_msg)
     if os.environ.get("DEBUG"):
         print("Exception traceback:")
         traceback.print_exc()
-    
-    # Define fallback implementations
-    def get_repo_path():
-        """Fallback implementation to get memory repository path."""
-        if os.environ.get("DEBUG"):
-            print("Using fallback get_repo_path")
-        return os.environ.get("MEMORY_REPO_PATH", os.path.expanduser("~/.midpoint/memory"))
-    
-    def retrieve_recent_memory(memory_hash: str, char_limit: int, repo_path: str) -> Tuple[int, List]:
-        """Fallback implementation for retrieving recent memory."""
-        logging.warning("Using fallback retrieve_recent_memory - returns empty.")
-        return 0, []
-        
-    def store_memory_document(content, category, metadata=None, repo_path=None, memory_hash=None):
-        """Fallback implementation to store a document."""
-        # Simplified fallback from goal_decomposer
-        logging.warning("Using fallback store_memory_document implementation.")
-        repo_path = repo_path or get_repo_path()
-        docs_dir = Path(repo_path) / "documents" / category
-        docs_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"doc_{int(time.time())}.md" # Need time import
-        doc_path = docs_dir / filename
-        try:
-            with open(doc_path, "w") as f: f.write(content)
-            logging.info(f"Stored document at: {doc_path} (fallback implementation)")
-            return {"success": True, "document_path": str(doc_path)}
-        except Exception as write_e:
-             logging.error(f"Fallback store_memory_document failed: {write_e}")
-             return {"success": False, "error": str(write_e)}
-# --- End Robust Memory Tools Import ---
-
-# Import other necessary modules
-try:
-    # Import necessary functions from goal_cli
-    # Adjust path assumption if needed
-    # Assuming goal_cli.py is in src/midpoint/ 
-    from goal_cli import _get_children_details # Function to get children status
-except ImportError as e:
-    logging.error(f"Could not import _get_children_details from goal_cli: {e}")
-    # Define a fallback if import fails
-    def _get_children_details(goal_id: str) -> List[Dict[str, Any]]:
-        logging.warning("Using fallback _get_children_details - returns empty list.")
-        return []
+    # We don't want fallbacks, so we will raise the error
+    raise ImportError(error_msg)
+# --- End Memory Tools Import ---
 
 # Import necessary types and classes
 from openai import OpenAI
@@ -199,12 +158,23 @@ Your Analysis Steps:
 1. OBSERVE: Carefully review all the provided context. If necessary context is missing or unclear, use the available tools (like read_file, search_code, list_directory) to gather more information about the repository state.
 2. ORIENT: Assess the goal's progress. Consider: Is the goal complete? Is the current state significantly different from the initial state? Are children complete? Does the memory suggest recent failures or successes?
 3. DECIDE: Based on your analysis, choose ONE of the following actions:
-    - "decompose": If the goal is complex, incomplete, and needs further breakdown.
-    - "create_task": If the goal is well-defined, actionable, and ready for direct execution.
-    - "validate": If the goal seems complete (e.g., all children done) but needs validation.
-    - "mark_complete": If the goal is already validated or clearly finished based on context.
-    - "update_parent": If a child was completed but the parent state doesn't reflect it.
-    - "give_up": If the goal seems impossible, stuck, or no longer relevant based on context/memory.
+    - "decompose": Recommended when the goal needs new subgoals or subtasks. Use this when:
+       a) The goal has no children tasks/subgoals yet and is too complex for a single task
+       b) The goal has children tasks that are completed but failed validation, requiring new approaches
+       c) Some children tasks are completed and validated, but remaining work is still complex
+       d) Previous decomposition attempts were unsuccessful and a new approach is needed
+       IMPORTANT: This is the default choice for most incomplete goals with substantial work remaining
+    
+    - "create_task": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
+    
+    - "validate": Recommended only when sufficient children tasks have been completed AND successfully validated, to potentially satisfy all the requirements for the goal. This is for confirming that all goal requirements have been met.
+    
+    - "mark_complete": Recommended when the goal is already validated or clearly finished based on context.
+    
+    - "update_parent": Recommended when a child was completed but the parent state doesn't reflect it.
+    
+    - "give_up": Recommended when the goal seems impossible, stuck, or no longer relevant based on context/memory.
+
 4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
 
 Available Tools (for observation only):
@@ -241,12 +211,27 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
 
         # Prepare the user prompt using the new function
         # Pass necessary context elements directly
-        user_prompt = self._create_analysis_user_prompt(
-            context, 
-            goal_id, 
-            memory_hash, 
-            memory_path
-        )
+        try:
+            user_prompt = self._create_analysis_user_prompt(
+                context, 
+                goal_id, 
+                memory_hash, 
+                memory_path
+            )
+        except ValueError as ve:
+            logging.error(f"Failed to create analysis user prompt: {str(ve)}")
+            return {
+                "action": "error",
+                "justification": f"Analysis failed during preparation: {str(ve)}",
+                "metadata": {"error_type": "preparation_error", "details": str(ve)}
+            }
+        except Exception as e:
+            logging.error(f"Unexpected error creating analysis user prompt: {str(e)}")
+            return {
+                "action": "error",
+                "justification": "Unexpected error during analysis preparation",
+                "metadata": {"error_type": "unexpected_error", "details": str(e)}
+            }
 
         messages = [{"role": "system", "content": self._generate_system_prompt()}]
         # Add memory retrieved in _create_analysis_user_prompt (how to pass it here?)
@@ -348,8 +333,13 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             return final_output # Return the dictionary
 
         except Exception as e:
-            logging.error(f"Error retrieving memory context: {str(e)}")
-            raise
+            logging.error(f"Unexpected error during goal analysis: {str(e)}")
+            # Return error action instead of raising the exception
+            return {
+                "action": "error",
+                "justification": f"Goal analysis failed with unexpected error: {str(e)}",
+                "metadata": {"error_type": "analysis_execution_error", "details": str(e)}
+            }
     
     def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> str:
         """Create the user prompt for the Goal Analyzer LLM."""
@@ -375,22 +365,63 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
 
         # --- 2. Get Children Details ---
         try:
-            # Import here to avoid potential top-level import issues if goal_cli changes
-            from goal_cli import _get_children_details
-            children_details = _get_children_details(goal_id)
+            # Local function to get children details - avoid circular imports
+            def get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
+                """Get details of direct children (subgoals and tasks) for a given parent ID."""
+                goal_path = Path(".goal")
+                children_details = []
+                try:
+                    for file_path in goal_path.glob("*.json"):
+                        with open(file_path, 'r') as f:
+                            data = json.load(f)
+                        
+                        # Check parent match (case-insensitive)
+                        parent_match = False
+                        file_parent = data.get("parent_goal", "")
+                        if file_parent:
+                            if file_parent.upper() == parent_goal_id.upper() or \
+                              file_parent.upper() == f"{parent_goal_id.upper()}.json":
+                                parent_match = True
+
+                        if parent_match:
+                            child_info = {
+                                "goal_id": data.get("goal_id", "Unknown"),
+                                "description": data.get("description", "N/A"),
+                                "is_task": data.get("is_task", False),
+                                "complete": data.get("complete", False) or data.get("completed", False),
+                                # Add other relevant fields if needed, e.g., last validation score
+                                "validation_score": data.get("validation_status", {}).get("last_score")
+                            }
+                            children_details.append(child_info)
+                            
+                except Exception as e:
+                    logging.error(f"Error getting children details for {parent_goal_id}: {e}")
+                    raise ValueError(f"Failed to get children details for {parent_goal_id}: {e}")
+
+                # Sort by goal ID for consistent order
+                children_details.sort(key=lambda x: x["goal_id"])
+                return children_details
+                
+            # Use the local function
+            children_details = get_children_details(goal_id)
+            
+            # Validate children_details is a valid list
+            if children_details is None:
+                raise ValueError(f"get_children_details returned None for goal {goal_id}")
+            if not isinstance(children_details, list):
+                raise ValueError(f"get_children_details returned non-list type: {type(children_details)}")
+                
             logging.info(f"Found {len(children_details)} children for goal {goal_id}")
-        except ImportError:
-             logging.error("Could not import _get_children_details from goal_cli.")
-             prompt_lines.append("Error: Could not get children details (import failed).")
         except Exception as e:
             logging.error(f"Failed to get children details for {goal_id}: {e}")
             prompt_lines.append("Error: Could not get children details.")
+            raise ValueError(f"Failed to get children details for goal {goal_id}: {e}")
 
         # --- 3. Retrieve Recent Memory ---
         if memory_hash and memory_repo_path:
             try:
                 # Import here to avoid potential top-level import issues
-                from tools.memory_tools import retrieve_recent_memory
+                from midpoint.agents.tools.memory_tools import retrieve_recent_memory
                 total_chars, memory_documents = retrieve_recent_memory(
                     memory_hash=memory_hash,
                     char_limit=10000, # Configurable?
@@ -413,7 +444,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                     memory_content = "No recent memory documents found."
 
             except ImportError:
-                 logging.error("Could not import retrieve_recent_memory from memory_tools.")
+                 logging.error("Could not import retrieve_recent_memory from midpoint.agents.tools.memory_tools.")
                  memory_content = "Error: Could not retrieve memory context (import failed)."
             except Exception as e:
                 logging.error(f"Error retrieving memory context: {str(e)}")
@@ -483,6 +514,89 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             if len(merged_subgoals) > 5: prompt_lines.append("  ...")
         else: prompt_lines.append("No subgoals merged.")
 
+        # --- 5. Code Inspection ---
+        # Add automatic code inspection for completed tasks that involve code changes
+        # This helps verify that tasks were actually completed correctly
+        prompt_lines.append("\n## Code Inspection")
+        
+        try:
+            # Look for key files mentioned in task descriptions or goal validation criteria
+            files_to_inspect = set()
+            
+            # Extract potential file paths from descriptions and criteria
+            all_descriptions = [goal_data.get('description', '')]
+            if completed_tasks:
+                all_descriptions.extend(task.get('description', '') for task in completed_tasks)
+            
+            # Add validation criteria
+            all_criteria = goal_data.get('validation_criteria', [])
+            for task in completed_tasks:
+                all_criteria.extend(task.get('validation_criteria', []))
+                
+            # Simple pattern matching to find potential file paths
+            import re
+            file_patterns = [
+                r"'([^']*\.py)'",  # Files in single quotes
+                r'"([^"]*\.py)"',   # Files in double quotes
+                r'`([^`]*\.py)`',   # Files in backticks
+                r'\b([\w/\.-]+\.py)\b' # Files with .py extension
+            ]
+            
+            for text in all_descriptions + all_criteria:
+                for pattern in file_patterns:
+                    matches = re.findall(pattern, text)
+                    files_to_inspect.update(matches)
+            
+            # Inspect identified files
+            if files_to_inspect:
+                prompt_lines.append("Inspecting relevant files to verify task implementation:")
+                for file_path in files_to_inspect:
+                    try:
+                        # Normalize path (handle relative paths)
+                        if not file_path.startswith('/'):
+                            if file_path.startswith('./'):
+                                file_path = file_path[2:]
+                            # Check both in repo root and in common directories
+                            paths_to_try = [
+                                file_path,
+                                f"src/{file_path}",
+                                f"debug/{file_path}"
+                            ]
+                        else:
+                            paths_to_try = [file_path]
+                            
+                        # Try each possible path
+                        file_content = None
+                        for path in paths_to_try:
+                            try:
+                                with open(path, 'r') as f:
+                                    file_content = f.read()
+                                    used_path = path
+                                    break
+                            except:
+                                continue
+                                
+                        if file_content:
+                            prompt_lines.append(f"\nFile: {used_path}")
+                            # Limit content to keep prompt size reasonable
+                            max_lines = 100
+                            lines = file_content.split('\n')
+                            if len(lines) > max_lines:
+                                half = max_lines // 2
+                                shown_lines = lines[:half] + ['...'] + lines[-half:]
+                                file_content = '\n'.join(shown_lines)
+                            prompt_lines.append(f"```\n{file_content}\n```")
+                        else:
+                            prompt_lines.append(f"Could not find or read file: {file_path}")
+                    except Exception as e:
+                        prompt_lines.append(f"Error inspecting file {file_path}: {str(e)}")
+            else:
+                prompt_lines.append("No specific files identified for inspection.")
+                
+        except Exception as e:
+            logging.error(f"Error during code inspection: {str(e)}")
+            prompt_lines.append(f"Error during code inspection: {str(e)}")
+
         # Memory Context
         prompt_lines.append("\n" + memory_content)
 
@@ -490,6 +604,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         prompt_lines.append("\n" + "="*20)
         prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
         prompt_lines.append("If necessary, use tools to observe the current state further.")
+        prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
         prompt_lines.append("Then, provide your suggested next action and justification in the required JSON format.")
 
         return "\n".join(prompt_lines)
@@ -576,7 +691,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         logging.info(f"Placeholder: _save_conversation_to_memory called for goal {goal_name}")
         # Example of calling the actual tool (if needed later and imported)
         # try:
-        #     from .tools.memory_tools import store_memory_document # Ensure import
+        #     from midpoint.agents.tools.memory_tools import store_memory_document # Ensure import
         #     # ... format content ...
         #     store_memory_document(content=..., category=..., metadata=metadata, memory_hash=memory_hash, memory_repo_path=repo_path)
         # except Exception as e:
@@ -614,16 +729,12 @@ def analyze_goal(
     configure_logging(debug, quiet, logs_dir)
     logging.info(f"Analyzing goal: {goal}")
 
-    # Initial state setup
-    try: 
-        from .tools.git_tools import get_current_hash 
-        current_git_hash = get_current_hash(repo_path) if repo_path else get_current_hash()
-        if not current_git_hash:
-             raise RuntimeError("Failed to get current git hash.")
-        logging.info(f"Current git hash: {current_git_hash[:8]}")
-    except Exception as e:
-        logging.error(f"Error getting initial git hash: {e}")
-        return {"success": False, "error": f"Failed to get initial git hash: {e}"}
+    # Initial state setup - don't catch ImportError
+    from .tools.git_tools import get_current_hash 
+    current_git_hash = get_current_hash(repo_path) if repo_path else get_current_hash()
+    if not current_git_hash:
+         raise RuntimeError("Failed to get current git hash.")
+    logging.info(f"Current git hash: {current_git_hash[:8]}")
 
     # Initialize state and context objects
     state = State(
@@ -663,50 +774,31 @@ def analyze_goal(
 
     # Re-validate memory state after potential input file loading
     if not context.memory_state or not context.memory_state.memory_hash or not context.memory_state.repository_path:
-         logging.warning("Memory state (hash or path) is missing after context setup. Analysis might be impaired.")
-         memory_hash = None 
-         memory_repo_path = context.memory_state.repository_path if context.memory_state else None 
+         raise ValueError("Memory state (hash or path) is missing after context setup. Analysis cannot proceed.")
 
-    # Validate repository state (optional)
+    # Validate repository state (don't catch exceptions)
     if not bypass_validation:
-        try: 
-            validate_repository_state(repo_path)
-        except Exception as e: 
-            logging.error(f"Repository validation failed: {e}")
-            return {"success": False, "error": f"Repository validation failed: {e}"}
+        validate_repository_state(repo_path)
 
-    # Create and run the analyzer
-    try:
-        analyzer = GoalAnalyzer()
-        # Pass the potentially updated memory_repo_path to the analyzer instance method
-        analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=True, debug=debug, quiet=quiet)
-    except Exception as e:
-        logging.error(f"GoalAnalyzer failed during execution: {e}", exc_info=debug)
-        return {"success": False, "error": f"Goal analysis agent failed: {e}"}
+    # Create and run the analyzer (don't catch exceptions)
+    analyzer = GoalAnalyzer()
+    # Pass the potentially updated memory_repo_path to the analyzer instance method
+    analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=True, debug=debug, quiet=quiet)
 
     # Get updated hashes after analysis
-    try: 
-        from .tools.git_tools import get_current_hash 
-        updated_git_hash = get_current_hash(repo_path) if repo_path else get_current_hash()
-        if not updated_git_hash:
-             logging.warning("Failed to get updated git hash after analysis.")
-             updated_git_hash = current_git_hash 
-             
-        updated_memory_hash = None
-        if memory_repo_path and os.path.exists(memory_repo_path):
-             try:
-                 updated_memory_hash = get_current_hash(memory_repo_path)
-                 if not updated_memory_hash:
-                      logging.warning(f"Failed to get updated memory hash from {memory_repo_path}.")
-             except Exception as mem_e:
-                  logging.warning(f"Error getting updated memory hash from {memory_repo_path}: {mem_e}")
-        else:
-             logging.info("Memory repo path not specified or doesn't exist, cannot get updated memory hash.")
-             
-    except Exception as e:
-        logging.error(f"Error getting updated state hashes: {e}")
-        updated_git_hash = current_git_hash
-        updated_memory_hash = memory_hash 
+    from .tools.git_tools import get_current_hash 
+    updated_git_hash = get_current_hash(repo_path) if repo_path else get_current_hash()
+    if not updated_git_hash:
+         logging.warning("Failed to get updated git hash after analysis.")
+         updated_git_hash = current_git_hash 
+         
+    updated_memory_hash = None
+    if memory_repo_path and os.path.exists(memory_repo_path):
+         updated_memory_hash = get_current_hash(memory_repo_path)
+         if not updated_memory_hash:
+              logging.warning(f"Failed to get updated memory hash from {memory_repo_path}.")
+    else:
+         logging.info("Memory repo path not specified or doesn't exist, cannot get updated memory hash.")
 
     # Construct Final Result 
     final_result = {
