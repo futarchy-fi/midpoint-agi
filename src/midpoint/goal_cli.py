@@ -2303,8 +2303,16 @@ def handle_solve_command(args):
                 )
                 
                 # Extract the recommended action from the analysis result
+                if "action_type" in analysis_result:
+                    recommended_action_type = analysis_result.get("action_type", "")
+                elif "action" in analysis_result:
+                    recommended_action_type = analysis_result.get("action", "")
+                else:
+                    recommended_action_type = ""
+                
                 recommended_action = analysis_result.get("recommended_action", "")
-                recommended_action_type = analysis_result.get("action_type", "")
+                if not recommended_action:
+                    recommended_action = analysis_result.get("justification", "")
                 
                 log_progress(f"Analysis recommends: {recommended_action_type} - {recommended_action}")
             except Exception as e:
@@ -2528,6 +2536,58 @@ def handle_solve_command(args):
                         break
                 except Exception as e:
                     log_progress(f"ERROR: Goal completion failed: {e}")
+                    if debug:
+                        import traceback
+                        traceback.print_exc()
+                    break
+            elif recommended_action_type == "validate":
+                # VALIDATE: The goal is ready for validation
+                log_progress(f"Validating goal {current_goal_id}")
+                try:
+                    # Here we could call a validation function if needed
+                    # For now, we'll just mark the goal as complete
+                    mark_goal_complete(current_goal_id)
+                    log_progress(f"Goal {current_goal_id} validated and marked as complete")
+                    
+                    # Check if this is a subgoal and needs to be merged to parent
+                    parent_goal_id = goal.metadata["parent_goal"]
+                    if parent_goal_id:
+                        # Try to merge the subgoal to parent
+                        log_progress(f"Merging subgoal {current_goal_id} to parent {parent_goal_id}")
+                        merge_result = merge_subgoal(current_goal_id)
+                        if merge_result:
+                            # Move up to parent goal
+                            log_progress(f"Successfully merged. Moving up to parent goal {parent_goal_id}")
+                            current_goal_id = parent_goal_id
+                            
+                            # Update context for next iteration with parent goal
+                            parent_file = goal_path / f"{parent_goal_id}.json"
+                            if parent_file.exists():
+                                with open(parent_file, 'r') as f:
+                                    parent_data = json.load(f)
+                                
+                                # Create updated goal object for the parent
+                                goal = Goal(
+                                    id=parent_goal_id,
+                                    description=parent_data.get("description", ""),
+                                    metadata={
+                                        "parent_goal": parent_data.get("parent_goal", ""),
+                                        "requires_further_decomposition": parent_data.get("requires_further_decomposition", True),
+                                        "is_complete": parent_data.get("is_complete", False)
+                                    }
+                                )
+                                context.goal = goal
+                                context.metadata["goal_id"] = parent_goal_id
+                        else:
+                            log_progress(f"WARNING: Failed to merge subgoal {current_goal_id} to parent {parent_goal_id}")
+                            break
+                    else:
+                        # This was a top-level goal, we're done
+                        log_progress(f"Top-level goal {current_goal_id} completed")
+                        success = True
+                        break
+                except Exception as e:
+                    log_progress(f"ERROR: Goal validation failed: {e}")
                     if debug:
                         import traceback
                         traceback.print_exc()
