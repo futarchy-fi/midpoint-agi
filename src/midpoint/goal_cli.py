@@ -1057,6 +1057,18 @@ def show_goal_status():
             if last_updated and last_task:
                 print(f"{indent}   Last updated: {last_updated} by task {last_task}")
         
+        # Print last analysis recommendation if available
+        if "last_analysis" in goal and not goal.get("complete", False):
+            last_analysis = goal["last_analysis"]
+            action = last_analysis.get("suggested_action", "")
+            timestamp = last_analysis.get("timestamp", "")
+            cmd = last_analysis.get("suggested_command", "")
+            
+            if action:
+                print(f"{indent}   Recommended action: {action}")
+                if cmd:
+                    print(f"{indent}   Suggested command: {cmd}")
+        
         # Print completed tasks if available
         if "completed_tasks" in goal and goal["completed_tasks"] and not goal.get("complete", False):
             print(f"{indent}   Completed tasks:")
@@ -2307,6 +2319,11 @@ def handle_solve_command(args):
                     recommended_action_type = analysis_result.get("action_type", "")
                 elif "action" in analysis_result:
                     recommended_action_type = analysis_result.get("action", "")
+                elif "suggested_action" in analysis_result:
+                    recommended_action_type = analysis_result.get("suggested_action", "")
+                elif goal_data.get("last_analysis", {}).get("suggested_action"):
+                    # Fallback to the last analysis if available
+                    recommended_action_type = goal_data.get("last_analysis", {}).get("suggested_action", "")
                 else:
                     recommended_action_type = ""
                 
@@ -3373,15 +3390,26 @@ def analyze_goal(goal_id, human_mode):
             print(f"Suggested Action: {action}")
             print(f"Justification: {justification}")
             
-            # Update the goal file with the analysis result
+            # Create analysis record
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Create a new analysis record
             analysis_record = {
-                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "mode": "auto", # Since human_mode is removed
+                "timestamp": timestamp,
+                "mode": "human" if human_mode else "auto",
                 "suggested_action": action,
                 "justification": justification,
-                "final_memory_hash": analysis_result.get("memory_hash") # Record memory hash after analysis
+                "final_memory_hash": analysis_result.get("memory_hash"), # Record memory hash after analysis
+                "confidence_score": analysis_result.get("confidence_score", 0.7),
+                "suggested_command": analysis_result.get("suggested_command", None)
             }
+            
+            # Set as the most recent analysis
             goal_data["last_analysis"] = analysis_record
+            
+            # Remove the old analysis_history array if it exists
+            if "analysis_history" in goal_data:
+                del goal_data["analysis_history"]
 
             try:
                 with open(goal_file, 'w') as f:
