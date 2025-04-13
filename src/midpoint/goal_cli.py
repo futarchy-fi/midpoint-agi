@@ -2024,6 +2024,8 @@ def main_command(args):
         return create_new_task(args.parent_id, args.description)
     elif args.command == "list":
         return list_goals()
+    elif args.command == "delete":
+        return delete_goal(args.goal_id)
     elif args.command == "back":
         return go_back_commits(args.steps)
     elif args.command == "reset":
