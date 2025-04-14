@@ -232,10 +232,25 @@ Context Provided:
 - Status of child goals/tasks (if any)
 - History of completed tasks and merged subgoals for this goal
 - Recent memory context relevant to this goal
+- Last execution status (if any)
+- Failed attempts history for this goal (if any)
+- Merged subgoals history and their outcomes
 
 Your Analysis Steps:
-1. OBSERVE: Carefully review all the provided context. If necessary context is missing or unclear, use the available tools (like read_file, search_code, list_directory) to gather more information about the repository state.
-2. ORIENT: Assess the goal's progress. Consider: Is the goal complete? Is the current state significantly different from the initial state? Are children complete? Does the memory suggest recent failures or successes?
+1. OBSERVE: Carefully review all the provided context. Pay special attention to:
+   - Last execution status and any failures
+   - Failed attempts history
+   - Available tools and their capabilities
+   - Parent goal context and requirements
+
+2. ORIENT: Assess the goal's progress and feasibility. Consider:
+   - Is the goal complete?
+   - Is the current state significantly different from the initial state?
+   - Are children complete?
+   - Does the memory suggest recent failures or successes?
+   - Are required tools or capabilities available?
+   - Have similar attempts failed before?
+
 3. DECIDE: Based on your analysis, choose ONE of the following actions:
     - "decompose": Recommended when the goal needs new subgoals or subtasks. Use this when:
        a) The goal has no children tasks/subgoals yet and is too complex for a single task
@@ -245,13 +260,16 @@ Your Analysis Steps:
     
     - "create_task": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
     
-    - "validate": Recommended only when sufficient children tasks have been completed AND successfully validated, to potentially satisfy all the requirements for the goal. This is for confirming that all goal requirements have been met.
+    - "validate": Recommended only when sufficient children tasks have been completed AND successfully validated, to potentially satisfy all the requirements for the goal.
     
     - "mark_complete": Recommended when the goal is already validated or clearly finished based on context.
     
     - "update_parent": Recommended when a child was completed but the parent state doesn't reflect it.
     
-    - "give_up": Recommended when the goal seems impossible, stuck, or no longer relevant based on context/memory.
+    - "give_up": Recommended when:
+       a) The goal is ill-defined or ambiguous
+       b) The goal is fundamentally impossible with current tools/capabilities
+       c) The history of failed attempts shows a lack of variability and latest attempts have been repetitive and uncreative
 
 4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
    The justification MUST be detailed. For `decompose`, explain *what specific aspects* make the goal too complex for a single task.
@@ -434,6 +452,58 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                         else:
                              raise ValueError("LLM response missing 'action' or 'justification' and no JSON block found.")
 
+                    # Handle give_up action
+                    if output_data.get("action") == "give_up":
+                        log_with_timestamp("Goal analyzer recommended giving up", llm_logger)
+                        
+                        # Load the goal file to get parent information
+                        goal_path = Path(".goal")
+                        goal_file = goal_path / f"{goal_id}.json"
+                        if goal_file.exists():
+                            with open(goal_file, 'r') as f:
+                                goal_data = json.load(f)
+                            
+                            # Get parent goal ID
+                            parent_goal_id = goal_data.get("parent_goal")
+                            if parent_goal_id:
+                                # Load parent goal file
+                                parent_file = goal_path / f"{parent_goal_id}.json"
+                                if parent_file.exists():
+                                    with open(parent_file, 'r') as f:
+                                        parent_data = json.load(f)
+                                    
+                                    # Initialize failed_attempts_history if it doesn't exist
+                                    if "failed_attempts_history" not in parent_data:
+                                        parent_data["failed_attempts_history"] = []
+                                    
+                                    # Add failure record
+                                    failure_record = {
+                                        "attempted_goal_id": goal_id,
+                                        "attempted_goal_description": goal_data.get("description", "N/A"),
+                                        "failure_reason": output_data.get("justification", "No reason provided"),
+                                        "failure_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    }
+                                    parent_data["failed_attempts_history"].append(failure_record)
+                                    
+                                    # Save updated parent data
+                                    with open(parent_file, 'w') as f:
+                                        json.dump(parent_data, f, indent=2)
+                                    
+                                    log_with_timestamp(f"Updated parent goal {parent_goal_id} with failure history", llm_logger)
+                        
+                        # Update current goal file to mark it as given up
+                        goal_data["status"] = "given_up"
+                        if "last_analysis" not in goal_data:
+                            goal_data["last_analysis"] = {}
+                        goal_data["last_analysis"]["action"] = "give_up"
+                        goal_data["last_analysis"]["justification"] = output_data.get("justification", "No justification provided")
+                        goal_data["last_analysis"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        
+                        with open(goal_file, 'w') as f:
+                            json.dump(goal_data, f, indent=2)
+                        
+                        log_with_timestamp(f"Marked goal {goal_id} as given up", llm_logger)
+                    
                     # Create the final result dictionary
                     final_output = {
                         "action": output_data["action"],
@@ -643,7 +713,6 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             llm_logger.warning(warning_msg)
             memory_content = "Memory context unavailable (missing hash or path)."
 
-
         # --- 4. Format Prompt ---
         llm_logger.debug(f"Formatting final analysis prompt")
         prompt_lines.append(f"Goal Analysis Request for Goal [{goal_id}]")
@@ -675,7 +744,6 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         if initial_state.get('memory_hash') != current_state.get('memory_hash'):
              prompt_lines.append(f"(Initial Memory Hash: {initial_state.get('memory_hash', 'N/A')})")
 
-
         # Children Status
         prompt_lines.append("\n## Children Status")
         if children_details:
@@ -691,6 +759,8 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         prompt_lines.append("\n## History for this Goal")
         completed_tasks = goal_data.get('completed_tasks', [])
         merged_subgoals = goal_data.get('merged_subgoals', [])
+        failed_attempts = goal_data.get('failed_attempts_history', []) # Load failed attempts history here
+
         if completed_tasks:
             prompt_lines.append(f"Completed Tasks ({len(completed_tasks)}):")
             for task in completed_tasks[:5]: # Limit history shown
@@ -704,6 +774,32 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                  prompt_lines.append(f"- {merge.get('subgoal_id')} (at {merge.get('merge_time')})")
             if len(merged_subgoals) > 5: prompt_lines.append("  ...")
         else: prompt_lines.append("No subgoals merged.")
+
+        # Now this check is safe
+        if failed_attempts:
+            prompt_lines.append(f"Failed Attempts History ({len(failed_attempts)}):")
+            # Display the most recent failures first
+            for attempt in reversed(failed_attempts[-5:]): # Show last 5 failures
+                ts = attempt.get('failure_timestamp', 'N/A')
+                reason = attempt.get('failure_reason', 'No reason provided')
+                attempted_id = attempt.get('attempted_goal_id', goal_id) # Use current goal_id if child ID not present
+                prompt_lines.append(f"- Attempt on {attempted_id} at {ts}: {reason[:100]}...") # Truncate reason
+            if len(failed_attempts) > 5: prompt_lines.append("  ...")
+        else:
+            prompt_lines.append("No failed attempts recorded for this goal.")
+
+        # Last Execution Status from goal data
+        prompt_lines.append("\n## Last Execution Status")
+        last_execution = goal_data.get('last_execution')
+        if last_execution and isinstance(last_execution, dict):
+            timestamp = last_execution.get("timestamp", "N/A")
+            success = last_execution.get("success", "Unknown")
+            summary = last_execution.get("summary", "No summary provided.")
+            prompt_lines.append(f"Timestamp: {timestamp}")
+            prompt_lines.append(f"Success: {success}")
+            prompt_lines.append(f"Summary: {summary}")
+        else:
+            prompt_lines.append("No specific last execution status recorded.")
 
         # --- 5. Code Inspection ---
         llm_logger.debug("Performing code inspection for relevant files")
