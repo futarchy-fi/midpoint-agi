@@ -1040,24 +1040,9 @@ Memory State:
             logging.info("No completed tasks found in metadata")
 
         # Additional warning about repeating goals - add after completed tasks section
-        if hasattr(context, 'metadata') and context.metadata and 'parent_goal' in context.metadata:
-            parent_id = context.metadata['parent_goal']
-            parent_desc = None
-            
-            # Try to get the parent goal description
-            goal_path = Path(os.environ.get("GOAL_DIR", ".goal"))
-            parent_file = goal_path / f"{parent_id}.json"
-            if parent_file.exists():
-                try:
-                    with open(parent_file, 'r') as f:
-                        parent_data = json.load(f)
-                        parent_desc = parent_data.get('description', None)
-                except:
-                    pass
-            
-            if parent_desc:
-                prompt += f"\nIMPORTANT: The parent goal is '{parent_id}': {parent_desc}\n"
-                prompt += "Your first subtask MUST be meaningfully different and more specific than the parent goal.\n"
+        if hasattr(context, 'metadata') and context.metadata and 'goal_id' in context.metadata:
+            current_goal_id = context.metadata['goal_id'] # Already retrieved earlier
+            prompt += f"\nIMPORTANT: Your first subtask MUST be meaningfully different and more specific than the goal currently being decomposed ('{current_goal_id}').\n"
         
         prompt += f"""
 Context:
@@ -1065,7 +1050,7 @@ Context:
 - Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
 You MUST provide a structured response in JSON format with these fields:
-- all_subtasks: A list of 3-5 clear subtasks needed to complete the goal
+- all_subtasks: A list of 3-5 clear subtasks needed *specifically* to complete the current Goal ({current_goal_id}).
 - next_state: A clear description of the first subtask that should be tackled
 - validation_criteria: List of measurable criteria to verify this subtask has been reached
 - further_steps: List of the remaining subtasks needed to complete the goal after this one
