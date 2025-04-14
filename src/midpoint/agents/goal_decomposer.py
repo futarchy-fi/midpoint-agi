@@ -659,8 +659,35 @@ You have access to these tools:
         if not context.state.repository_path:
             raise ValueError("Repository path not provided in state")
             
-        # Prepare the user prompt
-        user_prompt = self._create_user_prompt(context)
+        # --- Start Loading Analysis Justification ---
+        goal_id = context.metadata.get('goal_id')
+        analysis_justification = None
+        if goal_id:
+            goal_file_path = Path(".goal") / f"{goal_id}.json"
+            if goal_file_path.exists():
+                try:
+                    with open(goal_file_path, 'r') as f:
+                        goal_data = json.load(f)
+                    # Look for the justification added by the analyzer/cli
+                    analysis_justification = goal_data.get("analysis_justification")
+                    if not analysis_justification:
+                        # Fallback to justification within last_analysis if the specific key isn't found
+                        analysis_justification = goal_data.get("last_analysis", {}).get("justification")
+                    
+                    if analysis_justification:
+                         logging.info(f"Found analysis justification for goal {goal_id}.")
+                    else:
+                         logging.warning(f"Could not find analysis justification in goal file {goal_file_path}")
+                except Exception as e:
+                    logging.error(f"Error loading or reading goal file {goal_file_path} to get justification: {e}")
+            else:
+                 logging.warning(f"Goal file {goal_file_path} not found, cannot load justification.")
+        else:
+             logging.warning("Goal ID not found in context metadata, cannot load justification.")
+        # --- End Loading Analysis Justification ---
+
+        # Prepare the user prompt, passing the justification
+        user_prompt = self._create_user_prompt(context, analysis_justification=analysis_justification)
         
         # Get memory repository path if available
         memory_repo_path = context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None
@@ -991,14 +1018,23 @@ You have access to these tools:
             # Let the main function handle the specific error types
             raise
     
-    def _create_user_prompt(self, context: TaskContext) -> str:
+    def _create_user_prompt(self, context: TaskContext, analysis_justification: Optional[str] = None) -> str:
         """Create the user prompt for the agent."""
         current_goal_id = context.metadata.get('goal_id', 'Unknown') # Get current goal ID
         prompt = f"""Goal ({current_goal_id}): {context.goal.description}
 
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
+"""
+        # --- Add Analysis Justification ---
+        if analysis_justification:
+            prompt += f"""
+Analysis Context:
+- Reason for Decomposition: {analysis_justification}
+"""
+        # --- End Analysis Justification ---
 
+        prompt += f"""
 Current State:
 - Git Hash: {context.state.git_hash}
 """
@@ -1193,7 +1229,7 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         NOTE: This method is maintained for backward compatibility and testing.
         In production, goal files should be managed by goal_cli.py.
         """
-        logging.warning("Using GoalDecomposer.list_subgoal_files which is deprecated. Goal files should be managed by goal_cli.py")
+        logging.warning("Using goal_decomposer.list_subgoal_files which is deprecated. Goal files should be managed by goal_cli.py")
         return list_subgoal_files(logs_dir)
 
     def create_top_goal_file(self, context: TaskContext, logs_dir="logs") -> str:

@@ -242,7 +242,6 @@ Your Analysis Steps:
        b) The goal has children tasks that are completed but failed validation, requiring new approaches
        c) Some children tasks are completed and validated, but remaining work is still complex
        d) Previous decomposition attempts were unsuccessful and a new approach is needed
-       IMPORTANT: This is the default choice for most incomplete goals with substantial work remaining
     
     - "create_task": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
     
@@ -255,6 +254,8 @@ Your Analysis Steps:
     - "give_up": Recommended when the goal seems impossible, stuck, or no longer relevant based on context/memory.
 
 4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
+   The justification MUST be detailed. For `decompose`, explain *what specific aspects* make the goal too complex for a single task.
+   For `create_task`, explain *why* it's simple enough.
 
 Available Tools (for observation only):
 {tool_descriptions_text}
@@ -361,142 +362,145 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         log_with_timestamp("==== END SYSTEM PROMPT ====", llm_logger)
 
         tool_usage = []
+        max_retries = 1 # Allow one retry on JSON parsing failure
+        attempts = 0
+        final_output = None
+        raw_content = ""
 
-        try:
-            # Log request
+        while attempts <= max_retries:
+            attempts += 1
+            # --- Start Try Block for this attempt ---
             try:
-                log_with_timestamp("==== LLM REQUEST ====", llm_logger)
-                llm_logger.debug(json.dumps(self._serialize_messages(messages), indent=2))
-                log_with_timestamp("==== END LLM REQUEST ====", llm_logger)
-            except Exception as log_e:
-                log_with_timestamp(f"Failed to serialize request: {str(log_e)}", llm_logger)
+                # Log request messages
+                try:
+                    log_with_timestamp(f"==== FINAL LLM MESSAGES (Attempt {attempts}) ====", llm_logger)
+                    llm_logger.debug(json.dumps(self._serialize_messages(messages), indent=2))
+                    log_with_timestamp("==== END FINAL LLM MESSAGES ====", llm_logger)
+                except Exception as log_e:
+                    log_with_timestamp(f"Failed to serialize request messages for logging: {str(log_e)}", llm_logger)
 
-            # Get analysis from the model, allowing tool use
-            log_with_timestamp("Sending request to LLM...", llm_logger)
-            message, tool_calls = self.tool_processor.run_llm_with_tools(
-                messages, model=self.model,
-                validate_json_format=True, # Expecting JSON output
-                max_tokens=1000 # Analysis output should be shorter
-            )
-            log_with_timestamp("Received response from LLM", llm_logger)
+                # Get analysis from the model, allowing tool use
+                log_with_timestamp("Sending request to LLM...", llm_logger)
+                message, tool_calls = self.tool_processor.run_llm_with_tools(
+                    messages, model=self.model,
+                    validate_json_format=True, # Expecting JSON output
+                    max_tokens=1000 # Analysis output should be shorter
+                )
+                log_with_timestamp("Received response from LLM", llm_logger)
 
-            if tool_calls:
-                # We might need to handle the case where tools update the state
-                # before the final analysis JSON is produced. 
-                # For now, just record usage.
-                log_with_timestamp("==== TOOL USAGE ====", llm_logger)
-                for tool_call in tool_calls: 
-                    # Basic serialization for logging/metadata
-                    tool_usage.append(str(tool_call))
-                    # Log each tool call
-                    try:
-                        tool_name = tool_call.function.name if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('name', 'unknown_tool')
-                        tool_args = tool_call.function.arguments if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('arguments', '{}')
-                        log_with_timestamp(f"Tool: {tool_name}", llm_logger)
-                        log_with_timestamp(f"Arguments: {tool_args}", llm_logger)
-                    except Exception as tool_e:
-                        log_with_timestamp(f"Failed to log tool call: {str(tool_e)}", llm_logger)
-                log_with_timestamp("==== END TOOL USAGE ====", llm_logger)
-
-            # Parse the model's final response (expecting JSON)
-            if isinstance(message, list): content = message[-1].get('content', '')
-            else: content = message.get('content') if isinstance(message, dict) else message.content
-
-            logging.debug(f"Raw model response: {content}")
-            log_with_timestamp("==== LLM RAW RESPONSE ====", llm_logger)
-            llm_logger.debug(content)
-            log_with_timestamp("==== END LLM RAW RESPONSE ====", llm_logger)
-
-            try:
-                log_with_timestamp("Parsing LLM response...", llm_logger)
-                output_data = json.loads(content)
-                 # Validate expected fields
-                if not all(key in output_data for key in ["action", "justification"]):
-                    # If missing, try extracting from markdown code blocks
-                    log_with_timestamp("Missing expected fields, trying to extract from code blocks...", llm_logger)
-                    json_match = re.search(r'```(?:json)?\s*(\{.+?\})?\s*```', content, re.DOTALL)
-                    if json_match:
+                # Record tool usage if any occurred in this attempt
+                if tool_calls:
+                    log_with_timestamp("==== TOOL USAGE ====", llm_logger)
+                    for tool_call in tool_calls: 
+                        tool_usage.append(str(tool_call))
                         try:
-                            output_data = json.loads(json_match.group(1))
-                            if not all(key in output_data for key in ["action", "justification"]):
-                                raise ValueError("Extracted JSON missing 'action' or 'justification'")
-                        except (json.JSONDecodeError, ValueError) as inner_e:
-                             logging.error(f"Failed to parse extracted JSON or validate fields: {inner_e}")
-                             log_with_timestamp(f"Failed to parse extracted JSON or validate fields: {inner_e}", llm_logger)
-                             raise ValueError("LLM response JSON invalid or missing fields even after extraction.")
-                    else:
-                         raise ValueError("LLM response missing 'action' or 'justification' and no JSON block found.")
-
-                # Create the final result dictionary
-                final_output = {
-                    "action": output_data["action"],
-                    "justification": output_data["justification"],
-                    "metadata": { "raw_response": content, "tool_usage": tool_usage }
-                }
-                logging.info(f"✅ Analysis complete. Suggested action: {final_output['action']}")
-                logging.debug(f"Justification: {final_output['justification']}")
-                log_with_timestamp("==== PARSED OUTPUT ====", llm_logger)
-                log_with_timestamp(f"Action: {final_output['action']}", llm_logger)
-                log_with_timestamp(f"Justification: {final_output['justification']}", llm_logger)
-                log_with_timestamp("==== END PARSED OUTPUT ====", llm_logger)
-
-            except (json.JSONDecodeError, ValueError) as e:
-                error_msg = f"Error processing model response: {str(e)}"
-                logging.error(error_msg)
-                log_with_timestamp(f"Error processing model response: {str(e)}", llm_logger)
-                log_with_timestamp(f"Raw response was: {content}", llm_logger)
-                # Handle error - return a default "error" action
-                final_output = {
-                    "action": "error",
-                    "justification": f"Failed to process LLM analysis response: {str(e)}",
-                    "metadata": { "raw_response": content, "tool_usage": tool_usage }
-                }
-
-            # Save conversation to memory
-            # Make sure get_repo_path() is available or handled
-            try: 
-                repo_path_for_saving = memory_path or get_repo_path() 
-            except NameError: # Handle if get_repo_path wasn't imported
-                 repo_path_for_saving = None
-                 logging.warning("get_repo_path not available, cannot determine default memory path for saving.")
-                 
-            if repo_path_for_saving and memory_hash: # Only save if path and hash are valid
-                 log_with_timestamp("Saving conversation to memory...", llm_logger)
-                 self._save_conversation_to_memory(
-                     messages, 
-                     metadata={
-                         "goal": context.goal.description,
-                         "goal_id": goal_id,
-                         "suggested_action": final_output["action"],
-                         "memory_hash": memory_hash # Use the initial hash for saving context
-                     },
-                     memory_hash=memory_hash,
-                     repo_path=repo_path_for_saving,
-                     goal_name=context.goal.description
-                 )
-                 log_with_timestamp(f"Saved conversation to memory at {repo_path_for_saving}", llm_logger)
-            else:
-                warning_msg = "Skipping saving conversation to memory due to missing repo path or hash."
-                logging.warning(warning_msg)
-                log_with_timestamp(warning_msg, llm_logger)
+                            tool_name = tool_call.function.name if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('name', 'unknown_tool')
+                            tool_args = tool_call.function.arguments if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('arguments', '{}')
+                            log_with_timestamp(f"Tool: {tool_name}", llm_logger)
+                            log_with_timestamp(f"Arguments: {tool_args}", llm_logger)
+                        except Exception as tool_e:
+                            log_with_timestamp(f"Failed to log tool call: {str(tool_e)}", llm_logger)
+                    log_with_timestamp("==== END TOOL USAGE ====", llm_logger)
                 
-            log_with_timestamp("========== GOAL ANALYSIS COMPLETE ==========", llm_logger)
+                # Parse the model's final response (expecting JSON)
+                if isinstance(message, list): content = message[-1].get('content', '')
+                else: content = message.get('content') if isinstance(message, dict) else message.content
+                raw_content = content # Store raw content for potential error message
 
-            return final_output # Return the dictionary
+                logging.debug(f"Raw model response (Attempt {attempts}): {content}")
+                log_with_timestamp(f"==== LLM RAW RESPONSE CONTENT (Attempt {attempts}) ====", llm_logger)
+                llm_logger.debug(content) # Log the raw string content
+                log_with_timestamp(f"==== END LLM RAW RESPONSE CONTENT (Attempt {attempts}) ====", llm_logger)
+                
+                # --- Start Try Block for JSON Parsing ---
+                try:
+                    log_with_timestamp("Parsing LLM response...", llm_logger)
+                    output_data = json.loads(content)
+                     # Validate expected fields
+                    if not all(key in output_data for key in ["action", "justification"]):
+                        # If missing, try extracting from markdown code blocks
+                        log_with_timestamp("Missing expected fields, trying to extract from code blocks...", llm_logger)
+                        json_match = re.search(r'```(?:json)?\s*(\{.+?\})?\s*```', content, re.DOTALL)
+                        if json_match:
+                            try:
+                                output_data = json.loads(json_match.group(1))
+                                if not all(key in output_data for key in ["action", "justification"]):
+                                    raise ValueError("Extracted JSON missing 'action' or 'justification'")
+                            except (json.JSONDecodeError, ValueError) as inner_e:
+                                 logging.error(f"Failed to parse extracted JSON or validate fields: {inner_e}")
+                                 log_with_timestamp(f"Failed to parse extracted JSON or validate fields: {inner_e}", llm_logger)
+                                 raise ValueError("LLM response JSON invalid or missing fields even after extraction.")
+                        else:
+                             raise ValueError("LLM response missing 'action' or 'justification' and no JSON block found.")
 
-        except Exception as e:
-            error_msg = f"Unexpected error during goal analysis: {str(e)}"
-            logging.error(error_msg)
-            log_with_timestamp(error_msg, llm_logger)
-            log_with_timestamp(f"Traceback: {traceback.format_exc()}", llm_logger)
-            log_with_timestamp("========== GOAL ANALYSIS FAILED ==========", llm_logger)
-            # Return error action instead of raising the exception
-            return {
+                    # Create the final result dictionary
+                    final_output = {
+                        "action": output_data["action"],
+                        "justification": output_data["justification"],
+                        "metadata": { "raw_response": content, "tool_usage": tool_usage }
+                    }
+                    logging.info(f"✅ Analysis complete. Suggested action: {final_output['action']}")
+                    logging.debug(f"Justification: {final_output['justification']}")
+                    log_with_timestamp("==== PARSED OUTPUT ====", llm_logger)
+                    log_with_timestamp(f"Action: {final_output['action']}", llm_logger)
+                    log_with_timestamp(f"Justification: {final_output['justification']}", llm_logger)
+                    log_with_timestamp("==== END PARSED OUTPUT ====", llm_logger)
+                    break # Success, exit retry loop
+                
+                # --- Handle JSON Parsing Errors ---
+                except (json.JSONDecodeError, ValueError) as e:
+                    error_msg = f"Error processing model response (Attempt {attempts}): {str(e)}"
+                    logging.error(error_msg)
+                    log_with_timestamp(error_msg, llm_logger)
+                    log_with_timestamp(f"Raw response was: {content}", llm_logger)
+                    
+                    if attempts > max_retries:
+                        log_with_timestamp("Max retries reached. Failing analysis.", llm_logger)
+                        # Handle error - return a default "error" action
+                        final_output = {
+                            "action": "error",
+                            "justification": f"Failed to process LLM analysis response after {attempts} attempts: {str(e)}",
+                            "metadata": { "raw_response": content, "tool_usage": tool_usage }
+                        }
+                        break # Exit loop after final failure
+                    else:
+                        # Prepare for retry: Add error message to prompt history
+                        log_with_timestamp("Preparing to retry LLM call...", llm_logger)
+                        # Add the failed assistant response AND the user error message for context
+                        messages.append({"role": "assistant", "content": raw_content}) 
+                        messages.append({"role": "user", "content": f"Your previous response could not be parsed or was invalid: {str(e)}. Please provide ONLY the required JSON object with 'action' and 'justification' fields. Do not include any other text or markdown formatting."})
+                        # No 'continue' needed here, loop will naturally continue
+
+            # --- Handle Unexpected Errors during LLM call/processing for this attempt ---
+            except Exception as e:
+                 error_msg = f"Unexpected error during LLM call or processing (Attempt {attempts}): {str(e)}"
+                 logging.error(error_msg)
+                 log_with_timestamp(error_msg, llm_logger)
+                 log_with_timestamp(f"Traceback: {traceback.format_exc()}", llm_logger)
+                 # Return error action immediately on unexpected failure
+                 final_output = {
+                     "action": "error",
+                     "justification": f"Goal analysis failed with unexpected error: {str(e)}",
+                     "metadata": {"error_type": "llm_call_error", "details": str(e), "tool_usage": tool_usage}
+                 }
+                 break # Exit loop immediately on unexpected error
+        
+        # --- After the loop --- 
+        # (Memory saving call removed previously)
+            
+        log_with_timestamp("========== GOAL ANALYSIS COMPLETE ==========", llm_logger)
+
+        # Ensure final_output has a value (should always be set by the loop)
+        if final_output is None:
+            logging.error("Final output was unexpectedly None after retry loop.")
+            final_output = {
                 "action": "error",
-                "justification": f"Goal analysis failed with unexpected error: {str(e)}",
-                "metadata": {"error_type": "analysis_execution_error", "details": str(e)}
+                "justification": "Analysis failed unexpectedly after retry loop.",
+                "metadata": { "raw_response": raw_content, "tool_usage": tool_usage }
             }
-    
+
+        return final_output # Return the dictionary
+
     def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> str:
         """Create the user prompt for the Goal Analyzer LLM."""
         llm_logger = logging.getLogger('llm_interactions')
@@ -702,96 +706,8 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
 
         # --- 5. Code Inspection ---
         llm_logger.debug("Performing code inspection for relevant files")
-        # Add automatic code inspection for completed tasks that involve code changes
-        # This helps verify that tasks were actually completed correctly
         prompt_lines.append("\n## Code Inspection")
-        
-        try:
-            # Look for key files mentioned in task descriptions or goal validation criteria
-            files_to_inspect = set()
-            
-            # Extract potential file paths from descriptions and criteria
-            all_descriptions = [goal_data.get('description', '')]
-            if completed_tasks:
-                all_descriptions.extend(task.get('description', '') for task in completed_tasks)
-            
-            # Add validation criteria
-            all_criteria = goal_data.get('validation_criteria', [])
-            for task in completed_tasks:
-                all_criteria.extend(task.get('validation_criteria', []))
-                
-            # Simple pattern matching to find potential file paths
-            import re
-            file_patterns = [
-                r"'([^']*\.py)'",  # Files in single quotes
-                r'"([^"]*\.py)"',   # Files in double quotes
-                r'`([^`]*\.py)`',   # Files in backticks
-                r'\b([\w/\.-]+\.py)\b' # Files with .py extension
-            ]
-            
-            for text in all_descriptions + all_criteria:
-                for pattern in file_patterns:
-                    matches = re.findall(pattern, text)
-                    files_to_inspect.update(matches)
-            
-            llm_logger.debug(f"Found {len(files_to_inspect)} potential files to inspect: {', '.join(files_to_inspect) if files_to_inspect else 'none'}")
-            
-            # Inspect identified files
-            if files_to_inspect:
-                prompt_lines.append("Inspecting relevant files to verify task implementation:")
-                for file_path in files_to_inspect:
-                    try:
-                        # Normalize path (handle relative paths)
-                        if not file_path.startswith('/'):
-                            if file_path.startswith('./'):
-                                file_path = file_path[2:]
-                            # Check both in repo root and in common directories
-                            paths_to_try = [
-                                file_path,
-                                f"src/{file_path}",
-                                f"debug/{file_path}"
-                            ]
-                        else:
-                            paths_to_try = [file_path]
-                            
-                        # Try each possible path
-                        file_content = None
-                        for path in paths_to_try:
-                            try:
-                                with open(path, 'r') as f:
-                                    file_content = f.read()
-                                    used_path = path
-                                    break
-                            except:
-                                continue
-                                
-                        if file_content:
-                            prompt_lines.append(f"\nFile: {used_path}")
-                            # Limit content to keep prompt size reasonable
-                            max_lines = 100
-                            lines = file_content.split('\n')
-                            if len(lines) > max_lines:
-                                half = max_lines // 2
-                                shown_lines = lines[:half] + ['...'] + lines[-half:]
-                                file_content = '\n'.join(shown_lines)
-                            prompt_lines.append(f"```\n{file_content}\n```")
-                            llm_logger.debug(f"Added file content for {used_path} ({len(lines)} lines, truncated to ~{min(len(lines), max_lines)} lines)")
-                        else:
-                            prompt_lines.append(f"Could not find or read file: {file_path}")
-                            llm_logger.debug(f"Could not find or read file: {file_path}")
-                    except Exception as e:
-                        error_msg = f"Error inspecting file {file_path}: {str(e)}"
-                        prompt_lines.append(error_msg)
-                        llm_logger.error(error_msg)
-            else:
-                prompt_lines.append("No specific files identified for inspection.")
-                llm_logger.debug("No specific files identified for inspection")
-                
-        except Exception as e:
-            error_msg = f"Error during code inspection: {str(e)}"
-            logging.error(error_msg)
-            llm_logger.error(error_msg)
-            prompt_lines.append(error_msg)
+        prompt_lines.append("Automatic code inspection is disabled. Use available tools (e.g., read_file, search_code) if you need to inspect files.")
 
         # Memory Context
         prompt_lines.append("\n" + memory_content)
@@ -801,7 +717,8 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
         prompt_lines.append("If necessary, use tools to observe the current state further.")
         prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
-        prompt_lines.append("Then, provide your suggested next action and justification in the required JSON format.")
+        prompt_lines.append("For goals with no children, carefully consider if `create_task` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
+        prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
 
         final_prompt = "\n".join(prompt_lines)
         llm_logger.debug(f"==== FINAL PROMPT STATS ====")
@@ -883,99 +800,6 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         except Exception as e:
              logging.error(f"Stub create_top_goal_file failed: {e}")
              return "error.json"
-
-    def _save_conversation_to_memory(self, messages: List[Dict[str, Any]], metadata: Dict[str, Any], memory_hash: str, repo_path: str, goal_name: str):
-        """Save the conversation and metadata to memory."""
-        llm_logger = logging.getLogger('llm_interactions')
-        llm_logger.debug(f"Saving conversation to memory with hash={memory_hash[:8] if memory_hash else None}")
-        
-        try:
-            from midpoint.agents.tools.memory_tools import store_memory_document
-            
-            # Format the conversation into a readable format
-            conversation_lines = []
-            conversation_lines.append(f"# Goal Analyzer Conversation: {goal_name}")
-            conversation_lines.append(f"Memory hash: {memory_hash}")
-            conversation_lines.append(f"Repository path: {repo_path}")
-            conversation_lines.append(f"Timestamp: {datetime.datetime.now().isoformat()}")
-            conversation_lines.append("\n## Messages")
-            
-            for idx, message in enumerate(messages):
-                role = message.get("role", "unknown")
-                # Handle different message formats and extract content
-                content = ""
-                if isinstance(message, dict):
-                    content = message.get("content", "")
-                else:
-                    content = str(message)
-                
-                conversation_lines.append(f"\n### {role.upper()} (message {idx+1})")
-                
-                # Format content 
-                if content:
-                    # Truncate extremely long messages for storage
-                    if len(content) > 10000:
-                        content = content[:5000] + "\n\n... [content truncated] ...\n\n" + content[-5000:]
-                    conversation_lines.append(content)
-                
-                # Include tool calls if present
-                if isinstance(message, dict) and "tool_calls" in message and message["tool_calls"]:
-                    conversation_lines.append("\nTool Calls:")
-                    for tool_call in message["tool_calls"]:
-                        # Extract function details
-                        if hasattr(tool_call, "function"):
-                            try:
-                                function_name = tool_call.function.name
-                                arguments = tool_call.function.arguments
-                                conversation_lines.append(f"- Function: {function_name}")
-                                conversation_lines.append(f"  Arguments: {arguments}")
-                            except AttributeError:
-                                conversation_lines.append("- [Tool call details unavailable]")
-                        elif isinstance(tool_call, dict) and "function" in tool_call:
-                            function_info = tool_call["function"]
-                            function_name = function_info.get("name", "unknown")
-                            arguments = function_info.get("arguments", "{}")
-                            conversation_lines.append(f"- Function: {function_name}")
-                            conversation_lines.append(f"  Arguments: {arguments}")
-            
-            # Add metadata section
-            conversation_lines.append("\n## Metadata")
-            for key, value in metadata.items():
-                conversation_lines.append(f"{key}: {value}")
-            
-            # Join everything into a single string
-            conversation_content = "\n".join(conversation_lines)
-            
-            # Store in memory
-            result = store_memory_document(
-                content=conversation_content,
-                category="goal_analyzer",
-                metadata={
-                    "type": "llm_conversation",
-                    "goal_name": goal_name,
-                    "goal_id": metadata.get("goal_id", "unknown"),
-                    "suggested_action": metadata.get("suggested_action", "unknown"),
-                    "timestamp": datetime.datetime.now().isoformat()
-                },
-                repo_path=repo_path,
-                memory_hash=memory_hash
-            )
-            
-            if result and result.get("success"):
-                llm_logger.debug(f"Successfully saved conversation to memory: {result.get('document_path', 'unknown')}")
-                logging.info(f"Saved goal analyzer conversation to memory")
-            else:
-                llm_logger.error(f"Failed to save conversation to memory: {result}")
-                logging.warning("Failed to save conversation to memory")
-                
-        except ImportError as ie:
-            error_msg = f"Failed to import store_memory_document: {str(ie)}"
-            llm_logger.error(error_msg)
-            logging.error(error_msg)
-        except Exception as e:
-            error_msg = f"Error saving conversation to memory: {str(e)}"
-            llm_logger.error(error_msg)
-            logging.error(error_msg)
 
 # Other helper functions (validate_repository_state, list_subgoal_files, load_input_file, is_git_ancestor)
 # remain the same for now.

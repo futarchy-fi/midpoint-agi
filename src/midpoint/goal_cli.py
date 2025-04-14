@@ -988,43 +988,53 @@ def show_goal_status():
         goal = goal_files[goal_id]
         indent = "  " * depth
         
-        # Determine status symbol
-        if goal.get("complete", False) or goal.get("completed", False):
-            # Check if goal has been validated
-            if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
-                status = "✅"  # Complete and validated
-            else:
-                status = "🔷"  # Complete but not validated
-        else:
-            # Special handling for tasks
-            if goal.get("is_task", False):
-                if "execution_result" in goal and goal["execution_result"].get("success"):
-                    if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
-                        status = "✅"  # Task executed and validated
-                    else:
-                        status = "🔷"  # Task executed but not validated
+        # --- START EDIT: Add check for last execution failure --- 
+        status = ""
+        last_execution_failed = False
+        if "last_execution" in goal and not goal["last_execution"].get("success", True):
+            status = "❌"  # Last execution failed
+            last_execution_failed = True
+        # --- END EDIT ---
+
+        # Determine status symbol (only if not already set to failed)
+        if not status:
+            if goal.get("complete", False) or goal.get("completed", False):
+                # Check if goal has been validated
+                if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                    status = "✅"  # Complete and validated
                 else:
+                    status = "🔷"  # Complete but not validated
+            else:
+                # Special handling for tasks (that are not complete)
+                if goal.get("is_task", False):
+                    # If a task is not complete and didn't fail last execution, it's pending
                     status = "⏳"  # Task pending execution
-            else:
-                # Check for completed tasks
-                completed_tasks = len(goal.get("completed_tasks", []))
-                has_completed_tasks = completed_tasks > 0
-                
-                # Check if all subgoals are complete
-                subgoals = {k: v for k, v in goal_files.items() 
-                          if v.get("parent_goal", "").upper() == goal_id.upper()}
-                all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
-                
-                if not subgoals:
-                    status = "🔘"  # No subgoals (not yet decomposed)
-                elif all_subgoals_complete:
-                    if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
-                        status = "✅"  # All subgoals complete and validated
-                    else:
-                        status = "🔷"  # All subgoals complete but not validated
                 else:
-                    status = "⚪"  # Some subgoals incomplete
+                    # Goal-specific status (not a task, not complete, didn't fail)
+                    # Check for completed tasks
+                    completed_tasks = len(goal.get("completed_tasks", []))
+                    has_completed_tasks = completed_tasks > 0
+                    
+                    # Check if all subgoals are complete
+                    subgoals = {k: v for k, v in goal_files.items() 
+                              if v.get("parent_goal", "").upper() == goal_id.upper()}
+                    all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
+                    
+                    if not subgoals:
+                        status = "🔘"  # No subgoals (not yet decomposed)
+                    elif all_subgoals_complete:
+                        # This case shouldn't normally be reached if goal is not complete, but handle it
+                         if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                             status = "✅"  # All subgoals complete and validated (should imply goal complete)
+                         else:
+                             status = "🔷"  # All subgoals complete but goal not validated/complete
+                    else:
+                        status = "⚪"  # Some subgoals incomplete
         
+        # Ensure status is set
+        if not status:
+            status = "❔" # Default/Unknown status if logic above missed something
+
         # Get progress text
         progress_text = ""
         if "completed_task_count" in goal and "total_task_count" in goal:
@@ -1859,7 +1869,28 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
                 print(f"Result: {result.validation_results}")
             return True
         else:
+            # --- START EDIT: Store failure information --- 
             print(f"Failed to execute task: {result.error_message}", file=sys.stderr)
+            
+            # Update task data to reflect failure
+            task_data["complete"] = False
+            if "completion_time" in task_data:
+                del task_data["completion_time"] # Remove previous completion time if it exists
+            
+            task_data["last_execution"] = {
+                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "success": False,
+                "summary": result.error_message or "Task execution failed with no specific error message."
+            }
+            
+            # Save updated task data
+            try:
+                with open(task_file, 'w') as f:
+                    json.dump(task_data, f, indent=2)
+                logging.info(f"Updated task file {task_file} with failure status.")
+            except Exception as e:
+                logging.error(f"Failed to write failure status to task file {task_file}: {e}")
+            # --- END EDIT --- 
             return False
             
     finally:
@@ -3439,7 +3470,11 @@ def analyze_goal(goal_id, human_mode):
         if "analysis_history" in goal_data:
             del goal_data["analysis_history"]
 
-        # Write updated goal file - fail directly if this doesn't work
+        # Add analysis justification to the goal file
+        if "analysis_justification" not in goal_data:
+            goal_data["analysis_justification"] = analysis_result.get("justification", "")
+
+        # Write updated goal data
         with open(goal_file, 'w') as f:
             json.dump(goal_data, f, indent=2)
         logging.info(f"Updated goal file {goal_file} with analysis results.")

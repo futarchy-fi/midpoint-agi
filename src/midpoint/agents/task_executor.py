@@ -145,7 +145,7 @@ class TaskExecutor:
         
         logger.info("TaskExecutor initialized successfully")
 
-    async def _save_interaction_to_memory(self, context: TaskContext):
+    def _save_interaction_to_memory(self, context: TaskContext):
         """
         Save the conversation to memory, following the GoalDecomposer's pattern.
         """
@@ -253,36 +253,42 @@ class TaskExecutor:
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are a task execution agent responsible for implementing changes.
 Your role is to:
-1. Execute tasks using available tools
-2. Track progress and report status
-3. Handle errors gracefully
-4. Maintain clean git state
+1. Analyze the task and repository state.
+2. Assess task feasibility: Determine if the task is clear enough and possible with your available tools.
+3. Execute tasks using available tools if feasible.
+4. Track progress and report status.
+5. Handle errors gracefully.
+6. Maintain clean git state.
 
 You have the following tools available:
 {tool_descriptions_text}
 
 For each task:
-1. Analyze the current repository state
-2. Determine what changes are needed (code changes)
-3. Use the available tools to implement those changes
-4. Validate the changes
-5. Create appropriate commits if code was changed
+1. **Assess Feasibility First:** Before executing, determine if the task's core intent is achievable with your tools. Is the task description specific and clear?
+2. **Execute if Feasible:** If the task is clear and achievable, use the available tools to implement the necessary changes (e.g., code modifications).
+3. **Validate Changes:** If changes were made, attempt to validate them.
+4. **Commit Changes:** If changes were made and validated, create appropriate commits.
+
+**Critical Failure Reporting:**
+- If the core action requested by the task is impossible due to tool limitations (e.g., requires GUI interaction, opening an editor), you MUST report failure (`success: false`). Explain *why* it's impossible in the summary, even if you performed related preparatory steps like locating a file.
+- If the task description is too ambiguous, lacks sufficient detail, or requires information you cannot obtain with your tools, you MUST report failure (`success: false`). Explain the ambiguity or missing information clearly in the summary.
+- Report `success: true` ONLY if the core intent of the task was successfully achieved using your tools.
 
 When you've completed the task or determined it cannot be completed, provide a final response with:
-1. A summary of what you did
-2. Whether the task was completed successfully
-3. Any validation steps that can be taken to verify the changes
-4. The git hash of the final commit, if you made code changes
+1. A summary of what you did, OR a clear explanation of why the task failed (see Critical Failure Reporting).
+2. Whether the task was completed successfully (`success: true/false`).
+3. Any validation steps that can be taken to verify the changes (if successful).
+4. The git hash of the final commit, if you made code changes.
 
 IMPORTANT: Your final response MUST be in valid JSON format with these fields:
 {{
-  "summary": "A clear summary of what you did",
+  "summary": "A clear summary of what you did or why the task failed",
   "success": true/false,
-  "validation_steps": ["List of validation steps"],
+  "validation_steps": ["List of validation steps (empty if failed)"],
   "git_hash": "Optional git hash if code was changed"
 }}
 
-For exploratory or study tasks, focus on analyzing the codebase and documenting your findings."""
+For exploratory or study tasks, focus on analyzing the codebase and documenting your findings. If the task is purely analysis, report success if the analysis was completed."""
         
         return system_prompt
 
@@ -352,8 +358,22 @@ Memory Repository: {memory_path}
 Memory Hash: {memory_hash}"""
             
             # Execute the task
-            result = self._execute_task_with_llm(user_prompt, context)
+            result_json_str = self._execute_task_with_llm(user_prompt, context)
             
+            # Parse the result JSON to get the actual success status
+            execution_success = False
+            error_message = "Unknown execution outcome"
+            try:
+                result_data = json.loads(result_json_str)
+                execution_success = result_data.get("success", False)
+                if not execution_success:
+                     error_message = result_data.get("summary") or result_data.get("error", "Task execution failed internally")
+            except json.JSONDecodeError as parse_error:
+                logger.error(f"Failed to parse final result JSON from _execute_task_with_llm: {parse_error}")
+                logger.error(f"Result string was: {result_json_str}")
+                error_message = "Failed to parse internal execution result"
+                execution_success = False # Ensure failure if JSON is bad
+
             # Get the current memory state if available
             current_memory_hash = None
             memory_repo_path = None
@@ -372,7 +392,7 @@ Memory Hash: {memory_hash}"""
             
             # Create final state with updated memory hash
             final_state = State(
-                git_hash=context.state.git_hash,
+                git_hash=context.state.git_hash, # Note: This might be stale if commit failed
                 repository_path=context.state.repository_path,
                 description=context.state.description,
                 branch_name=context.state.branch_name,
@@ -380,24 +400,19 @@ Memory Hash: {memory_hash}"""
                 memory_repository_path=memory_repo_path
             )
             
-            # Return the result with final state
+            # Return the result using the PARSED success status and include error message if failed
             return ExecutionResult(
-                success=True,
+                success=execution_success,
                 branch_name=context.state.branch_name,
                 git_hash=context.state.git_hash,
                 repository_path=context.state.repository_path,
-                final_state=final_state
+                final_state=final_state,
+                error_message=None if execution_success else error_message
             )
             
         except Exception as e:
-            logger.error(f"Error executing task: {str(e)}")
-            return ExecutionResult(
-                success=False,
-                branch_name=context.state.branch_name,
-                git_hash=context.state.git_hash,
-                repository_path=context.state.repository_path,
-                error_message=str(e)
-            )
+            # This outer exception block catches errors *before* _execute_task_with_llm finishes
+            logger.error(f"High-level error executing task: {str(e)}", exc_info=True)
 
     def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> str:
         """Execute a task using the LLM."""
@@ -481,93 +496,79 @@ Memory Hash: {memory_hash}"""
                         "timestamp": datetime.datetime.now().isoformat()
                     })
             
-            # Record assistant response in conversation buffer
+            # Get the final assistant message content
             if isinstance(message, list):
                 # If message is a list, get the last message's content
-                content = message[-1].get('content', '')
+                final_content = message[-1].get('content', '')
             else:
                 # If message is a dict or object, get its content
-                content = message.get('content') if isinstance(message, dict) else message.content
+                final_content = message.get('content') if isinstance(message, dict) else message.content
+
+            # Log the final raw response for debugging
+            logger.debug(f"Final Raw model response: {final_content}")
                 
+            # Record final assistant response in conversation buffer
             self.conversation_buffer.append({
                 "type": "assistant_response",
-                "final_content": content,
+                "final_content": final_content,
                 "timestamp": datetime.datetime.now().isoformat()
             })
             
-            # Parse the model's response
+            # --- Aligned Error Handling --- 
+            output_data = None
             try:
-                # Try to parse the content as JSON
-                try:
-                    output_data = json.loads(content)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse model response as JSON: {str(e)}")
-                    logger.error(f"Raw response: {content}")
-                    # Create a default response with error information
-                    output_data = {
-                        "summary": f"Error parsing LLM response: {str(e)}",
-                        "success": False,
-                        "validation_steps": ["Failed to parse LLM response as JSON"],
-                        "error": str(e)
-                    }
-            except Exception as e:
-                logger.error(f"Error processing model response: {str(e)}")
-                # Create a default response with error information
-                output_data = {
-                    "summary": f"Error processing LLM response: {str(e)}",
-                    "success": False,
-                    "validation_steps": ["Failed to process LLM response"],
-                    "error": str(e)
-                }
+                output_data = json.loads(final_content)
+                logger.debug("Successfully parsed final response as JSON.")
+            except json.JSONDecodeError as json_err:
+                logger.warning(f"Failed to parse final response as JSON: {json_err}. Trying markdown extraction...")
+                # Try to extract JSON from markdown code blocks if present (similar to GoalDecomposer)
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', final_content, re.DOTALL)
+                if json_match:
+                    try:
+                        output_data = json.loads(json_match.group(1))
+                        logger.info("Successfully extracted JSON from markdown code block.")
+                    except json.JSONDecodeError as inner_err:
+                        logger.error(f"Failed to parse extracted JSON: {inner_err}")
+                        output_data = None # Ensure it's None if extraction parsing fails
+                else:
+                    logger.error("No JSON code block found for extraction.")
+                    output_data = None # Ensure it's None if no block found
             
-            # Check if the output has the required fields
-            if all(key in output_data for key in ["summary", "success", "validation_steps"]):
-                # Extract git hash if available
-                git_hash = output_data.get("git_hash")
-                
-                # Save the conversation to memory - do this regardless of outcome
-                self._save_interaction_to_memory(context)
-                
-                # Log successful outcome
+            # Check if parsing/extraction succeeded and required fields are present
+            if output_data and all(key in output_data for key in ["summary", "success", "validation_steps"]):
                 logger.info(f"✅ Task execution summary: {output_data['summary']}")
                 if output_data["validation_steps"]:
                     logger.info("Validation steps:")
                     for i, step in enumerate(output_data["validation_steps"], 1):
                         logger.info(f"  {i}. {step}")
-                
+                # Save conversation BEFORE returning successfully
+                self._save_interaction_to_memory(context) # Sync call
                 return json.dumps(output_data)
             else:
-                # Create a default response for missing fields
+                # Handle failure (JSON invalid or missing fields)
+                error_reason = "LLM response missing required fields or invalid JSON"
+                if not output_data:
+                    error_reason = "Failed to parse LLM response as valid JSON"
+                logger.error(f"Task failed: {error_reason}. Final content was: {final_content[:500]}...")
                 default_response = {
-                    "summary": "LLM response missing required fields",
+                    "summary": error_reason,
                     "success": False,
-                    "validation_steps": ["Failed to get complete response from LLM"],
-                    "error": "Missing required fields in LLM response"
+                    "validation_steps": ["Task execution failed due to invalid LLM response format"],
+                    "error": error_reason
                 }
-                
-                # Always save the conversation, even on failure
-                self._save_interaction_to_memory(context)
-                
+                # Save conversation BEFORE returning failure
+                self._save_interaction_to_memory(context) # Sync call
                 return json.dumps(default_response)
             
         except Exception as e:
-            # Log the error
-            logger.error(f"Error during task execution: {str(e)}")
+            # Log the general error
+            logger.error(f"Error during task execution: {str(e)}", exc_info=True) # Add traceback logging
             
             # Always attempt to save the conversation, even on error
             try:
-                self._save_interaction_to_memory(context)
+                self._save_interaction_to_memory(context) # Sync call
             except Exception as save_error:
                 logger.error(f"Failed to save conversation on error: {str(save_error)}")
-                
-            # Create a default response with error information
-            error_response = {
-                "summary": f"Error during task execution: {str(e)}",
-                "success": False,
-                "validation_steps": ["Task execution failed"],
-                "error": str(e)
-            }
-            return json.dumps(error_response)
 
     def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
         """
