@@ -36,6 +36,7 @@ class SubgoalPlan(BaseModel):
     completion_summary: Optional[str] = None  # Summary of what was accomplished (for completed goals)
     next_state: str
     validation_criteria: List[str]
+    further_steps: List[str] = Field(default_factory=list)  # List of steps to complete the goal after milestone
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     parent_goal: Optional[str] = None  # Reference to the parent goal file

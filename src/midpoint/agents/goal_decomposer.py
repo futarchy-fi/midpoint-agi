@@ -531,7 +531,7 @@ Timestamp: {timestamp}
         
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are an expert software architect and project planner.
-Your task is to understand a goal and determine an INTERMEDIATE MILESTONE toward that goal.
+Your task is to decompose a goal into a set of clear subtasks, and identify the most appropriate first subtask.
 
 Follow the OODA loop: Observe, Orient, Decide, Act.
 
@@ -540,12 +540,13 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
    - Analyze how the current state relates to the final goal.
    - Take into account any previously completed subgoals and subtasks associated with this goal
    - Take into account the overall context of the repository
-   - Take into account, if available, the descriptions of the PREVIOSULY FAILED ATTEMPTS to progress towards the goal. These are invaluable as lessons, and when creating new milestones, we should be careful not to repeat the same mistakes.
+   - Take into account, if available, the descriptions of the PREVIOSULY FAILED ATTEMPTS to progress towards the goal. These are invaluable as lessons, and when creating new subtasks, we should be careful not to repeat the same mistakes.
 3. DECIDE:
-    - Craft potential possibilities for INTERMEDIATE MILESTONES towards the goal
-    - For each milestone, estimate the effort required to (1) reach the milestone and validate its correctness, and (2) complete the goal after the milestone is reached.
-    - Evaluate different potential milestone candidates and select the most promising one.
-4. OUTPUT: Provide a structured response indicating next steps.
+    - First, identify a complete set of ideally (3-5) subtasks needed to achieve the goal
+    - For each subtask, estimate the effort required and dependencies on other subtasks
+    - Evaluate which subtask should be completed first based on dependencies and logical progression
+    - Ensure that the first subtask is meaningfully different from the main goal and parent tasks
+4. OUTPUT: Provide a structured response with clear subtasks and the first one to tackle.
 
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
@@ -706,6 +707,51 @@ You have access to these tools:
         # Add the user prompt as the final message
         messages.append({"role": "user", "content": user_prompt})
         
+        # Add detailed logging of the complete prompt and context
+        log_dir = Path(os.environ.get("LOG_DIR", "logs"))
+        log_dir.mkdir(exist_ok=True)
+        
+        # Create a unique filename for this prompt logging
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        prompt_log_file = log_dir / f"llm_prompt_{timestamp}_{context.goal.description[:30].replace(' ', '_')}.txt"
+        
+        # Write the complete context to the log file
+        with open(prompt_log_file, "w") as f:
+            f.write(f"=== GOAL DECOMPOSER LLM PROMPT LOGGING ===\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Goal ID: {context.metadata.get('goal_id', 'Unknown')}\n")
+            f.write(f"Parent Goal: {context.metadata.get('parent_goal', 'None')}\n")
+            f.write(f"Goal Description: {context.goal.description}\n\n")
+            
+            f.write("=== COMPLETE MESSAGES SENT TO LLM ===\n")
+            for i, msg in enumerate(messages):
+                f.write(f"\n--- MESSAGE {i+1} ({msg['role']}) ---\n")
+                f.write(msg['content'])
+                f.write("\n" + "-" * 80 + "\n")
+            
+            # Add additional context information
+            f.write("\n=== ADDITIONAL CONTEXT INFO ===\n")
+            f.write(f"Memory Hash: {memory_hash}\n")
+            f.write(f"Memory Repo Path: {memory_repo_path}\n")
+            f.write(f"Git Hash: {context.state.git_hash}\n")
+            f.write(f"Iteration: {context.iteration}\n")
+            
+            # Add metadata if available
+            if hasattr(context, 'metadata') and context.metadata:
+                f.write("\n--- METADATA ---\n")
+                for key, value in context.metadata.items():
+                    if key != 'completed_tasks':  # Handle completed_tasks separately
+                        f.write(f"{key}: {value}\n")
+                
+                # Add completed tasks in a more readable format
+                if 'completed_tasks' in context.metadata and context.metadata['completed_tasks']:
+                    f.write("\n--- COMPLETED TASKS ---\n")
+                    for i, task in enumerate(context.metadata['completed_tasks'], 1):
+                        f.write(f"Task {i}: {task.get('description', 'No description')}\n")
+        
+        print(f"\nLogged complete LLM prompt and context to: {prompt_log_file}")
+        logging.info(f"Complete LLM prompt and context logged to: {prompt_log_file}")
+        
         # Track tool usage for metadata
         tool_usage = []
         
@@ -751,6 +797,13 @@ You have access to these tools:
                 # Log the raw response to the LLM log file
                 llm_logger.debug("LLM Raw Response:\n%s", content)
                 # === END EDIT ===
+
+                # Log the raw response in the prompt log file too
+                if 'prompt_log_file' in locals():
+                    with open(prompt_log_file, "a") as f:
+                        f.write("\n\n=== LLM RESPONSE ===\n")
+                        f.write(content)
+                        f.write("\n\n")
 
                 try:
                     output_data = json.loads(content)
@@ -818,9 +871,11 @@ You have access to these tools:
                     validation_criteria=output_data["validation_criteria"],
                     reasoning=output_data["reasoning"],
                     relevant_context=relevant_context,
+                    further_steps=output_data.get("further_steps", []),  # Add further_steps field
                     metadata={
                         "raw_response": content,
-                        "tool_usage": tool_usage
+                        "tool_usage": tool_usage,
+                        "all_subtasks": output_data.get("all_subtasks", [])  # Store all_subtasks in metadata
                     }
                 )
             else:
@@ -842,9 +897,11 @@ You have access to these tools:
                     validation_criteria=output_data["validation_criteria"],
                     reasoning=output_data["reasoning"],
                     relevant_context=relevant_context,
+                    further_steps=output_data.get("further_steps", []),  # Add further_steps field
                     metadata={
                         "raw_response": content,
-                        "tool_usage": tool_usage
+                        "tool_usage": tool_usage,
+                        "all_subtasks": output_data.get("all_subtasks", [])  # Store all_subtasks in metadata
                     }
                 )
             
@@ -936,7 +993,8 @@ You have access to these tools:
     
     def _create_user_prompt(self, context: TaskContext) -> str:
         """Create the user prompt for the agent."""
-        prompt = f"""Goal: {context.goal.description}
+        current_goal_id = context.metadata.get('goal_id', 'Unknown') # Get current goal ID
+        prompt = f"""Goal ({current_goal_id}): {context.goal.description}
 
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
@@ -981,16 +1039,37 @@ Memory State:
         else:
             logging.info("No completed tasks found in metadata")
 
+        # Additional warning about repeating goals - add after completed tasks section
+        if hasattr(context, 'metadata') and context.metadata and 'parent_goal' in context.metadata:
+            parent_id = context.metadata['parent_goal']
+            parent_desc = None
+            
+            # Try to get the parent goal description
+            goal_path = Path(os.environ.get("GOAL_DIR", ".goal"))
+            parent_file = goal_path / f"{parent_id}.json"
+            if parent_file.exists():
+                try:
+                    with open(parent_file, 'r') as f:
+                        parent_data = json.load(f)
+                        parent_desc = parent_data.get('description', None)
+                except:
+                    pass
+            
+            if parent_desc:
+                prompt += f"\nIMPORTANT: The parent goal is '{parent_id}': {parent_desc}\n"
+                prompt += "Your first subtask MUST be meaningfully different and more specific than the parent goal.\n"
+        
         prompt += f"""
 Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
 You MUST provide a structured response in JSON format with these fields:
-- next_state: A clear description of the a state where the milestone has been achieved
-- validation_criteria: List of measurable criteria to verify this state has been reached
-- further_steps: List of steps that need to be taken to complete the goal after the milestone is reached
-- reasoning: Explanation of why this midpoint state is optimal for progress
+- all_subtasks: A list of 3-5 clear subtasks needed to complete the goal
+- next_state: A clear description of the first subtask that should be tackled
+- validation_criteria: List of measurable criteria to verify this subtask has been reached
+- further_steps: List of the remaining subtasks needed to complete the goal after this one
+- reasoning: Explanation of why this subtask should be done first
 - relevant_context: Object containing relevant information to pass to child goals
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
@@ -1522,6 +1601,8 @@ def decompose_goal(
         "validation_criteria": subgoal_plan.validation_criteria,
         "reasoning": subgoal_plan.reasoning,
         "relevant_context": subgoal_plan.relevant_context,
+        "further_steps": subgoal_plan.further_steps,  # Include further_steps in the return value
+        "all_subtasks": subgoal_plan.metadata.get("all_subtasks", []),  # Include all_subtasks in the return value
         "git_hash": updated_git_hash,
         "is_task": False,  # Default to False (subgoal) - will be determined by goal_analyzer later
         "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming

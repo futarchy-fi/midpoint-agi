@@ -1562,6 +1562,13 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
             else:
                 print(f"\nGoal {goal_id} successfully decomposed into a subgoal")
             
+            # Add debug output to show all subtasks if available
+            if "all_subtasks" in result and result["all_subtasks"]:
+                print("\n--- DEBUG: All subtasks identified by decomposer ---")
+                for i, subtask in enumerate(result["all_subtasks"], 1):
+                    print(f"{i}. {subtask}")
+                print("---------------------------------------------------\n")
+            
             if result.get("goal_completed", False):
                 print("\n✅ Goal completed!")
                 print(f"Summary: {result['completion_summary']}")
@@ -1571,6 +1578,12 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 print("\nValidation criteria:")
                 for criterion in result["validation_criteria"]:
                     print(f"- {criterion}")
+                
+                # Add further steps to the output if available
+                if "further_steps" in result and result["further_steps"]:
+                    print("\nFurther steps to complete the goal:")
+                    for step in result["further_steps"]:
+                        print(f"- {step}")
                 
                 print(f"\nGoal file: {result['goal_file']}")
             
@@ -1595,6 +1608,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 "validation_criteria": result.get("validation_criteria", []),
                 "reasoning": result["reasoning"],
                 "relevant_context": result.get("relevant_context", {}),
+                "further_steps": result.get("further_steps", []),  # Include further_steps in the goal file
                 "decomposed": True,  # Mark the goal as decomposed
                 # Don't update current_state automatically during decomposition
                 # The line that updated "current_state" has been removed
@@ -1631,6 +1645,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                     "validation_criteria": result["validation_criteria"],
                     "reasoning": result["reasoning"],
                     "relevant_context": result.get("relevant_context", {}),
+                    "further_steps": result.get("further_steps", []),  # Include further_steps in the subgoal file
                     "initial_state": {
                         "git_hash": result["git_hash"],
                         "repository_path": os.getcwd(),

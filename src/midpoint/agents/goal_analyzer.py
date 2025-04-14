@@ -78,6 +78,11 @@ import time # Added time import for fallback
 
 load_dotenv()
 
+# Global variables to store log file paths
+log_file = None 
+task_summary_file = None
+llm_responses_file = None
+
 def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     """
     Configure logging for the goal analyzer.
@@ -87,6 +92,9 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         quiet: Whether to show only warnings and final result
         log_dir_path: Directory to store log files
     """
+    # Access global variables
+    global log_file, task_summary_file, llm_responses_file
+    
     # Ensure log_dir_path is a Path object
     log_dir = Path(log_dir_path)
     log_dir.mkdir(exist_ok=True)
@@ -95,14 +103,85 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     task_summary_file = log_dir / f"task_summary_{timestamp}.log"
     llm_responses_file = log_dir / f"llm_responses_{timestamp}.log"
     
-    logging.basicConfig(
-        level=logging.DEBUG if debug else logging.WARNING if quiet else logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
+    # Ensure all log files are writable
+    ensure_file_writable(log_file)
+    ensure_file_writable(task_summary_file)
+    ensure_file_writable(llm_responses_file)
+    
+    # Set up root logger with file and console handlers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture all logs at the root level
+    
+    # Remove any existing handlers to prevent duplicates
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Create file handler for full logging with immediate flush
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    file_handler.setLevel(logging.DEBUG)  # Log everything to file
+    
+    # Create console handler with appropriate level
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    if debug:
+        console_handler.setLevel(logging.DEBUG)
+    elif quiet:
+        console_handler.setLevel(logging.WARNING)
+    else:
+        console_handler.setLevel(logging.INFO)
+    
+    # Add handlers to root logger
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Create task summary file with header
+    with open(task_summary_file, "w") as f:
+        f.write(f"Task Summary Log - {timestamp}\n")
+        f.write("=" * 50 + "\n\n")
+        f.flush()  # Force immediate write
+    
+    # Configure the dedicated LLM interactions logger
+    llm_logger = logging.getLogger('llm_interactions')
+    llm_logger.setLevel(logging.DEBUG)  # Capture all LLM interaction details
+    
+    # Remove any existing handlers
+    for handler in llm_logger.handlers[:]:
+        llm_logger.removeHandler(handler)
+    
+    # Create file handler specifically for LLM responses with immediate flush
+    llm_file_handler = logging.FileHandler(llm_responses_file)
+    llm_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    llm_file_handler.setLevel(logging.DEBUG)
+    
+    # Enable immediate flushing of log messages for more reliable logging
+    class ImmediateFlushingHandler(logging.FileHandler):
+        def emit(self, record):
+            super().emit(record)
+            self.flush()
+    
+    # Replace with immediate flushing handler
+    llm_immediate_handler = ImmediateFlushingHandler(llm_responses_file)
+    llm_immediate_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    llm_immediate_handler.setLevel(logging.DEBUG)
+    
+    # Add the handler to the LLM logger ONLY
+    llm_logger.addHandler(llm_immediate_handler)
+    
+    # Prevent LLM logs from propagating to the root logger's handlers
+    llm_logger.propagate = False
+    
+    # Write an initial message to verify the file is writable
+    try:
+        with open(llm_responses_file, "a") as f:
+            f.write("LLM Responses Log initialized at " + timestamp + "\n")
+            f.flush()  # Force immediate write
+    except Exception as e:
+        logging.error(f"Error writing to LLM responses file: {e}")
+    
+    # Test log message directly to the LLM logger
+    llm_logger.debug("LLM logger initialized")
+    
     logging.info("Logging configured")
     return log_file, task_summary_file, llm_responses_file
 
@@ -189,9 +268,28 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
 
     def analyze_goal_state(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
         """Analyze the current state of the goal and suggest the next action."""
+        # Global variables to ensure we're using the same log files throughout
+        global log_file, task_summary_file, llm_responses_file
+        
         if setup_logging:
-            # Assuming configure_logging is defined elsewhere and imported
+            # Configure logging only once and store the file paths
             log_file, task_summary_file, llm_responses_file = configure_logging(debug, quiet)
+            
+        # Create dedicated LLM logger - ensure we're always using the same logger instance
+        llm_logger = logging.getLogger('llm_interactions')
+        
+        # Ensure handler is set up even if configure_logging wasn't called
+        # This is important because sometimes the analyze_goal_state might be called 
+        # without setting up logging first
+        if not llm_logger.handlers and llm_responses_file:
+            handler = logging.FileHandler(llm_responses_file)
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+            llm_logger.handlers = [handler]
+            llm_logger.propagate = False
+        
+        # Force a test log message to verify the logger is working
+        log_with_timestamp("========== STARTING GOAL ANALYSIS ==========", llm_logger)
+        log_with_timestamp(f"Goal: {context.goal.description}", llm_logger)
 
         logging.info("Analyzing state for goal: %s", context.goal.description)
         # Log task summary? Maybe rename log_task_summary or create log_analysis_summary
@@ -201,7 +299,8 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         memory_hash = getattr(context.memory_state, "memory_hash", None)
         memory_path = getattr(context.memory_state, "repository_path", None)
         if not memory_hash or not memory_path: raise ValueError("Memory state must have hash and path")
-        logging.info(f"Memory state: hash={memory_hash[:8]}, path={memory_path}")
+        logging.info(f"Memory state: hash={memory_hash[:8] if memory_hash else None}, path={memory_path}")
+        log_with_timestamp(f"Memory state: hash={memory_hash[:8] if memory_hash else None}, path={memory_path}", llm_logger)
 
         # Validate inputs
         if not context.goal: raise ValueError("No goal provided")
@@ -209,24 +308,40 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         goal_id = context.metadata.get("goal_id")
         if not goal_id: raise ValueError("goal_id missing from context metadata")
 
+        llm_logger.debug(f"==== CONTEXT ====")
+        llm_logger.debug(f"Goal: {context.goal.description}")
+        llm_logger.debug(f"Goal ID: {goal_id}")
+        llm_logger.debug(f"Repository path: {context.state.repository_path}")
+        llm_logger.debug(f"Validation criteria: {context.goal.validation_criteria}")
+        llm_logger.debug(f"Metadata: {json.dumps(context.metadata, default=str)}")
+        
         # Prepare the user prompt using the new function
         # Pass necessary context elements directly
         try:
+            log_with_timestamp("Creating analysis user prompt...", llm_logger)
             user_prompt = self._create_analysis_user_prompt(
                 context, 
                 goal_id, 
                 memory_hash, 
                 memory_path
             )
+            # Log the complete user prompt that will be sent to the LLM
+            log_with_timestamp("==== FULL USER PROMPT ====", llm_logger)
+            llm_logger.debug(user_prompt)
+            log_with_timestamp("==== END USER PROMPT ====", llm_logger)
         except ValueError as ve:
-            logging.error(f"Failed to create analysis user prompt: {str(ve)}")
+            error_msg = f"Failed to create analysis user prompt: {str(ve)}"
+            logging.error(error_msg)
+            llm_logger.error(error_msg)
             return {
                 "action": "error",
                 "justification": f"Analysis failed during preparation: {str(ve)}",
                 "metadata": {"error_type": "preparation_error", "details": str(ve)}
             }
         except Exception as e:
-            logging.error(f"Unexpected error creating analysis user prompt: {str(e)}")
+            error_msg = f"Unexpected error creating analysis user prompt: {str(e)}"
+            logging.error(error_msg)
+            llm_logger.error(error_msg)
             return {
                 "action": "error",
                 "justification": "Unexpected error during analysis preparation",
@@ -240,41 +355,65 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         # The prompt generation now handles adding memory context internally
         messages.append({"role": "user", "content": user_prompt})
 
+        # Log the system prompt as well
+        log_with_timestamp("==== SYSTEM PROMPT ====", llm_logger)
+        llm_logger.debug(self._generate_system_prompt())
+        log_with_timestamp("==== END SYSTEM PROMPT ====", llm_logger)
+
         tool_usage = []
-        llm_logger = logging.getLogger('llm_interactions')
 
         try:
             # Log request
-            try: llm_logger.debug("LLM Request:\n%s", json.dumps(self._serialize_messages(messages), indent=2))
-            except Exception as log_e: llm_logger.error("Failed to serialize request: %s", str(log_e))
+            try:
+                log_with_timestamp("==== LLM REQUEST ====", llm_logger)
+                llm_logger.debug(json.dumps(self._serialize_messages(messages), indent=2))
+                log_with_timestamp("==== END LLM REQUEST ====", llm_logger)
+            except Exception as log_e:
+                log_with_timestamp(f"Failed to serialize request: {str(log_e)}", llm_logger)
 
             # Get analysis from the model, allowing tool use
+            log_with_timestamp("Sending request to LLM...", llm_logger)
             message, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages, model=self.model,
                 validate_json_format=True, # Expecting JSON output
                 max_tokens=1000 # Analysis output should be shorter
             )
+            log_with_timestamp("Received response from LLM", llm_logger)
 
             if tool_calls:
                 # We might need to handle the case where tools update the state
                 # before the final analysis JSON is produced. 
                 # For now, just record usage.
+                log_with_timestamp("==== TOOL USAGE ====", llm_logger)
                 for tool_call in tool_calls: 
                     # Basic serialization for logging/metadata
-                    tool_usage.append(str(tool_call)) 
+                    tool_usage.append(str(tool_call))
+                    # Log each tool call
+                    try:
+                        tool_name = tool_call.function.name if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('name', 'unknown_tool')
+                        tool_args = tool_call.function.arguments if hasattr(tool_call, 'function') else tool_call.get('function', {}).get('arguments', '{}')
+                        log_with_timestamp(f"Tool: {tool_name}", llm_logger)
+                        log_with_timestamp(f"Arguments: {tool_args}", llm_logger)
+                    except Exception as tool_e:
+                        log_with_timestamp(f"Failed to log tool call: {str(tool_e)}", llm_logger)
+                log_with_timestamp("==== END TOOL USAGE ====", llm_logger)
 
             # Parse the model's final response (expecting JSON)
             if isinstance(message, list): content = message[-1].get('content', '')
             else: content = message.get('content') if isinstance(message, dict) else message.content
 
             logging.debug(f"Raw model response: {content}")
-            llm_logger.debug("LLM Raw Response:\n%s", content)
+            log_with_timestamp("==== LLM RAW RESPONSE ====", llm_logger)
+            llm_logger.debug(content)
+            log_with_timestamp("==== END LLM RAW RESPONSE ====", llm_logger)
 
             try:
+                log_with_timestamp("Parsing LLM response...", llm_logger)
                 output_data = json.loads(content)
                  # Validate expected fields
                 if not all(key in output_data for key in ["action", "justification"]):
                     # If missing, try extracting from markdown code blocks
+                    log_with_timestamp("Missing expected fields, trying to extract from code blocks...", llm_logger)
                     json_match = re.search(r'```(?:json)?\s*(\{.+?\})?\s*```', content, re.DOTALL)
                     if json_match:
                         try:
@@ -283,6 +422,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                                 raise ValueError("Extracted JSON missing 'action' or 'justification'")
                         except (json.JSONDecodeError, ValueError) as inner_e:
                              logging.error(f"Failed to parse extracted JSON or validate fields: {inner_e}")
+                             log_with_timestamp(f"Failed to parse extracted JSON or validate fields: {inner_e}", llm_logger)
                              raise ValueError("LLM response JSON invalid or missing fields even after extraction.")
                     else:
                          raise ValueError("LLM response missing 'action' or 'justification' and no JSON block found.")
@@ -295,10 +435,16 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                 }
                 logging.info(f"✅ Analysis complete. Suggested action: {final_output['action']}")
                 logging.debug(f"Justification: {final_output['justification']}")
+                log_with_timestamp("==== PARSED OUTPUT ====", llm_logger)
+                log_with_timestamp(f"Action: {final_output['action']}", llm_logger)
+                log_with_timestamp(f"Justification: {final_output['justification']}", llm_logger)
+                log_with_timestamp("==== END PARSED OUTPUT ====", llm_logger)
 
             except (json.JSONDecodeError, ValueError) as e:
-                logging.error(f"Error processing model response: {str(e)}")
-                llm_logger.error("Error processing model response: %s\nRaw response was: %s", str(e), content)
+                error_msg = f"Error processing model response: {str(e)}"
+                logging.error(error_msg)
+                log_with_timestamp(f"Error processing model response: {str(e)}", llm_logger)
+                log_with_timestamp(f"Raw response was: {content}", llm_logger)
                 # Handle error - return a default "error" action
                 final_output = {
                     "action": "error",
@@ -315,6 +461,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                  logging.warning("get_repo_path not available, cannot determine default memory path for saving.")
                  
             if repo_path_for_saving and memory_hash: # Only save if path and hash are valid
+                 log_with_timestamp("Saving conversation to memory...", llm_logger)
                  self._save_conversation_to_memory(
                      messages, 
                      metadata={
@@ -327,13 +474,22 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                      repo_path=repo_path_for_saving,
                      goal_name=context.goal.description
                  )
+                 log_with_timestamp(f"Saved conversation to memory at {repo_path_for_saving}", llm_logger)
             else:
-                logging.warning("Skipping saving conversation to memory due to missing repo path or hash.")
+                warning_msg = "Skipping saving conversation to memory due to missing repo path or hash."
+                logging.warning(warning_msg)
+                log_with_timestamp(warning_msg, llm_logger)
+                
+            log_with_timestamp("========== GOAL ANALYSIS COMPLETE ==========", llm_logger)
 
             return final_output # Return the dictionary
 
         except Exception as e:
-            logging.error(f"Unexpected error during goal analysis: {str(e)}")
+            error_msg = f"Unexpected error during goal analysis: {str(e)}"
+            logging.error(error_msg)
+            log_with_timestamp(error_msg, llm_logger)
+            log_with_timestamp(f"Traceback: {traceback.format_exc()}", llm_logger)
+            log_with_timestamp("========== GOAL ANALYSIS FAILED ==========", llm_logger)
             # Return error action instead of raising the exception
             return {
                 "action": "error",
@@ -343,6 +499,12 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
     
     def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> str:
         """Create the user prompt for the Goal Analyzer LLM."""
+        llm_logger = logging.getLogger('llm_interactions')
+        llm_logger.debug(f"==== BUILDING ANALYSIS USER PROMPT ====")
+        llm_logger.debug(f"Goal ID: {goal_id}")
+        llm_logger.debug(f"Memory hash: {memory_hash[:8] if memory_hash else None}")
+        llm_logger.debug(f"Memory repo path: {memory_repo_path}")
+        
         prompt_lines = []
         goal_data = {}
         children_details = []
@@ -356,11 +518,17 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                 with open(goal_file, 'r') as f:
                     goal_data = json.load(f)
                 logging.info(f"Loaded goal data for {goal_id}")
+                llm_logger.debug(f"Loaded goal data from {goal_file}")
+                llm_logger.debug(f"Goal data: {json.dumps(goal_data, indent=2, default=str)[:1000]}...")
             except Exception as e:
-                logging.error(f"Failed to load goal file {goal_file}: {e}")
+                error_msg = f"Failed to load goal file {goal_file}: {e}"
+                logging.error(error_msg)
+                llm_logger.error(error_msg)
                 prompt_lines.append(f"Error: Could not load goal file {goal_file}")
         else:
-            logging.warning(f"Goal file not found: {goal_file}")
+            warning_msg = f"Goal file not found: {goal_file}"
+            logging.warning(warning_msg)
+            llm_logger.warning(warning_msg)
             prompt_lines.append(f"Warning: Goal file {goal_file} not found.")
 
         # --- 2. Get Children Details ---
@@ -368,6 +536,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             # Local function to get children details - avoid circular imports
             def get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
                 """Get details of direct children (subgoals and tasks) for a given parent ID."""
+                llm_logger.debug(f"Looking for children of parent ID: {parent_goal_id}")
                 goal_path = Path(".goal")
                 children_details = []
                 try:
@@ -393,9 +562,12 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                                 "validation_score": data.get("validation_status", {}).get("last_score")
                             }
                             children_details.append(child_info)
+                            llm_logger.debug(f"Found child: {child_info['goal_id']} - {child_info['description'][:50]}...")
                             
                 except Exception as e:
-                    logging.error(f"Error getting children details for {parent_goal_id}: {e}")
+                    error_msg = f"Error getting children details for {parent_goal_id}: {e}"
+                    logging.error(error_msg)
+                    llm_logger.error(error_msg)
                     raise ValueError(f"Failed to get children details for {parent_goal_id}: {e}")
 
                 # Sort by goal ID for consistent order
@@ -412,8 +584,11 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                 raise ValueError(f"get_children_details returned non-list type: {type(children_details)}")
                 
             logging.info(f"Found {len(children_details)} children for goal {goal_id}")
+            llm_logger.debug(f"Found {len(children_details)} children for goal {goal_id}")
         except Exception as e:
-            logging.error(f"Failed to get children details for {goal_id}: {e}")
+            error_msg = f"Failed to get children details for {goal_id}: {e}"
+            logging.error(error_msg)
+            llm_logger.error(error_msg)
             prompt_lines.append("Error: Could not get children details.")
             raise ValueError(f"Failed to get children details for goal {goal_id}: {e}")
 
@@ -422,6 +597,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             try:
                 # Import here to avoid potential top-level import issues
                 from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+                llm_logger.debug(f"Retrieving recent memory with hash={memory_hash[:8]} from {memory_repo_path}")
                 total_chars, memory_documents = retrieve_recent_memory(
                     memory_hash=memory_hash,
                     char_limit=10000, # Configurable?
@@ -437,32 +613,42 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                         max_len = 1000
                         truncated_content = content[:max_len] + "..." if len(content) > max_len else content
                         memory_context_lines.append(f"```\n{truncated_content}\n```") # Added missing newline
+                        llm_logger.debug(f"Added memory document: {filename} ({ts_str}) - {len(content)} chars")
                     memory_content = "\n".join(memory_context_lines)
                     logging.info(f"Retrieved {len(memory_documents)} memory documents ({total_chars} chars).")
+                    llm_logger.debug(f"Retrieved {len(memory_documents)} memory documents ({total_chars} chars).")
                 else:
                     logging.info("No recent memory documents found.")
+                    llm_logger.debug("No recent memory documents found.")
                     memory_content = "No recent memory documents found."
 
             except ImportError:
-                 logging.error("Could not import retrieve_recent_memory from midpoint.agents.tools.memory_tools.")
+                 error_msg = "Could not import retrieve_recent_memory from midpoint.agents.tools.memory_tools."
+                 logging.error(error_msg)
+                 llm_logger.error(error_msg)
                  memory_content = "Error: Could not retrieve memory context (import failed)."
             except Exception as e:
-                logging.error(f"Error retrieving memory context: {str(e)}")
+                error_msg = f"Error retrieving memory context: {str(e)}"
+                logging.error(error_msg)
+                llm_logger.error(error_msg)
                 memory_content = f"Error retrieving memory context: {str(e)}"
         else:
-            logging.warning("Memory hash or repo path missing, cannot retrieve memory context.")
+            warning_msg = "Memory hash or repo path missing, cannot retrieve memory context."
+            logging.warning(warning_msg)
+            llm_logger.warning(warning_msg)
             memory_content = "Memory context unavailable (missing hash or path)."
 
 
         # --- 4. Format Prompt ---
-        prompt_lines.append(f"Goal Analysis Request: {goal_id}")
+        llm_logger.debug(f"Formatting final analysis prompt")
+        prompt_lines.append(f"Goal Analysis Request for Goal [{goal_id}]")
         prompt_lines.append("="*20)
 
         # Goal Details
         prompt_lines.append("## Goal Details")
         prompt_lines.append(f"ID: {goal_id}")
-        prompt_lines.append(f"Description: {goal_data.get('description', 'N/A')}")
-        prompt_lines.append(f"Parent: {goal_data.get('parent_goal', 'None')}")
+        prompt_lines.append(f"Description ({goal_id}): {goal_data.get('description', 'N/A')}")
+        prompt_lines.append(f"Parent Goal ID: {goal_data.get('parent_goal', 'None')}")
         prompt_lines.append(f"Type: {'Task' if goal_data.get('is_task') else 'Goal'}")
         val_criteria = goal_data.get('validation_criteria', [])
         prompt_lines.append("Validation Criteria:")
@@ -515,6 +701,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         else: prompt_lines.append("No subgoals merged.")
 
         # --- 5. Code Inspection ---
+        llm_logger.debug("Performing code inspection for relevant files")
         # Add automatic code inspection for completed tasks that involve code changes
         # This helps verify that tasks were actually completed correctly
         prompt_lines.append("\n## Code Inspection")
@@ -546,6 +733,8 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                 for pattern in file_patterns:
                     matches = re.findall(pattern, text)
                     files_to_inspect.update(matches)
+            
+            llm_logger.debug(f"Found {len(files_to_inspect)} potential files to inspect: {', '.join(files_to_inspect) if files_to_inspect else 'none'}")
             
             # Inspect identified files
             if files_to_inspect:
@@ -586,16 +775,23 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                                 shown_lines = lines[:half] + ['...'] + lines[-half:]
                                 file_content = '\n'.join(shown_lines)
                             prompt_lines.append(f"```\n{file_content}\n```")
+                            llm_logger.debug(f"Added file content for {used_path} ({len(lines)} lines, truncated to ~{min(len(lines), max_lines)} lines)")
                         else:
                             prompt_lines.append(f"Could not find or read file: {file_path}")
+                            llm_logger.debug(f"Could not find or read file: {file_path}")
                     except Exception as e:
-                        prompt_lines.append(f"Error inspecting file {file_path}: {str(e)}")
+                        error_msg = f"Error inspecting file {file_path}: {str(e)}"
+                        prompt_lines.append(error_msg)
+                        llm_logger.error(error_msg)
             else:
                 prompt_lines.append("No specific files identified for inspection.")
+                llm_logger.debug("No specific files identified for inspection")
                 
         except Exception as e:
-            logging.error(f"Error during code inspection: {str(e)}")
-            prompt_lines.append(f"Error during code inspection: {str(e)}")
+            error_msg = f"Error during code inspection: {str(e)}"
+            logging.error(error_msg)
+            llm_logger.error(error_msg)
+            prompt_lines.append(error_msg)
 
         # Memory Context
         prompt_lines.append("\n" + memory_content)
@@ -607,7 +803,12 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
         prompt_lines.append("Then, provide your suggested next action and justification in the required JSON format.")
 
-        return "\n".join(prompt_lines)
+        final_prompt = "\n".join(prompt_lines)
+        llm_logger.debug(f"==== FINAL PROMPT STATS ====")
+        llm_logger.debug(f"Prompt length: {len(final_prompt)} characters, ~{len(prompt_lines)} lines")
+        llm_logger.debug(f"==== END PROMPT BUILDING ====")
+        
+        return final_prompt
 
     def _serialize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI message objects to serializable dictionaries."""
@@ -685,18 +886,96 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
 
     def _save_conversation_to_memory(self, messages: List[Dict[str, Any]], metadata: Dict[str, Any], memory_hash: str, repo_path: str, goal_name: str):
         """Save the conversation and metadata to memory."""
-        # Implement the logic to save the conversation and metadata to memory
-        # This is a placeholder and should be replaced with the actual implementation
-        # For now, just log that it was called
-        logging.info(f"Placeholder: _save_conversation_to_memory called for goal {goal_name}")
-        # Example of calling the actual tool (if needed later and imported)
-        # try:
-        #     from midpoint.agents.tools.memory_tools import store_memory_document # Ensure import
-        #     # ... format content ...
-        #     store_memory_document(content=..., category=..., metadata=metadata, memory_hash=memory_hash, memory_repo_path=repo_path)
-        # except Exception as e:
-        #      logging.error(f"Actual save_conversation_to_memory failed: {e}")
-        pass
+        llm_logger = logging.getLogger('llm_interactions')
+        llm_logger.debug(f"Saving conversation to memory with hash={memory_hash[:8] if memory_hash else None}")
+        
+        try:
+            from midpoint.agents.tools.memory_tools import store_memory_document
+            
+            # Format the conversation into a readable format
+            conversation_lines = []
+            conversation_lines.append(f"# Goal Analyzer Conversation: {goal_name}")
+            conversation_lines.append(f"Memory hash: {memory_hash}")
+            conversation_lines.append(f"Repository path: {repo_path}")
+            conversation_lines.append(f"Timestamp: {datetime.datetime.now().isoformat()}")
+            conversation_lines.append("\n## Messages")
+            
+            for idx, message in enumerate(messages):
+                role = message.get("role", "unknown")
+                # Handle different message formats and extract content
+                content = ""
+                if isinstance(message, dict):
+                    content = message.get("content", "")
+                else:
+                    content = str(message)
+                
+                conversation_lines.append(f"\n### {role.upper()} (message {idx+1})")
+                
+                # Format content 
+                if content:
+                    # Truncate extremely long messages for storage
+                    if len(content) > 10000:
+                        content = content[:5000] + "\n\n... [content truncated] ...\n\n" + content[-5000:]
+                    conversation_lines.append(content)
+                
+                # Include tool calls if present
+                if isinstance(message, dict) and "tool_calls" in message and message["tool_calls"]:
+                    conversation_lines.append("\nTool Calls:")
+                    for tool_call in message["tool_calls"]:
+                        # Extract function details
+                        if hasattr(tool_call, "function"):
+                            try:
+                                function_name = tool_call.function.name
+                                arguments = tool_call.function.arguments
+                                conversation_lines.append(f"- Function: {function_name}")
+                                conversation_lines.append(f"  Arguments: {arguments}")
+                            except AttributeError:
+                                conversation_lines.append("- [Tool call details unavailable]")
+                        elif isinstance(tool_call, dict) and "function" in tool_call:
+                            function_info = tool_call["function"]
+                            function_name = function_info.get("name", "unknown")
+                            arguments = function_info.get("arguments", "{}")
+                            conversation_lines.append(f"- Function: {function_name}")
+                            conversation_lines.append(f"  Arguments: {arguments}")
+            
+            # Add metadata section
+            conversation_lines.append("\n## Metadata")
+            for key, value in metadata.items():
+                conversation_lines.append(f"{key}: {value}")
+            
+            # Join everything into a single string
+            conversation_content = "\n".join(conversation_lines)
+            
+            # Store in memory
+            result = store_memory_document(
+                content=conversation_content,
+                category="goal_analyzer",
+                metadata={
+                    "type": "llm_conversation",
+                    "goal_name": goal_name,
+                    "goal_id": metadata.get("goal_id", "unknown"),
+                    "suggested_action": metadata.get("suggested_action", "unknown"),
+                    "timestamp": datetime.datetime.now().isoformat()
+                },
+                repo_path=repo_path,
+                memory_hash=memory_hash
+            )
+            
+            if result and result.get("success"):
+                llm_logger.debug(f"Successfully saved conversation to memory: {result.get('document_path', 'unknown')}")
+                logging.info(f"Saved goal analyzer conversation to memory")
+            else:
+                llm_logger.error(f"Failed to save conversation to memory: {result}")
+                logging.warning("Failed to save conversation to memory")
+                
+        except ImportError as ie:
+            error_msg = f"Failed to import store_memory_document: {str(ie)}"
+            llm_logger.error(error_msg)
+            logging.error(error_msg)
+        except Exception as e:
+            error_msg = f"Error saving conversation to memory: {str(e)}"
+            llm_logger.error(error_msg)
+            logging.error(error_msg)
 
 # Other helper functions (validate_repository_state, list_subgoal_files, load_input_file, is_git_ancestor)
 # remain the same for now.
@@ -726,8 +1005,17 @@ def analyze_goal(
     input_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """Analyze a goal's state using the GoalAnalyzer agent."""
+    # Access global variables
+    global log_file, task_summary_file, llm_responses_file
+    
+    # Always configure logging at the start to ensure log files are properly set up
     configure_logging(debug, quiet, logs_dir)
     logging.info(f"Analyzing goal: {goal}")
+    
+    # Additional test message to LLM logger
+    llm_logger = logging.getLogger('llm_interactions')
+    llm_logger.debug(f"Goal analysis initiated for: {goal}")
+    llm_logger.debug(f"Using log files: {log_file}, {task_summary_file}, {llm_responses_file}")
 
     # Initial state setup - don't catch ImportError
     from .tools.git_tools import get_current_hash 
@@ -760,8 +1048,11 @@ def analyze_goal(
             memory_repo_path = context.memory_state.repository_path
             goal_id = context.metadata.get("goal_id") 
             logging.info(f"Context loaded from {input_file}")
+            llm_logger.debug(f"Context loaded from {input_file}")
         except Exception as e:
-             logging.error(f"Failed to load or process input file {input_file}: {e}")
+             error_msg = f"Failed to load or process input file {input_file}: {e}"
+             logging.error(error_msg)
+             llm_logger.error(error_msg)
              return {"success": False, "error": f"Failed to load input file: {e}"}
 
     # Add goal_id to metadata if provided via argument (and not already loaded)
@@ -771,6 +1062,7 @@ def analyze_goal(
         raise ValueError("Goal ID must be provided via --goal-id argument or within the --input-file")
     
     final_goal_id = context.metadata.get("goal_id")
+    llm_logger.debug(f"Using goal ID: {final_goal_id}")
 
     # Re-validate memory state after potential input file loading
     if not context.memory_state or not context.memory_state.memory_hash or not context.memory_state.repository_path:
@@ -783,7 +1075,8 @@ def analyze_goal(
     # Create and run the analyzer (don't catch exceptions)
     analyzer = GoalAnalyzer()
     # Pass the potentially updated memory_repo_path to the analyzer instance method
-    analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=True, debug=debug, quiet=quiet)
+    # Make sure we're passing setup_logging=False here since we already configured logging
+    analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=False, debug=debug, quiet=quiet)
 
     # Get updated hashes after analysis
     from .tools.git_tools import get_current_hash 
@@ -812,6 +1105,10 @@ def analyze_goal(
         "memory_repository_path": memory_repo_path, 
         "goal_id": final_goal_id 
     }
+
+    # Log final results to the LLM logger as well for completeness
+    llm_logger.debug(f"Analysis for goal {final_goal_id} finished with action: {final_result['action']}")
+    llm_logger.debug(f"Final analysis result: {json.dumps(final_result, indent=2)}")
 
     logging.info(f"Analysis for goal {final_goal_id} finished with action: {final_result['action']}")
     logging.debug(f"Final analysis result: {json.dumps(final_result, indent=2)}")
@@ -895,3 +1192,48 @@ def analyze_goal(
 # if __name__ == "__main__":
 #     # main() # Keep commented
 #     pass # Added pass to avoid syntax error on empty block 
+
+# Helper function to ensure file can be written
+def ensure_file_writable(file_path):
+    """Ensure the file exists and is writable."""
+    try:
+        # Create the file if it doesn't exist
+        if not os.path.exists(file_path):
+            with open(file_path, 'w') as f:
+                f.write("")
+        
+        # Check if file is writable
+        if not os.access(file_path, os.W_OK):
+            # Try to fix permissions
+            os.chmod(file_path, 0o644)
+            
+        # Final test - try to write to it
+        with open(file_path, 'a') as f:
+            f.write("")
+            
+        return True
+    except Exception as e:
+        logging.error(f"Failed to ensure file is writable: {file_path}, error: {e}")
+        return False 
+
+# Helper function for LLM logger debugging
+def log_with_timestamp(message, logger=None):
+    """Add a timestamp to a log message and ensure it gets written immediately."""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    full_message = f"[{timestamp}] {message}"
+    
+    if logger:
+        logger.debug(full_message)
+    
+    # Also try direct file write as a fallback
+    global llm_responses_file
+    if llm_responses_file and os.path.exists(llm_responses_file):
+        try:
+            with open(llm_responses_file, "a") as f:
+                f.write(full_message + "\n")
+                f.flush()
+        except Exception as e:
+            # Can't log this error since that might cause a loop
+            pass
+            
+    return full_message 
