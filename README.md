@@ -1,399 +1,151 @@
 # Midpoint
 
-A recursive goal decomposition and execution system for complex repository management tasks.
-
-## Project Overview
-
-Midpoint is an advanced AI system designed to overcome the fundamental limitation of current AI systems: the inability to effectively reason over long chains of thought and manage complex objectives. By decomposing complex goals into manageable subgoals and using a coordinated multi-agent approach, the system can tackle problems that would be intractable for a single agent.
+Midpoint is an advanced AGI system that can recursively follow goal-decomposition and planning when applied to the task of modifying repositories using git.
 
 ## Current Development Status
 
-⚠️ **Important**: The main orchestrator and CLI interface are currently under development. The system is not yet ready for production use.
-
-### Working Components
-- Goal Decomposition System
-- Task Execution System
-- Goal Validation System
-- Repository State Management
-- Memory Management System
-- Goal Management CLI
-
-### In Development
-- Main Orchestrator (coordination between components)
-- CLI Interface
-- End-to-end workflow
-
-### Testing and Development
-Development and testing tools are available in the `tests/` directory. These tools can be used to test individual components while the main system is being developed.
+This project is currently in active development. The core architecture is implemented, but many features are still being refined and enhanced.
 
 ## Project Structure
 
 ```
 midpoint/
-├── src/                    # Main source code
-│   └── midpoint/          # Core package
-│       ├── agents/        # Specialized AI agents
-│       ├── config/        # Configuration files
-│       ├── utils/         # Utility functions
-│       └── orchestrator.py # Main orchestrator (in development)
-├── scripts/               # Utility scripts
-│   ├── hooks/             # Git hooks
-│   └── memory_tools.py    # Memory system utilities
-├── tests/                 # Test suite and development tools
-├── docs/                  # Documentation
-│   ├── goal_cli.md        # Goal management CLI documentation
-│   └── goal_cli_visuals.md # Goal visualization guide
-└── logs/                  # Log files
+├── agents/                 # Agent implementations
+│   ├── goal_analyzer.py    # Strategic planning agent
+│   ├── task_executor.py    # Implementation agent
+│   ├── goal_validator.py   # Verification agent
+│   ├── failure_analyzer.py # Diagnostics agent
+│   └── progress_summarizer.py # Context management agent
+├── models/                 # Data models
+│   ├── goal.py             # Goal and subgoal models
+│   ├── task.py             # Task models
+│   ├── execution.py        # Execution trace models
+│   ├── validation.py       # Validation result models
+│   ├── failure.py          # Failure analysis models
+│   └── summary.py          # Execution summary models
+├── tools/                  # Tool implementations
+│   ├── git_tools.py        # Git operations
+│   ├── file_tools.py       # File system operations
+│   ├── search_tools.py     # Web search capabilities
+│   └── code_tools.py       # Code analysis and modification
+├── memory/                 # Agent memory system
+│   ├── memory_manager.py   # Memory management
+│   ├── memory_store.py     # Memory storage
+│   └── memory_retriever.py # Memory retrieval
+├── utils/                  # Utility functions
+│   ├── tracing.py          # Tracing utilities
+│   ├── visualization.py    # Visualization utilities
+│   └── config.py           # Configuration utilities
+├── tests/                  # Test suite
+├── docs/                   # Documentation
+│   ├── VISION.md           # System vision and architecture
+│   └── API.md              # API documentation
+├── examples/               # Example usage
+├── requirements.txt        # Dependencies
+└── main.py                 # Entry point
 ```
 
-## Getting Started
+## Installation
 
-### Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```
-   pip install -e .
-   ```
-   For development and testing:
-   ```
-   pip install -e ".[dev]"
-   ```
-3. Install git hooks (optional):
-   ```
-   make install-hooks
-   ```
-
-### Usage
-
-Use the Makefile for common operations:
-
-```
-# Run the Midpoint system
-make run
-
-# Run tests
-make test
-
-# Run memory-specific tests
-make test-memory
-
-# Run critical tests (those included in pre-commit hook)
-make test-critical
-
-# Clean temporary files
-make clean
-
-# See all available commands
-make help
-```
-
-### Testing
-
-We use several mechanisms to ensure code quality:
-
-1. **Automated Tests**: Run tests via the Makefile
-   ```bash
-   # Run all tests
-   make test
-   
-   # Run memory-specific tests
-   make test-memory
-   ```
-
-2. **Manual Testing**: Run specific test suites with pytest
-   ```bash
-   # Run specific test file
-   python -m pytest tests/test_memory_tools.py
-   
-   # Run with verbose output
-   python -m pytest tests/test_memory_*.py -v
-   ```
-
-3. **Pre-commit Hooks**: Automatically run tests before each commit
-   - Install with `make install-hooks`
-   - Prevents commits if tests fail
-   - Currently runs:
-     - Memory tests
-     - Filesystem tools tests
-     - Specific bugs tests 
-     - Goal decomposer tools tests
-     - Tools wrapper tests
-
-Our test suite includes:
-- **Unit Tests**: Test individual functions in isolation
-- **Integration Tests**: Test multiple components working together
-
-## Current Implementation Status
-
-### ✅ Fully Implemented Features
-
-1. **Git Repository State Management**:
-   - Branch creation and management
-   - State checking for uncommitted changes
-   - Hash-based state tracking
-   - Commit management
-   
-2. **Goal Decomposition Agent**:
-   - Recursive decomposition of complex goals
-   - OODA loop implementation
-   - Repository state exploration
-   - Selective context passing
-   - Executable task identification
-
-3. **Task Execution Agent**:
-   - LLM-driven task execution
-   - Multiple tool support (file editing, searching, command execution)
-   - Git branch and commit management
-   - Comprehensive logging and debugging
-   - Error handling and recovery
-
-4. **Goal Management CLI**:
-   - Goal/subgoal labeling system
-   - Branch management commands
-   - State navigation commands
-   - Hierarchy navigation commands
-   - Result incorporation commands
-   - Visualization tools
-
-### 🔄 In Progress Features
-
-1. **Orchestration System**:
-   - Integration of GoalDecomposer and TaskExecutor
-   - Iterative execution with state feedback
-   - Sequential subgoal implementation
-   - Task dependency management
-   
-2. **Human Supervision System**:
-   - Interactive mode with approval steps
-   - Progress visualization
-   - Command inspection and modification
-
-### 📋 Planned Features
-
-1. **Failure Analysis Agent**:
-   - Advanced diagnostics for failed executions
-   - Root cause identification
-   - Improvement suggestions
-
-2. **Progress Summarization**:
-   - Concise summaries of execution steps
-   - Context management across multiple steps
-   - Key decision tracking
-
-## Quick Start
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
+# Clone the repository
+git clone https://github.com/yourusername/midpoint.git
 cd midpoint
+
+# Create a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-2. Set up the development environment:
-```bash
-# Make the setup script executable
-chmod +x setup.sh
+## Usage
 
-# Run the setup script
-./setup.sh
+```python
+from midpoint import Midpoint
+
+# Initialize the system
+midpoint = Midpoint(
+    openai_api_key="your-api-key",
+    repository_path="/path/to/repo",
+    initial_commit="abc123"
+)
+
+# Define a goal
+goal = {
+    "description": "Add a new feature to the codebase",
+    "validation_criteria": ["Tests pass", "Documentation updated"],
+    "budget": 50000
+}
+
+# Execute the goal
+result = midpoint.execute(goal)
+
+# Check the result
+if result.success:
+    print(f"Goal achieved! Final commit: {result.final_commit}")
+else:
+    print(f"Goal not achieved: {result.failure_reason}")
 ```
 
-3. Verify your environment:
-```bash
-python check_env.py
-```
-
-4. Run tests:
-```bash
-python -m pytest tests/
-```
-
-## Using the System
-
-### Running the Full Flow Test
-
-The full flow test demonstrates the end-to-end process from goal decomposition to execution and validation:
-
-```bash
-python examples/test_deep_flow.py <repository_path> "<goal_description>"
-```
-
-Example:
-```bash
-python examples/test_deep_flow.py test-repo "Create a task management system with basic functionality for adding, listing, and completing tasks"
-```
-
-This will:
-1. Recursively decompose the goal into manageable subgoals
-2. Execute the most concrete subgoal using the TaskExecutor
-3. Validate the execution using the GoalValidator
-
-### Goal Management CLI
-
-Midpoint includes a powerful goal management CLI for tracking, organizing, and visualizing your development goals.
+## Testing
 
 ```bash
-# Create a new top-level goal
-goal new "Implement authentication system"
+# Run all tests
+pytest
 
-# Create subgoals
-goal sub G1 "Implement user registration"
+# Run specific test file
+pytest tests/test_goal_analyzer.py
 
-# Show the goal tree
-goal tree
-
-# Mark a goal as complete
-goal complete
-
-# Show all goals with their status
-goal status
-```
-
-See the [Goal CLI Documentation](docs/goal_cli.md) for more details on all available commands.
-
-### Running Only the Recursive Decomposition
-
-If you only want to see the goal decomposition without execution:
-
-```bash
-python run_recursive_decomposition.py <repository_path> "<goal_description>"
-```
-
-This will show the recursive decomposition process and output a hierarchical log of the decomposed goals.
-
-### Creating a Test Repository
-
-For testing, you can use the provided test repository or create a new one:
-
-```bash
-# Create a new test repository
-mkdir test-repo
-cd test-repo
-git init
-echo "# Test Repository" > README.md
-git add README.md
-git commit -m "Initial commit"
-cd ..
-```
-
-## Development Setup
-
-The project requires a Python virtual environment and certain environment variables to be set up. The setup script (`setup.sh`) handles most of this automatically, but here's what it does:
-
-1. Creates a virtual environment (`.venv`)
-2. Activates the virtual environment
-3. Installs the package in development mode
-4. Creates an environment check script
-
-### Environment Variables
-
-Create a `.env` file in the project root with the following variables:
-
-```
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-4-1106-preview
-```
-
-You can copy the example file and modify it:
-```bash
-cp .env.example .env
-# Edit .env with your API keys
-```
-
-### Manual Setup
-
-If you prefer to set up manually:
-
-1. Create and activate virtual environment:
-```bash
-python -m venv .venv
-source .venv/bin/activate  # On Unix/macOS
-# or
-.venv\Scripts\activate  # On Windows
-```
-
-2. Install the package in development mode:
-```bash
-python setup_dev.py
-```
-
-## Running Tests
-
-Before running tests, ensure your environment is set up correctly:
-
-1. Activate the virtual environment:
-```bash
-source .venv/bin/activate
-```
-
-2. Run the environment check:
-```bash
-python check_env.py
-```
-
-3. Run the tests:
-```bash
-python -m pytest tests/
+# Run with coverage
+pytest --cov=midpoint
 ```
 
 ## System Architecture
 
-The system consists of specialized agents, each with a distinct role:
+Midpoint uses a multi-agent architecture with five specialized agents:
 
-### 1. GoalDecomposer (Strategic Planning)
-- Breaks complex goals into manageable subgoals
-- Focuses on the single most important next step
-- Recursively decomposes until reaching executable tasks
+1. **GoalAnalyzer**: Analyzes the current state and determines the most appropriate next action, including whether to decompose, execute, validate, or give up on a goal.
 
-### 2. TaskExecutor (Implementation)
-- Implements directly executable tasks 
-- Uses LLM-driven decision making
-- Leverages multiple tools (file editing, search, commands)
-- Creates git checkpoints with appropriate commits
-- Provides detailed logging of all operations
+2. **TaskExecutor**: Implements directly executable tasks identified by the GoalAnalyzer.
 
-### 3. GoalValidator (Verification)
-- Evaluates whether a subgoal has been successfully achieved
-- Tests against specific success criteria
-- Provides detailed validation reports
+3. **GoalValidator**: Evaluates whether a subgoal has been successfully achieved.
 
-### 4. Orchestrator (Coordination)
-- Coordinates the workflow between agents
-- Manages the state transitions between decomposition and execution
-- Tracks overall progress toward the high-level goal
-- Handles error recovery and retries
+4. **FailureAnalyzer**: Analyzes failed executions to understand why they didn't succeed.
 
-## Workflow
+5. **ProgressSummarizer**: Creates concise summaries of successful executions to preserve critical context.
 
-The typical workflow is:
+The system follows an OODA loop (Observe-Orient-Decide-Act) approach to problem-solving, with recursive goal decomposition using a depth-first search strategy.
 
-1. **Planning Phase**:
-   - GoalDecomposer analyzes the problem using the OODA loop
-   - Determines the single most promising next step
-   - Recursively decomposes until reaching an executable task
+### Workflow
 
-2. **Execution Phase**:
-   - TaskExecutor implements the executable task
-   - Creates branch for isolated execution
-   - Uses LLM-driven decision making to implement changes
-   - Commits changes when complete
+1. **Planning Phase**: GoalAnalyzer determines the most promising next step
+2. **Execution Phase**: TaskExecutor implements the task
+3. **Validation Phase**: GoalValidator assesses if the task was achieved
+4. **Failure Handling Phase**: If a goal is impossible, failure is propagated to parent goals
+5. **Recursion**: Process continues until goal is achieved, budget is exhausted, or all paths are impossible
 
-3. **Validation Phase**:
-   - GoalValidator assesses if the task was achieved
-   - Provides detailed validation report
+### Goal Identification System
 
-4. **Orchestration Loop**:
-   - If task was successful, returns to Planning Phase with the new state
-   - Continues until the high-level goal is achieved
-   - Handles failures through retries or alternative approaches
+The system uses a unified naming convention for all goals and tasks:
+
+- All nodes (goals, subgoals, and tasks) use the 'G' prefix followed by a unique number
+- This simplifies tracking and visualization
+- Eliminates confusion between different types of nodes
+
+### Failure Handling
+
+When a goal is determined to be impossible or no longer relevant:
+
+- The goal is marked as "given_up"
+- Failure information is propagated to the parent goal
+- The parent goal is analyzed in the next iteration
+- If no parent exists, the overall process is marked as unsuccessful
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
@@ -401,48 +153,44 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Agent Memory System
 
-The system now includes an agent memory feature, allowing agents to retain and recall information across sessions. The memory system is organized as a separate Git repository storing memory documents categorized by type.
+The Midpoint system includes a sophisticated memory system that allows agents to store and retrieve information across multiple executions. This enables the system to learn from past experiences and make more informed decisions.
 
-#### Key Components:
+### Key Components
 
-- **scripts/init_memory_repo.py**: Initializes a memory repository with appropriate structure
-- **scripts/memory_tools.py**: Utility functions for storing, retrieving memories, and managing cross-references
-- **scripts/memory_example.py**: Simple example demonstrating memory usage
-- **scripts/memory_integration.py**: Example showing integration with agent systems
-- **scripts/memory_revert_example.py**: Tool for reverting to previous states with synchronized code and memory
+1. **Memory Manager**: Coordinates memory operations across agents
+2. **Memory Store**: Persists memory data to disk
+3. **Memory Retriever**: Retrieves relevant memories based on context
 
-#### Features:
+### Memory Types
 
-- **Document-based Memory**: Store and retrieve memories as documents
-- **Category Organization**: Organize memories by type (reasoning, observations, decisions)
-- **Cross-referencing System**: Track relationships between code and memory states
-- **Historical Tracking**: Maintain complete history of all code-memory mappings
-- **State Reversion**: Ability to revert to any previous state with matching code and memory
+- **Short-term Memory**: Temporary storage for the current execution
+- **Long-term Memory**: Persistent storage across multiple executions
+- **Episodic Memory**: Records of past executions and their outcomes
+- **Semantic Memory**: Knowledge about the codebase and domain
 
-#### Usage:
+### Usage
 
-1. Initialize the memory repository:
-   ```bash
-   python scripts/init_memory_repo.py ~/.midpoint/memory
-   ```
+```python
+# Store a memory
+midpoint.memory.store(
+    agent="goal_analyzer",
+    memory_type="episodic",
+    content={
+        "goal_id": "G1",
+        "action": "decompose",
+        "reasoning": "The goal requires multiple steps",
+        "timestamp": "2023-01-01T12:00:00Z"
+    }
+)
 
-2. Store and retrieve memories:
-   ```bash
-   # Store a memory document
-   python -m scripts.memory_tools store reasoning --content "This is important reasoning"
-   
-   # Retrieve recent memory documents
-   python -m scripts.memory_tools retrieve --category observations
-   ```
+# Retrieve memories
+memories = midpoint.memory.retrieve(
+    agent="goal_analyzer",
+    memory_type="episodic",
+    filter={"goal_id": "G1"}
+)
+```
 
-3. View cross-reference history:
-   ```bash
-   python -m scripts.memory_tools history
-   ```
+### Memory Visualization
 
-4. Revert to previous states:
-   ```bash
-   python -m scripts.memory_revert_example interactive
-   ```
-
-See the [Memory System Documentation](docs/memory_system.md) for complete details. 
+The system includes tools for visualizing the memory graph, showing relationships between different memories and how they influence decision-making. 
