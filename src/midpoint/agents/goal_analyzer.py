@@ -779,12 +779,26 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         if failed_attempts:
             prompt_lines.append(f"Failed Attempts History ({len(failed_attempts)}):")
             # Display the most recent failures first
-            for attempt in reversed(failed_attempts[-5:]): # Show last 5 failures
+            for attempt in reversed(failed_attempts[-50:]): # Show last 5 failures
                 ts = attempt.get('failure_timestamp', 'N/A')
                 reason = attempt.get('failure_reason', 'No reason provided')
-                attempted_id = attempt.get('attempted_goal_id', goal_id) # Use current goal_id if child ID not present
-                prompt_lines.append(f"- Attempt on {attempted_id} at {ts}: {reason[:100]}...") # Truncate reason
-            if len(failed_attempts) > 5: prompt_lines.append("  ...")
+                
+                # Determine the ID of the failed attempt
+                failed_id = attempt.get('failed_child_goal_id') or attempt.get('attempted_goal_id') or "UnknownID"
+                
+                # Extract description and criteria (new fields)
+                description = attempt.get('failed_child_description', 'No description provided')
+                criteria = attempt.get('failed_child_validation_criteria', [])
+                criteria_summary = f"{len(criteria)} defined" if isinstance(criteria, list) else "Unknown criteria format"
+
+                # Format the output lines
+                prompt_lines.append(f"- Failure Record for {failed_id} at {ts}:")
+                prompt_lines.append(f"    Description: {description}")
+                prompt_lines.append(f"    Criteria: {criteria_summary}")
+                prompt_lines.append(f"    Reason: {reason[:1000]}...")
+                
+            if len(failed_attempts) > 50: 
+                prompt_lines.append("  ... (more past failures exist)")
         else:
             prompt_lines.append("No failed attempts recorded for this goal.")
 

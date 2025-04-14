@@ -13,7 +13,9 @@ import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import sys
+import time
 
+# Local imports (ensure correct relative paths)
 from .agents.models import Goal, SubgoalPlan, TaskContext, ExecutionResult, MemoryState, State
 from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
 from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
@@ -24,6 +26,9 @@ from .agents.goal_validator import GoalValidator
 
 # Import the new Goal Analyzer agent function
 from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
+
+# Import the new parent update functions
+from .goal_operations.goal_update import propagate_success_state_to_parent, propagate_failure_history_to_parent
 
 # Configure basic logging
 logging.basicConfig(
@@ -950,52 +955,45 @@ def show_goal_status():
         goal = goal_files[goal_id]
         indent = "  " * depth
         
-        # --- START EDIT: Add check for last execution failure --- 
-        status = ""
-        last_execution_failed = False
-        if "last_execution" in goal and not goal["last_execution"].get("success", True):
-            status = "❌"  # Last execution failed
-            last_execution_failed = True
-        # --- END EDIT ---
+        status = "" # Initialize status symbol
 
-        # Determine status symbol (only if not already set to failed)
-        if not status:
-            if goal.get("complete", False) or goal.get("completed", False):
-                # Check if goal has been validated
-                if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
-                    status = "✅"  # Complete and validated
-                else:
-                    status = "🔷"  # Complete but not validated
-            else:
-                # Special handling for tasks (that are not complete)
-                if goal.get("is_task", False):
-                    # If a task is not complete and didn't fail last execution, it's pending
-                    status = "⏳"  # Task pending execution
-                else:
-                    # Goal-specific status (not a task, not complete, didn't fail)
-                    # Check for completed tasks
-                    completed_tasks = len(goal.get("completed_tasks", []))
-                    has_completed_tasks = completed_tasks > 0
-                    
-                    # Check if all subgoals are complete
-                    subgoals = {k: v for k, v in goal_files.items() 
-                              if v.get("parent_goal", "").upper() == goal_id.upper()}
-                    all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
-                    
-                    if not subgoals:
-                        status = "🔘"  # No subgoals (not yet decomposed)
-                    elif all_subgoals_complete:
-                        # This case shouldn't normally be reached if goal is not complete, but handle it
-                         if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
-                             status = "✅"  # All subgoals complete and validated (should imply goal complete)
-                         else:
-                             status = "🔷"  # All subgoals complete but goal not validated/complete
-                    else:
-                        status = "⚪"  # Some subgoals incomplete
+        # --- Determine Status Symbol --- 
+        # Priority 1: Give Up from Analysis
+        if goal.get('last_analysis', {}).get('suggested_action') == 'give_up':
+            status = "❌"
         
-        # Ensure status is set
+        # Priority 2: Last Execution Failure (if not already marked give_up)
+        elif "last_execution" in goal and not goal["last_execution"].get("success", True):
+            status = "❌" 
+        
+        # Priority 3: Completion / Validation Status
+        elif goal.get("complete", False) or goal.get("completed", False):
+            if "validation_status" in goal and goal["validation_status"].get("last_score", 0) >= goal.get("success_threshold", 0.8):
+                status = "✅"  # Complete and validated
+            else:
+                status = "🔷"  # Complete but not validated
+
+        # Priority 4: Pending/Decomposed Status (if not complete or failed)
+        else:
+            if goal.get("is_task", False):
+                status = "⏳"  # Task pending execution
+            else:
+                # Goal-specific status
+                subgoals = {k: v for k, v in goal_files.items() 
+                          if v.get("parent_goal", "").upper() == goal_id.upper()}
+                all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
+                
+                if not subgoals:
+                    status = "🔘"  # No subgoals (not yet decomposed)
+                elif all_subgoals_complete:
+                     # This state means goal should likely be complete or needs validation
+                     status = "🔷" # Default to complete but not validated if somehow reached here
+                else:
+                    status = "⚪"  # Some subgoals incomplete
+        
+        # Fallback
         if not status:
-            status = "❔" # Default/Unknown status if logic above missed something
+            status = "❔" # Default/Unknown status
 
         # Get progress text
         progress_text = ""
@@ -2059,7 +2057,7 @@ def main_command(args):
     elif args.command == "graph":
         return generate_graph()
     elif args.command == "update-parent":
-        return update_parent_from_child(args.child_id)
+        return handle_update_parent_command(args)
     elif args.command == "validate-history":
         return show_validation_history(args.goal_id, args.debug, args.quiet)
     elif args.command == "analyze":
@@ -2614,75 +2612,77 @@ def handle_solve_command(args):
                         import traceback
                         traceback.print_exc()
                     break
-            # ===== START EDIT 2: Add give_up handling =====
+            # ===== START EDIT 2: Modify give_up handling =====
             elif recommended_action_type == "give_up":
                 log_progress(f"Goal {current_goal_id} marked for give up by analyzer.")
                 failure_justification = analysis_result.get("justification", "No justification provided.")
                 log_progress(f"Reason: {failure_justification}")
-                
-                # Find the parent goal ID
-                parent_goal_id = None
-                if goal_file.exists(): # Reload current goal data to be sure
-                    with open(goal_file, 'r') as f:
-                        current_goal_data = json.load(f)
-                    parent_goal_id = current_goal_data.get("parent_goal")
-                    
-                    # Update the current goal file to mark it as given up
-                    current_goal_data["status"] = "given_up" # Add a new status field
-                    if "last_analysis" not in current_goal_data: current_goal_data["last_analysis"] = {}
-                    current_goal_data["last_analysis"]["action"] = "give_up"
-                    current_goal_data["last_analysis"]["justification"] = failure_justification
-                    current_goal_data["last_analysis"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    with open(goal_file, 'w') as f:
-                        json.dump(current_goal_data, f, indent=2)
 
+                parent_goal_id = None
+                # Update the current goal file first to mark it as given up
+                current_goal_file_path = goal_path / f"{current_goal_id}.json"
+                if current_goal_file_path.exists():
+                    try:
+                        with open(current_goal_file_path, 'r') as f:
+                            current_goal_data = json.load(f)
+                        parent_goal_id = current_goal_data.get("parent_goal")
+                        
+                        current_goal_data["status"] = "given_up"
+                        if "last_analysis" not in current_goal_data: current_goal_data["last_analysis"] = {}
+                        # Ensure the justification from the analysis result is stored
+                        current_goal_data["last_analysis"]["suggested_action"] = "give_up"
+                        current_goal_data["last_analysis"]["justification"] = failure_justification
+                        current_goal_data["last_analysis"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        
+                        with open(current_goal_file_path, 'w') as f:
+                            json.dump(current_goal_data, f, indent=2)
+                        log_progress(f"Marked goal {current_goal_id} status as 'given_up' in its file.")
+                    except Exception as e:
+                        log_progress(f"ERROR: Failed to update current goal file {current_goal_id} with give_up status: {e}")
+                        # Decide if we should break or try to continue propagating?
+                        # Let's break for safety for now.
+                        break 
+                else:
+                    log_progress(f"WARNING: Current goal file {current_goal_id}.json not found. Cannot mark as given_up.")
+                    # Cannot proceed without the current goal file
+                    break
+
+                # Now, propagate failure to parent using the dedicated command logic
                 if parent_goal_id:
-                    log_progress(f"Propagating failure information to parent {parent_goal_id}")
-                    parent_file = goal_path / f"{parent_goal_id}.json"
-                    if parent_file.exists():
-                        try:
-                            with open(parent_file, 'r') as f:
+                    log_progress(f"Calling update-parent command logic to propagate failure to parent {parent_goal_id}")
+                    # Create a mock args object for the handler function
+                    update_args = argparse.Namespace(
+                        command='update-parent', 
+                        child_id=current_goal_id, 
+                        outcome='failed' # Hardcode outcome as failed for give_up propagation
+                        # No reason needed here as the function reads it from child file
+                    )
+                    update_success = handle_update_parent_command(update_args)
+                    
+                    if update_success:
+                        log_progress(f"Failure propagation to parent {parent_goal_id} initiated successfully.")
+                        # Set up next iteration to analyze the parent
+                        current_goal_id = parent_goal_id
+                        goal_file = goal_path / f"{parent_goal_id}.json" # Update goal_file path for next loop
+                        if goal_file.exists():
+                            with open(goal_file, 'r') as f:
                                 parent_data = json.load(f)
-                            
-                            if "failed_attempts_history" not in parent_data:
-                                parent_data["failed_attempts_history"] = []
-                            
-                            # Add failure record
-                            failure_record = {
-                                "attempted_goal_id": current_goal_id,
-                                "attempted_goal_description": current_goal_data.get("description", "N/A"),
-                                "failure_reason": failure_justification,
-                                "failure_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                            }
-                            parent_data["failed_attempts_history"].append(failure_record)
-                            
-                            # Save updated parent data
-                            with open(parent_file, 'w') as f:
-                                json.dump(parent_data, f, indent=2)
-                                
-                            log_progress(f"Updated parent {parent_goal_id} with failure history.")
-                            
-                            # Set up next iteration to analyze the parent
-                            current_goal_id = parent_goal_id
-                            goal_file = parent_file # Update goal_file path for next loop
                             goal = Goal(
                                 id=parent_goal_id,
                                 description=parent_data.get("description", ""),
-                                metadata=context.metadata # Keep existing metadata, history will be loaded next loop
+                                metadata=context.metadata # Keep existing metadata
                             )
                             context.goal = goal
                             context.metadata["goal_id"] = parent_goal_id
-                            # No state change needed, just context
                             continue # Continue loop to analyze parent
-                            
-                        except Exception as e:
-                            log_progress(f"ERROR: Failed to update parent goal {parent_goal_id}: {e}")
-                            break # Exit loop on error updating parent
+                        else:
+                             log_progress(f"ERROR: Parent goal file {parent_goal_id}.json not found after propagation attempt. Stopping.")
+                             break
                     else:
-                        log_progress(f"WARNING: Parent goal file {parent_goal_id}.json not found. Cannot propagate failure.")
-                        break # Exit loop if parent doesn't exist
+                        log_progress(f"ERROR: Failure propagation call failed for parent {parent_goal_id}. Stopping.")
+                        break # Exit loop if propagation command logic fails
                 else:
-                    log_progress(f"Top-level goal {current_goal_id} failed. Stopping solve process.")
+                    log_progress(f"Top-level goal {current_goal_id} failed (given up). Stopping solve process.")
                     success = False # Mark overall process as not successful
                     break # Exit loop for top-level failure
             # ===== END EDIT 2 =====
@@ -2959,8 +2959,20 @@ simple remaining work, "mark_complete", "update_parent", or "give_up" in special
     analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
     
     # Add new subparser for updating parent from child
-    update_parent_parser = subparsers.add_parser('update-parent', help='Update parent goal state from child goal/task')
-    update_parent_parser.add_argument('child_id', help='ID of the child goal/task to use for updating parent')
+    update_parent_parser = subparsers.add_parser(
+        'update-parent',
+        help='Update parent goal state from child goal/task'
+    )
+    update_parent_parser.add_argument(
+        'child_id',
+        help='ID of the child goal/task whose outcome is being propagated'
+    )
+    update_parent_parser.add_argument(
+        '--outcome',
+        required=True,
+        choices=['success', 'failed'],
+        help='Outcome of the child ("success" propagates state, "failed" propagates failure history)'
+    )
     
     args = parser.parse_args()
     
@@ -3201,53 +3213,37 @@ def revert_goal(goal_id):
         return False
 
 
-def update_parent_from_child(child_id):
-    """Update a parent goal's state based on a child goal/task's current state."""
-    goal_path = ensure_goal_dir()
-    child_file = goal_path / f"{child_id}.json"
-    
-    if not child_file.exists():
-        logging.error(f"Child goal/task not found: {child_id}")
-        return False
-    
-    try:
-        # Load the child data
-        with open(child_file, 'r') as f:
-            child_data = json.load(f)
-        
-        parent_id = child_data.get("parent_goal")
-        if not parent_id:
-            logging.error(f"Child {child_id} has no parent goal")
-            return False
-        
-        # Get the current state from the child
-        if "current_state" not in child_data:
-            logging.error(f"Child {child_id} has no current state")
-            return False
-        
-        # Create a mock execution result
-        execution_result = type('ExecutionResult', (), {
-            'git_hash': child_data["current_state"]["git_hash"],
-            'success': True
-        })
-        
-        # Update the parent's state
-        success = update_parent_goal_state(
-            parent_goal_id=parent_id,
-            task_id=child_id,
-            execution_result=execution_result,
-            final_state=child_data["current_state"]
-        )
-        
+def handle_update_parent_command(args):
+    """Handles the 'update-parent' command based on args."""
+    child_id = args.child_id
+    outcome = args.outcome
+
+    logging.info(f"Executing update-parent for child {child_id} with outcome: {outcome}")
+
+    if outcome == 'success':
+        success = propagate_success_state_to_parent(child_id)
         if success:
-            print(f"Successfully updated parent goal {parent_id} with state from {child_id}")
+            print(f"Successfully propagated success state from child {child_id} to its parent.")
         else:
-            print(f"Failed to update parent goal {parent_id}")
-        
-        return success
-    except Exception as e:
-        logging.error(f"Failed to update parent from child: {str(e)}")
-        return False
+            print(f"Failed to propagate success state from child {child_id}.")
+            # Consider exiting with an error code?
+            # sys.exit(1) 
+    elif outcome == 'failed':
+        success = propagate_failure_history_to_parent(child_id)
+        if success:
+            print(f"Successfully propagated failure history from child {child_id} to its parent.")
+        else:
+            print(f"Failed to propagate failure history from child {child_id}.")
+            # sys.exit(1)
+    else:
+        # This case should not be reachable due to argparse choices
+        logging.error(f"Invalid outcome provided: {outcome}")
+        print(f"Error: Invalid outcome '{outcome}' specified.")
+        # sys.exit(1)
+
+    # Return True if the command logic itself executed without crashing
+    # The success/failure print messages indicate the functional outcome.
+    return True
 
 
 def show_validation_history(goal_id, debug=False, quiet=False):
