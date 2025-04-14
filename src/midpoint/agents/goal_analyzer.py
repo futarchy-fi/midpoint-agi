@@ -256,6 +256,7 @@ Your Analysis Steps:
 4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
    The justification MUST be detailed. For `decompose`, explain *what specific aspects* make the goal too complex for a single task.
    For `create_task`, explain *why* it's simple enough.
+   For `give_up`, explain *what went wrong or why the goal is impossible/irrelevant* (e.g., required tools unavailable, repeated failures, description ambiguous).
 
 Available Tools (for observation only):
 {tool_descriptions_text}

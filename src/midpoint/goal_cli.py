@@ -49,108 +49,91 @@ def ensure_visualization_dir():
     """Ensure the visualization directory exists."""
     vis_path = Path(VISUALIZATION_DIR)
     if not vis_path.exists():
-        vis_path.mkdir(parents=True, exist_ok=True)
+        vis_path.mkdir()
         logging.info(f"Created visualization directory: {VISUALIZATION_DIR}")
     return vis_path
 
 
 def generate_goal_id(parent_id=None, is_task=False):
-    """Generate a goal ID in format G1, S1, or T1."""
+    """Generate a unique goal ID, ensuring it doesn't already exist.
+    
+    Uses a single prefix 'G' for all nodes, regardless of type.
+
+    Args:
+        parent_id: ID of the parent goal (optional)
+        is_task: Deprecated, no longer used for naming.
+
+    Returns:
+        A unique goal ID string (e.g., "G1", "G2")
+    """
     goal_path = ensure_goal_dir()
     
-    if is_task:
-        # Find next available task number
-        max_num = 0
-        for file_path in goal_path.glob("T*.json"):
-            # Match only files with pattern T followed by digits and .json
-            match = re.match(r"T(\d+)\.json$", file_path.name)
-            if match:
-                num = int(match.group(1))
-                max_num = max(max_num, num)
+    # --- START EDIT: Use single 'G' prefix --- 
+    prefix = "G"
+    max_num = 0
+    for file_path in goal_path.glob(f"{prefix}*.json"):
+        # Match only files with pattern G followed by digits and .json
+        match = re.match(rf"{prefix}(\d+)\.json$", file_path.name)
+        if match:
+            num = int(match.group(1))
+            max_num = max(max_num, num)
+    
+    # Next goal number is one more than the maximum found
+    next_num = max_num + 1
+    new_id = f"{prefix}{next_num}"
+    # --- END EDIT ---
+    
+    # Double check for collision (should be unlikely)
+    while (goal_path / f"{new_id}.json").exists():
+        logging.warning(f"Generated ID {new_id} already exists, generating next...")
+        next_num += 1
+        new_id = f"{prefix}{next_num}"
         
-        # Next task number is one more than the maximum found
-        next_num = max_num + 1
-        return f"T{next_num}"
-    elif parent_id:
-        # This is a subgoal - find next available subgoal number
-        max_num = 0
-        for file_path in goal_path.glob("S*.json"):
-            # Match only files with pattern S followed by digits and .json
-            match = re.match(r"S(\d+)\.json$", file_path.name)
-            if match:
-                num = int(match.group(1))
-                max_num = max(max_num, num)
-        
-        # Next subgoal number is one more than the maximum found
-        next_num = max_num + 1
-        return f"S{next_num}"
-    else:
-        # This is a top-level goal - find next available goal number
-        max_num = 0
-        for file_path in goal_path.glob("G*.json"):
-            # Match only files with pattern G followed by digits and .json
-            match = re.match(r"G(\d+)\.json$", file_path.name)
-            if match:
-                num = int(match.group(1))
-                max_num = max(max_num, num)
-        
-        # Next goal number is one more than the maximum found
-        next_num = max_num + 1
-        return f"G{next_num}"
+    logging.info(f"Generated new Goal ID: {new_id}")
+    return new_id
 
 
 def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
-    """Create a goal file with the given information."""
+    """Create a goal file with initial details.
+    
+    Args:
+        goal_id: The unique ID for the goal
+        description: The goal description
+        parent_id: The ID of the parent goal (if any)
+        branch_name: The name of the branch associated with this goal (optional)
+    
+    Returns:
+        Path to the created goal file, or None if failed.
+    """
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
     
-    # Get current repository information
-    current_hash = get_current_hash()
-    repo_path = os.getcwd()
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if goal_file.exists():
+        logging.error(f"Goal file {goal_file} already exists")
+        return None
     
-    # Initialize memory repository if needed
-    memory_repo_path = os.path.expanduser("~/.midpoint/memory")
-    memory_hash = None
-    
+    # Get initial state
     try:
-        # Import here to avoid circular imports
-        from scripts.init_memory_repo import init_memory_repo
-        
-        # Initialize memory repository
-        memory_repo_info = init_memory_repo(memory_repo_path, None, None)
-        memory_repo_path = memory_repo_info["path"]
-        
-        # Get the current memory hash
-        memory_hash = get_current_hash(memory_repo_path)
-        logging.info(f"Initialized memory repository at {memory_repo_path} with hash {memory_hash[:8]}")
+        current_hash = get_current_hash()
+        current_branch = get_current_branch() if branch_name is None else branch_name
     except Exception as e:
-        logging.warning(f"Failed to initialize memory repository: {e}")
-        # Continue without memory repository - it's not critical for goal creation
+        logging.error(f"Failed to get initial git state: {e}")
+        return None
     
-    # If we have a parent goal, load its current state
-    if parent_id:
-        parent_file = goal_path / f"{parent_id}.json"
-        if parent_file.exists():
-            try:
-                with open(parent_file, 'r') as f:
-                    parent_data = json.load(f)
-                    if "current_state" in parent_data:
-                        # Use parent's current state values
-                        current_hash = parent_data["current_state"]["git_hash"]
-                        repo_path = parent_data["current_state"]["repository_path"]
-                        memory_hash = parent_data["current_state"].get("memory_hash")
-                        memory_repo_path = parent_data["current_state"].get("memory_repository_path")
-                        logging.info(f"Using parent goal {parent_id} state")
-            except Exception as e:
-                logging.warning(f"Failed to load parent goal state: {e}")
+    # Try to get memory state (optional)
+    memory_hash = None
+    memory_repo_path = os.environ.get("MEMORY_REPO_PATH")
+    if memory_repo_path and os.path.exists(memory_repo_path):
+        try:
+            memory_hash = get_current_hash(memory_repo_path)
+        except Exception as e:
+            logging.warning(f"Could not get initial memory hash: {e}")
     
-    # Prepare goal data
-    initial_state = {
+    initial_state_data = {
         "git_hash": current_hash,
-        "repository_path": repo_path,
-        "description": f"Initial state before creating goal: {goal_id}",
-        "timestamp": timestamp,
+        "repository_path": os.getcwd(),
+        "description": "Initial state before processing goal",
+        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         "memory_hash": memory_hash,
         "memory_repository_path": memory_repo_path
     }
@@ -159,19 +142,24 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         "goal_id": goal_id,
         "description": description,
         "parent_goal": parent_id or "",
-        "timestamp": timestamp,
-        "is_task": False,
-        "branch_name": branch_name,
-        "initial_state": initial_state,
-        "current_state": initial_state.copy()  # Set current_state to be same as initial_state
+        "branch_name": current_branch,
+        "status": "pending",  # Initial status
+        "is_task": False,  # All nodes start as potential goals
+        "complete": False,
+        "validation_criteria": [], # Add validation criteria field
+        "initial_state": initial_state_data,
+        "current_state": initial_state_data.copy(), # Start current state same as initial
+        "created_at": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     }
     
-    # Write the goal file
-    with open(goal_file, 'w') as f:
-        json.dump(goal_data, f, indent=2)
-    
-    logging.info(f"Created goal file: {goal_file}")
-    return str(goal_file)
+    try:
+        with open(goal_file, 'w') as f:
+            json.dump(goal_data, f, indent=2)
+        logging.info(f"Created goal file: {goal_file}")
+        return goal_file
+    except Exception as e:
+        logging.error(f"Failed to create goal file {goal_file}: {e}")
+        return None
 
 
 def list_goals():
@@ -313,76 +301,50 @@ def create_new_goal(description):
 
 
 def create_new_subgoal(parent_id, description):
-    """Create a new subgoal under the specified parent."""
-    # Verify parent exists
-    goal_path = ensure_goal_dir()
-    parent_file = goal_path / f"{parent_id}.json"
-    
+    """Create a new subgoal under a parent."""
+    parent_file = Path(GOAL_DIR) / f"{parent_id}.json"
     if not parent_file.exists():
         logging.error(f"Parent goal {parent_id} not found")
         return None
     
-    # Generate subgoal ID
-    subgoal_id = generate_goal_id(parent_id)
+    # Generate new ID (no longer depends on type)
+    subgoal_id = generate_goal_id(parent_id=parent_id) 
     
-    # Create subgoal file
+    # Create the goal file
     create_goal_file(subgoal_id, description, parent_id)
-    print(f"Created new subgoal {subgoal_id} under {parent_id}: {description}")
+    logging.info(f"Created new subgoal {subgoal_id} under {parent_id}")
     return subgoal_id
 
 
 def create_new_task(parent_id, description):
-    """Create a new directly executable task under the specified parent."""
-    # Verify parent exists
-    goal_path = ensure_goal_dir()
-    parent_file = goal_path / f"{parent_id}.json"
-    
+    """Create a new task under a parent goal."""
+    parent_file = Path(GOAL_DIR) / f"{parent_id}.json"
     if not parent_file.exists():
         logging.error(f"Parent goal {parent_id} not found")
         return None
     
-    # Load parent's current state
-    try:
-        with open(parent_file, 'r') as f:
-            parent_data = json.load(f)
-            if "current_state" not in parent_data:
-                logging.error(f"Parent goal {parent_id} has no current state")
-                return None
-            parent_state = parent_data["current_state"]
-    except Exception as e:
-        logging.error(f"Failed to load parent state: {e}")
-        return None
+    # Generate new ID (no longer depends on type)
+    task_id = generate_goal_id(parent_id=parent_id)
     
-    # Generate task ID
-    task_id = generate_goal_id(parent_id, is_task=True)
-    
-    # Create initial state from parent's current state
-    initial_state = {
-        "git_hash": parent_state["git_hash"],
-        "repository_path": parent_state["repository_path"],
-        "description": f"Initial state before executing task: {task_id}",
-        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "memory_hash": parent_state.get("memory_hash"),
-        "memory_repository_path": parent_state.get("memory_repository_path")
-    }
-    
-    # Create task file with the expected structure
-    task_data = {
-        "goal_id": task_id,
-        "description": description,
-        "parent_goal": parent_id,
-        "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "is_task": True,
-        "initial_state": initial_state,
-        "current_state": initial_state.copy()  # Set current_state to be same as initial_state
-    }
-    
-    # Write the task file
-    task_file = goal_path / f"{task_id}.json"
-    with open(task_file, 'w') as f:
-        json.dump(task_data, f, indent=2)
-    
-    print(f"Created new task {task_id} under {parent_id}: {description}")
+    # Create the goal file (it starts as a goal, analyzer determines if it's a task later)
+    goal_file_path = create_goal_file(task_id, description, parent_id)
+    if not goal_file_path:
+        return None # Error creating file
+        
+    # Optionally, we could mark it immediately as intended to be a task,
+    # but the analyzer should handle this. For now, just create as a goal.
+    # try:
+    #     with open(goal_file_path, 'r+') as f:
+    #         data = json.load(f)
+    #         data["is_task"] = True
+    #         f.seek(0)
+    #         json.dump(data, f, indent=2)
+    #         f.truncate()
+    # except Exception as e:
+    #     logging.error(f"Failed to mark {task_id} as task: {e}")
+    #     # Proceed anyway, as the file was created
+
+    logging.info(f"Created new goal node {task_id} (intended as task) under {parent_id}")
     return task_id
 
 
@@ -2339,6 +2301,15 @@ def handle_solve_command(args):
             current_iteration += 1
             log_progress(f"ITERATION {current_iteration}: Processing goal {current_goal_id}")
             
+            # ===== START EDIT 1: Load failed attempts history =====
+            # Update context with failed attempts history if it exists in the current goal file
+            if goal_file.exists():
+                with open(goal_file, 'r') as f:
+                    loaded_goal_data = json.load(f)
+                if "failed_attempts_history" in loaded_goal_data:
+                    context.metadata["failed_attempts_history"] = loaded_goal_data["failed_attempts_history"]
+            # ===== END EDIT 1 =====
+            
             # ANALYZE: Determine what to do next with the current goal
             log_progress(f"Analyzing goal {current_goal_id}")
             try:
@@ -2643,6 +2614,78 @@ def handle_solve_command(args):
                         import traceback
                         traceback.print_exc()
                     break
+            # ===== START EDIT 2: Add give_up handling =====
+            elif recommended_action_type == "give_up":
+                log_progress(f"Goal {current_goal_id} marked for give up by analyzer.")
+                failure_justification = analysis_result.get("justification", "No justification provided.")
+                log_progress(f"Reason: {failure_justification}")
+                
+                # Find the parent goal ID
+                parent_goal_id = None
+                if goal_file.exists(): # Reload current goal data to be sure
+                    with open(goal_file, 'r') as f:
+                        current_goal_data = json.load(f)
+                    parent_goal_id = current_goal_data.get("parent_goal")
+                    
+                    # Update the current goal file to mark it as given up
+                    current_goal_data["status"] = "given_up" # Add a new status field
+                    if "last_analysis" not in current_goal_data: current_goal_data["last_analysis"] = {}
+                    current_goal_data["last_analysis"]["action"] = "give_up"
+                    current_goal_data["last_analysis"]["justification"] = failure_justification
+                    current_goal_data["last_analysis"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    with open(goal_file, 'w') as f:
+                        json.dump(current_goal_data, f, indent=2)
+
+                if parent_goal_id:
+                    log_progress(f"Propagating failure information to parent {parent_goal_id}")
+                    parent_file = goal_path / f"{parent_goal_id}.json"
+                    if parent_file.exists():
+                        try:
+                            with open(parent_file, 'r') as f:
+                                parent_data = json.load(f)
+                            
+                            if "failed_attempts_history" not in parent_data:
+                                parent_data["failed_attempts_history"] = []
+                            
+                            # Add failure record
+                            failure_record = {
+                                "attempted_goal_id": current_goal_id,
+                                "attempted_goal_description": current_goal_data.get("description", "N/A"),
+                                "failure_reason": failure_justification,
+                                "failure_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            }
+                            parent_data["failed_attempts_history"].append(failure_record)
+                            
+                            # Save updated parent data
+                            with open(parent_file, 'w') as f:
+                                json.dump(parent_data, f, indent=2)
+                                
+                            log_progress(f"Updated parent {parent_goal_id} with failure history.")
+                            
+                            # Set up next iteration to analyze the parent
+                            current_goal_id = parent_goal_id
+                            goal_file = parent_file # Update goal_file path for next loop
+                            goal = Goal(
+                                id=parent_goal_id,
+                                description=parent_data.get("description", ""),
+                                metadata=context.metadata # Keep existing metadata, history will be loaded next loop
+                            )
+                            context.goal = goal
+                            context.metadata["goal_id"] = parent_goal_id
+                            # No state change needed, just context
+                            continue # Continue loop to analyze parent
+                            
+                        except Exception as e:
+                            log_progress(f"ERROR: Failed to update parent goal {parent_goal_id}: {e}")
+                            break # Exit loop on error updating parent
+                    else:
+                        log_progress(f"WARNING: Parent goal file {parent_goal_id}.json not found. Cannot propagate failure.")
+                        break # Exit loop if parent doesn't exist
+                else:
+                    log_progress(f"Top-level goal {current_goal_id} failed. Stopping solve process.")
+                    success = False # Mark overall process as not successful
+                    break # Exit loop for top-level failure
+            # ===== END EDIT 2 =====
             else:
                 # Unknown action type
                 log_progress(f"WARNING: Unknown action type: {recommended_action_type}")
