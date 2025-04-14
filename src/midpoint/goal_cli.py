@@ -62,22 +62,29 @@ def ensure_visualization_dir():
 def generate_goal_id(parent_id=None, is_task=False):
     """Generate a unique goal ID, ensuring it doesn't already exist.
     
-    Uses a single prefix 'G' for all nodes, regardless of type.
+    Uses 'S' prefix for subgoals (when parent_id is present) and 'G' for top-level goals.
 
     Args:
         parent_id: ID of the parent goal (optional)
         is_task: Deprecated, no longer used for naming.
 
     Returns:
-        A unique goal ID string (e.g., "G1", "G2")
+        A unique goal ID string (e.g., "G1", "S1")
     """
     goal_path = ensure_goal_dir()
     
-    # --- START EDIT: Use single 'G' prefix --- 
-    prefix = "G"
+    # --- START EDIT: Use 'S' prefix for subgoals, 'G' for top-level ---
+    # Determine prefix based on parent_id
+    if parent_id:
+        prefix = "S"  # Subgoal prefix
+    else:
+        prefix = "G"  # Top-level goal prefix
+
     max_num = 0
+    # --- END EDIT ---
+    
     for file_path in goal_path.glob(f"{prefix}*.json"):
-        # Match only files with pattern G followed by digits and .json
+        # Match only files with pattern <prefix> followed by digits and .json
         match = re.match(rf"{prefix}(\d+)\.json$", file_path.name)
         if match:
             num = int(match.group(1))
@@ -86,7 +93,6 @@ def generate_goal_id(parent_id=None, is_task=False):
     # Next goal number is one more than the maximum found
     next_num = max_num + 1
     new_id = f"{prefix}{next_num}"
-    # --- END EDIT ---
     
     # Double check for collision (should be unlikely)
     while (goal_path / f"{new_id}.json").exists():
@@ -3482,47 +3488,78 @@ def analyze_goal(goal_id, human_mode):
 
     # --- Process Result --- 
     print("\n--- Analysis Result ---")
-    if analysis_result.get("success", False):
+    # The analysis_result variable holds the dictionary returned by agent_analyze_goal
+    raw_llm_response = analysis_result.get("metadata", {}).get("raw_response", "(Raw response not found in metadata)")
+
+    if analysis_result and analysis_result.get("success", False):
         action = analysis_result.get("action", "unknown")
         justification = analysis_result.get("justification", "No justification provided.")
+        probabilities = None
+        if "metadata" in analysis_result and isinstance(analysis_result["metadata"], dict):
+             probabilities = analysis_result["metadata"].get("action_probabilities")
+        
         print(f"Suggested Action: {action}")
-        print(f"Justification: {justification}")
+        # Attempt to print probabilities
+        if probabilities and isinstance(probabilities, dict):
+            print("Action Probabilities:")
+            sorted_probs = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
+            for act, prob in sorted_probs:
+                if prob > 0.005: 
+                    print(f"  - {act}: {prob:.2%}")
+        else:
+            print("(Action probabilities not found or invalid in parsed result metadata)")
+
+        # Print the raw LLM JSON response
+        print("\n--- Raw LLM Response --- ")
+        print(raw_llm_response)
+        print("------------------------")
+            
+        print(f"\nJustification: {justification}")
         
-        # Create analysis record
+        # Prepare the analysis record for saving (including probabilities if found)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create a new analysis record
         analysis_record = {
             "timestamp": timestamp,
             "mode": "human" if human_mode else "auto",
             "suggested_action": action,
+            "action_probabilities": probabilities, # Store None if not found
             "justification": justification,
-            "final_memory_hash": analysis_result.get("memory_hash"), # Record memory hash after analysis
-            "confidence_score": analysis_result.get("confidence_score", 0.7),
-            "suggested_command": analysis_result.get("suggested_command", None)
+            "final_memory_hash": analysis_result.get("metadata", {}).get("final_memory_hash", analysis_result.get("memory_hash")), 
+            "confidence_score": analysis_result.get("metadata", {}).get("confidence_score"), 
+            "suggested_command": analysis_result.get("metadata", {}).get("suggested_command")
         }
         
-        # Set as the most recent analysis
-        goal_data["last_analysis"] = analysis_record
-        
-        # Remove the old analysis_history array if it exists
-        if "analysis_history" in goal_data:
-            del goal_data["analysis_history"]
+        # Save to goal file
+        try:
+            # Reload goal data just before saving to minimize race conditions if any
+            with open(goal_file, 'r') as f:
+                goal_data_to_save = json.load(f)
+            
+            goal_data_to_save["last_analysis"] = analysis_record
+            
+            # Clean up potential old fields if needed
+            if "analysis_history" in goal_data_to_save: del goal_data_to_save["analysis_history"]
+            if "analysis_justification" in goal_data_to_save: del goal_data_to_save["analysis_justification"]
 
-        # Add analysis justification to the goal file
-        if "analysis_justification" not in goal_data:
-            goal_data["analysis_justification"] = analysis_result.get("justification", "")
+            with open(goal_file, 'w') as f:
+                json.dump(goal_data_to_save, f, indent=2)
+            logging.info(f"Updated goal file {goal_file} with analysis results.")
+            return True # Indicate success
+        except Exception as e:
+             logging.error(f"Failed to save analysis results to goal file {goal_file}: {e}")
+             # Return success=True because analysis itself worked, but saving failed
+             # Or should this be False? Let's stick to True as analysis succeeded.
+             return True 
 
-        # Write updated goal data
-        with open(goal_file, 'w') as f:
-            json.dump(goal_data, f, indent=2)
-        logging.info(f"Updated goal file {goal_file} with analysis results.")
-        return True # Indicate success
     else:
-        error_msg = analysis_result.get("error", "Unknown analysis failure")
+        # Handle analysis failure - also print raw response if available
+        error_msg = analysis_result.get("justification", analysis_result.get("error", "Unknown analysis failure"))
         logging.error(f"Goal analysis failed for {goal_id}: {error_msg}")
         print(f"Error during analysis: {error_msg}")
-        return False
+        print("\n--- Raw LLM Response (on failure) --- ")
+        print(raw_llm_response)
+        print("-------------------------------------")
+        return False # Indicate failure
 
 
 if __name__ == "__main__":
