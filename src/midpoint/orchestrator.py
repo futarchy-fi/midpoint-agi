@@ -96,7 +96,7 @@ class Orchestrator:
             try:
                 # 1. Decompose the goal to find the next executable task
                 logger.info("Decomposing goal to find next executable task")
-                subgoal_plan = await self.decomposer.determine_next_step(TaskContext(
+                subgoal_plan = await self.decomposer.determine_next_state(TaskContext(
                     state=current_state,
                     goal=goal,
                     iteration=iteration,

@@ -115,7 +115,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
 
         # Create the mock response with proper content
         response_content = {
-            "next_step": "Mock list subgoals result",
+            "next_state": "Mock list subgoals result",
             "validation_criteria": ["Test passes"],
             "reasoning": "This is a mocked OpenAI response for testing",
             "requires_further_decomposition": False,
@@ -162,7 +162,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         goal_file_path = logs_dir / "G1.json"
         goal_data = {
             "goal_id": "G1",
-            "next_step": "Mock list subgoals result",
+            "next_state": "Mock list subgoals result",
             "validation_criteria": ["Test passes"],
             "parent_goal": "",
             "requires_further_decomposition": False,
@@ -178,7 +178,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         # Verify the content of the new file
         with open(new_files[0], 'r') as f:
             new_content = json.load(f)
-            self.assertEqual(new_content["next_step"], "Mock list subgoals result")
+            self.assertEqual(new_content["next_state"], "Mock list subgoals result")
 
     @patch('src.midpoint.agents.goal_decomposer.AsyncOpenAI')
     @patch('src.midpoint.agents.config.get_openai_api_key')
@@ -219,7 +219,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
 
         # Create the mock response with proper content
         response_content = {
-            "next_step": "Mock integration test result",
+            "next_state": "Mock integration test result",
             "validation_criteria": ["Integration test passes"],
             "reasoning": "This is a mocked OpenAI response for integration testing",
             "requires_further_decomposition": False,
@@ -272,7 +272,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
             goal_file_path = logs_dir / "G1.json"
             goal_data = {
                 "goal_id": "G1",
-                "next_step": "Mock integration test result",
+                "next_state": "Mock integration test result",
                 "validation_criteria": ["Integration test passes"],
                 "parent_goal": "",
                 "requires_further_decomposition": False,
@@ -288,7 +288,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
             # Verify the content of the new file
             with open(new_files[0], 'r') as f:
                 new_content = json.load(f)
-                self.assertEqual(new_content["next_step"], "Mock integration test result")
+                self.assertEqual(new_content["next_state"], "Mock integration test result")
         except subprocess.TimeoutExpired:
             self.fail("Script execution timed out")
         except subprocess.CalledProcessError as e:
@@ -304,7 +304,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         decomposer.tool_processor = AsyncMock()
         decomposer.tool_processor.run_llm_with_tools = AsyncMock(return_value=(
             {"role": "assistant", "content": json.dumps({
-                "next_step": "Test next step",
+                "next_state": "Test next step",
                 "validation_criteria": ["Test passes"],
                 "reasoning": "Test reasoning",
                 "requires_further_decomposition": False,
@@ -321,7 +321,7 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
         mock_completion.choices = [MagicMock()]
         mock_completion.choices[0].message = MagicMock()
         mock_completion.choices[0].message.content = json.dumps({
-            "next_step": "Test next step",
+            "next_state": "Test next step",
             "validation_criteria": ["Test passes"],
             "reasoning": "Test reasoning",
             "requires_further_decomposition": False,
@@ -351,11 +351,11 @@ class TestGoalDecomposerIntegration(unittest.TestCase):
             execution_history=[]
         )
         
-        # Test the determine_next_step method
-        result = await decomposer.determine_next_step(context)
+        # Test the determine_next_state method
+        result = await decomposer.determine_next_state(context)
         
         # Check if the method returns a valid result
-        self.assertEqual(result.next_step, "Test next step")
+        self.assertEqual(result.next_state, "Test next step")
         self.assertEqual(result.validation_criteria, ["Test passes"])
         self.assertEqual(result.reasoning, "Test reasoning")
         self.assertFalse(result.requires_further_decomposition)

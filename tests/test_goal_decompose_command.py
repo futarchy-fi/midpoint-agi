@@ -108,7 +108,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
         # Setup mock response for success
         mock_result = {
             "success": True,
-            "next_step": "Implement user authentication",
+            "next_state": "Implement user authentication",
             "validation_criteria": [
                 "User can register with email and password",
                 "User can log in with correct credentials"
@@ -156,7 +156,7 @@ class TestGoalDecomposeCommand(unittest.TestCase):
             # Mock agent_decompose_goal
             mock_agent_decompose.return_value = {
                 "success": True,
-                "next_step": "Implement user authentication",
+                "next_state": "Implement user authentication",
                 "validation_criteria": [
                     "User can register with email and password",
                     "User can log in with correct credentials"

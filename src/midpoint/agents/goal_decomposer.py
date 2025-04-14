@@ -325,15 +325,14 @@ def log_task_summary(task_summary_file: Path, context: TaskContext):
 
 class GoalDecomposer:
     """
-    This agent is responsible for determining the next state toward achieving a complex goal.
+    This agent is responsible for determining the next milestone toward achieving a complex goal.
     
     The GoalDecomposer agent is a core component that implements the OODA loop
     (Observe, Orient, Decide, Act) for strategic planning. It recursively handles goal
     decomposition to break down complex tasks into manageable subgoals.
     
-    For a given goal and repository state, it determines the most promising next state,
-    provides validation criteria for that state, and decides if the state requires further
-    decomposition.
+    For a given goal and repository state, it determines the most promising next milestone,
+    provides validation criteria for that state.
     """
     
     def __init__(self, model: str = "gpt-4o-mini", max_history_entries: int = 5):
@@ -532,23 +531,27 @@ Timestamp: {timestamp}
         
         # Create the system prompt with the tool descriptions
         system_prompt = f"""You are an expert software architect and project planner.
-Your task is to determine if a goal is complete and if not, determine the SINGLE NEXT STEP toward that goal.
+Your task is to understand a goal and determine an INTERMEDIATE MILESTONE toward that goal.
+
 Follow the OODA loop: Observe, Orient, Decide, Act.
 
 1. OBSERVE: Explore the repository to understand its current state. Use the available tools.
-2. ORIENT: Analyze how the current state relates to the final goal.
-3. DECIDE: First determine if the goal is complete, then if not, determine the most promising SINGLE NEXT STEP.
-4. OUTPUT: Provide a structured response indicating goal completion status and next steps if needed.
+2. ORIENT:
+   - Analyze how the current state relates to the final goal.
+   - Take into account any previously completed subgoals and subtasks associated with this goal
+   - Take into account the overall context of the repository
+   - Take into account, if available, the descriptions of the PREVIOSULY FAILED ATTEMPTS to progress towards the goal. These are invaluable as lessons, and when creating new milestones, we should be careful not to repeat the same mistakes.
+3. DECIDE:
+    - Craft potential possibilities for INTERMEDIATE MILESTONES towards the goal
+    - For each milestone, estimate the effort required to (1) reach the milestone and validate its correctness, and (2) complete the goal after the milestone is reached.
+    - Evaluate different potential milestone candidates and select the most promising one.
+4. OUTPUT: Provide a structured response indicating next steps.
 
 For complex goals, consider if the best next step is exploration, research, or a "study session" 
 rather than immediately jumping to implementation.
 
 You have access to a memory repository where your responses will be automatically stored.
 The memory system captures your planning process and decisions automatically.
-
-For incomplete goals:
-- Determine the most focused and actionable next step
-- Identify relevant context that should be passed to child subgoals
 
 You have access to these tools:
 {tool_descriptions_text}
@@ -624,8 +627,8 @@ You have access to these tools:
             logging.error(f"Error retrieving memory context: {str(e)}")
             return ""
 
-    def determine_next_step(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False, memory_repo_path: Optional[str] = None) -> SubgoalPlan:
-        """Determine the next step toward achieving the goal."""
+    def determine_next_state(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False, memory_repo_path: Optional[str] = None) -> SubgoalPlan:
+        """Determine the next state toward achieving the goal."""
         # Set up logging if requested (only when called directly, not from orchestrator)
         if setup_logging:
             log_file, task_summary_file, llm_responses_file = configure_logging(debug, quiet)
@@ -776,7 +779,7 @@ You have access to these tools:
                 # Add the error to messages and try again
                 messages.append({
                     "role": "user",
-                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with the fields: next_state, validation_criteria, reasoning, and relevant_context."
+                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with these required fields: next_state, validation_criteria, reasoning, and relevant_context."
                 })
                 # Get a new response from the model
                 message, tool_calls = self.tool_processor.run_llm_with_tools(
@@ -794,55 +797,56 @@ You have access to these tools:
             
             # Check if the output has the required fields
             if "goal_completed" in output_data:
-                # Handle completed goal case
-                if output_data["goal_completed"]:
-                    if not all(key in output_data for key in ["completion_summary", "reasoning"]):
-                        missing_fields = [field for field in ["completion_summary", "reasoning"] 
-                                        if field not in output_data]
-                        error_msg = f"Completed goal response missing required fields: {', '.join(missing_fields)}"
-                        logging.error(error_msg)
-                        logging.error(f"Full response: {content}")
-                        raise ValueError(error_msg)
-                    
-                    final_output = SubgoalPlan(
-                        goal_completed=True,
-                        completion_summary=output_data["completion_summary"],
-                        reasoning=output_data["reasoning"],
-                        metadata={
-                            "raw_response": content,
-                            "tool_usage": tool_usage
-                        }
-                    )
-                else:
-                    # Handle incomplete goal case
-                    if not all(key in output_data for key in ["next_state", "validation_criteria", "reasoning"]):
-                        missing_fields = [field for field in ["next_state", "validation_criteria", "reasoning"] 
-                                        if field not in output_data]
-                        error_msg = f"Incomplete goal response missing required fields: {', '.join(missing_fields)}"
-                        logging.error(error_msg)
-                        logging.error(f"Full response: {content}")
-                        raise ValueError(error_msg)
-                    
-                    # Extract relevant_context (default to empty dict if not provided)
-                    relevant_context = output_data.get("relevant_context", {})
-                    
-                    final_output = SubgoalPlan(
-                        goal_completed=False,
-                        next_state=output_data["next_state"],
-                        validation_criteria=output_data["validation_criteria"],
-                        reasoning=output_data["reasoning"],
-                        relevant_context=relevant_context,
-                        metadata={
-                            "raw_response": content,
-                            "tool_usage": tool_usage
-                        }
-                    )
+                # For backward compatibility, ignore goal_completed=true and treat all responses as incomplete
+                logging.warning("Ignoring goal_completed field in response (deprecated functionality)")
+                
+                # Handle all responses as incomplete goal case
+                if not all(key in output_data for key in ["next_state", "validation_criteria", "reasoning"]):
+                    missing_fields = [field for field in ["next_state", "validation_criteria", "reasoning"] 
+                                     if field not in output_data]
+                    error_msg = f"Response missing required fields: {', '.join(missing_fields)}"
+                    logging.error(error_msg)
+                    logging.error(f"Full response: {content}")
+                    raise ValueError(error_msg)
+                
+                # Extract relevant_context (default to empty dict if not provided)
+                relevant_context = output_data.get("relevant_context", {})
+                
+                final_output = SubgoalPlan(
+                    goal_completed=False,  # Always set to false
+                    next_state=output_data["next_state"],
+                    validation_criteria=output_data["validation_criteria"],
+                    reasoning=output_data["reasoning"],
+                    relevant_context=relevant_context,
+                    metadata={
+                        "raw_response": content,
+                        "tool_usage": tool_usage
+                    }
+                )
             else:
-                # If we don't have goal_completed field, raise an error
-                error_msg = "Model response missing goal_completed field"
-                logging.error(error_msg)
-                logging.error(f"Full response: {content}")
-                raise ValueError(error_msg)
+                # If goal_completed field is missing, just check for required fields
+                if not all(key in output_data for key in ["next_state", "validation_criteria", "reasoning"]):
+                    missing_fields = [field for field in ["next_state", "validation_criteria", "reasoning"] 
+                                    if field not in output_data]
+                    error_msg = f"Response missing required fields: {', '.join(missing_fields)}"
+                    logging.error(error_msg)
+                    logging.error(f"Full response: {content}")
+                    raise ValueError(error_msg)
+                
+                # Extract relevant_context (default to empty dict if not provided)
+                relevant_context = output_data.get("relevant_context", {})
+                
+                final_output = SubgoalPlan(
+                    goal_completed=False,  # Always set to false
+                    next_state=output_data["next_state"],
+                    validation_criteria=output_data["validation_criteria"],
+                    reasoning=output_data["reasoning"],
+                    relevant_context=relevant_context,
+                    metadata={
+                        "raw_response": content,
+                        "tool_usage": tool_usage
+                    }
+                )
             
             # Validate the subgoal plan
             self._validate_subgoal(final_output)
@@ -872,17 +876,13 @@ You have access to these tools:
                 logging.error("Failed to serialize messages for logging: %s", str(e))
 
             # Log result at INFO level
-            if final_output.goal_completed:
-                logging.info(f"✅ Goal completed! {final_output.reasoning}")
-                logging.debug(f"Reasoning: {final_output.reasoning}")
-            else:
-                logging.info(f"✅ Next state: {final_output.next_state}")
+            logging.info(f"✅ Next state: {final_output.next_state}")
                 
-                # Only log detailed validation criteria at debug level to avoid duplication
-                logging.debug("Validation criteria:")
-                for i, criterion in enumerate(final_output.validation_criteria, 1):
-                    logging.debug(f"  {i}. {criterion}")
-            
+            # Only log detailed validation criteria at debug level to avoid duplication
+            logging.debug("Validation criteria:")
+            for i, criterion in enumerate(final_output.validation_criteria, 1):
+                logging.debug(f"  {i}. {criterion}")
+
             # Add logging for the final output at debug level
             try:
                 logging.debug("Final output details: %s", json.dumps(final_output.__dict__, indent=2))
@@ -899,14 +899,10 @@ You have access to these tools:
             if setup_logging:
                 with open(task_summary_file, "a") as f:
                     f.write("\n=== Final Output ===\n")
-                    if final_output.goal_completed:
-                        f.write(f"Goal completed: {final_output.completion_summary}\n")
-                        f.write(f"Reasoning: {final_output.reasoning}\n")
-                    else:
-                        f.write(f"Next state: {final_output.next_state}\n")
-                        f.write("\nValidation criteria:\n")
-                        for i, criterion in enumerate(final_output.validation_criteria, 1):
-                            f.write(f"  {i}. {criterion}\n")
+                    f.write(f"Next state: {final_output.next_state}\n")
+                    f.write("\nValidation criteria:\n")
+                    for i, criterion in enumerate(final_output.validation_criteria, 1):
+                        f.write(f"  {i}. {criterion}\n")
                     f.write("\n" + "=" * 50 + "\n")
                     f.flush()
 
@@ -990,24 +986,12 @@ Context:
 - Iteration: {context.iteration}
 - Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
 
-Your task is to identify a valuable midpoint state between the current state and the final goal state where validation criteria will be met.
-
-Think of this as a state space navigation problem:
-1. You are at the current state (the repository as it exists now)
-2. You need to reach a final state (where validation criteria are satisfied)
-3. Your job is to identify an optimal intermediate state that:
-   - Makes progress toward the final state
-   - Is easier to reach than trying to achieve the final state directly
-   - After reaching this state, the remaining journey to the final state becomes easier
-
-For complex goals, consider whether the best midpoint state involves exploration, research, or establishing a "foundation state" before implementation.
-
 You MUST provide a structured response in JSON format with these fields:
-- goal_completed: false
-- next_state: A clear description of the midpoint state to achieve next
+- next_state: A clear description of the a state where the milestone has been achieved
 - validation_criteria: List of measurable criteria to verify this state has been reached
+- further_steps: List of steps that need to be taken to complete the goal after the milestone is reached
 - reasoning: Explanation of why this midpoint state is optimal for progress
-- relevant_context: Object containing relevant information to pass to child goals (state transforms)
+- relevant_context: Object containing relevant information to pass to child goals
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
 """
@@ -1030,22 +1014,11 @@ IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. 
         if not subgoal.reasoning:
             raise ValueError("Subgoal must have reasoning")
 
-        # Check goal completion status
-        if subgoal.goal_completed:
-            # For completed goals, we need a completion summary but not next_state or validation_criteria
-            if not subgoal.completion_summary:
-                raise ValueError("Completed goals must have a completion_summary")
-            if subgoal.next_state or subgoal.validation_criteria:
-                raise ValueError("Completed goals should not have next_state or validation_criteria")
-        else:
-            # For incomplete goals, we need next_state and validation_criteria
-            if not subgoal.next_state:
-                raise ValueError("Incomplete goals must have next_state")
-            if not subgoal.validation_criteria:
-                raise ValueError("Incomplete goals must have validation_criteria")
-            # Completion summary should not be present for incomplete goals
-            if subgoal.completion_summary:
-                raise ValueError("Incomplete goals should not have completion_summary")
+        # Require next_state and validation_criteria
+        if not subgoal.next_state:
+            raise ValueError("Subgoal must have next_state")
+        if not subgoal.validation_criteria:
+            raise ValueError("Subgoal must have validation_criteria")
 
         return True
 
@@ -1507,7 +1480,7 @@ def decompose_goal(
     decomposer = GoalDecomposer()
     
     # Determine next step with logging enabled
-    subgoal_plan = decomposer.determine_next_step(context, setup_logging=True, debug=debug, quiet=quiet)
+    subgoal_plan = decomposer.determine_next_state(context, setup_logging=True, debug=debug)
     
     # Get current git hash
     try:
@@ -1542,33 +1515,20 @@ def decompose_goal(
             logging.info(f"Repo ancestry check passed: {updated_git_hash} is a descendant of {initial_git_hash}")
     
     # Return the decomposition result without creating any files
-    if subgoal_plan.goal_completed:
-        return {
-            "success": True,
-            "goal_completed": True,
-            "completion_summary": subgoal_plan.completion_summary,
-            "reasoning": subgoal_plan.reasoning,
-            "git_hash": updated_git_hash,
-            "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-            "initial_git_hash": initial_git_hash,
-            "memory_hash": current_memory_hash,  # Include current memory hash in the result
-            "memory_repository_path": context.state.memory_repository_path
-        }
-    else:
-        return {
-            "success": True,
-            "goal_completed": False,
-            "next_state": subgoal_plan.next_state,
-            "validation_criteria": subgoal_plan.validation_criteria,
-            "reasoning": subgoal_plan.reasoning,
-            "relevant_context": subgoal_plan.relevant_context,
-            "git_hash": updated_git_hash,
-            "is_task": False,  # Default to False (subgoal) - will be determined by goal_analyzer later
-            "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
-            "initial_git_hash": initial_git_hash,
-            "memory_hash": current_memory_hash,  # Include current memory hash in the result
-            "memory_repository_path": context.state.memory_repository_path
-        }
+    return {
+        "success": True,
+        "goal_completed": False,
+        "next_state": subgoal_plan.next_state,
+        "validation_criteria": subgoal_plan.validation_criteria,
+        "reasoning": subgoal_plan.reasoning,
+        "relevant_context": subgoal_plan.relevant_context,
+        "git_hash": updated_git_hash,
+        "is_task": False,  # Default to False (subgoal) - will be determined by goal_analyzer later
+        "goal_file": f"{goal_id or 'G1'}.json",  # Add goal_file for test compatibility with simple naming
+        "initial_git_hash": initial_git_hash,
+        "memory_hash": current_memory_hash,  # Include current memory hash in the result
+        "memory_repository_path": context.state.memory_repository_path
+    }
 
 # Create a separate async entry point for CLI to avoid nesting asyncio.run() calls
 async def async_main():

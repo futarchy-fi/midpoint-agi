@@ -44,7 +44,7 @@ async def run_decomposer(args):
     
     try:
         # Get the next step
-        result = await decomposer.determine_next_step(context)
+        result = await decomposer.determine_next_state(context)
         print(f"\nNext step: {result.next_step}")
         print("\nValidation criteria:")
         for criterion in result.validation_criteria:

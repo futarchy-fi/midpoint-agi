@@ -96,7 +96,7 @@ class TestGoalCliDecompose(unittest.TestCase):
         # Set up the mock
         mock_decompose_goal.return_value = {
             "success": True,
-            "next_step": "Implement feature X",
+            "next_state": "Implement feature X",
             "validation_criteria": ["Test passes", "Code works"],
             "requires_further_decomposition": True,
             "git_hash": "abcdef123456",

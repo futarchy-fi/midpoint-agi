@@ -82,7 +82,7 @@ class TestGoalDecomposeSimple(unittest.TestCase):
         # Setup mock result
         mock_result = {
             "success": True,
-            "next_step": "Implement feature X",
+            "next_state": "Implement feature X",
             "validation_criteria": ["Test criteria"],
             "requires_further_decomposition": True,
             "git_hash": "abc123",

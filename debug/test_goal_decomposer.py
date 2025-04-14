@@ -113,14 +113,14 @@ async def sample_context(temp_repo, sample_goal):
     )
 
 @pytest.mark.asyncio
-async def test_next_step_determination_basic(goal_decomposer, sample_context):
+async def test_next_state_determination_basic(goal_decomposer, sample_context):
     """Test basic next step determination functionality."""
     with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         # Mock the chat completion response
         mock_message = MagicMock()
         mock_message.content = """```json
 {
-  "next_step": "Implement user registration with email and password",
+  "next_state": "Implement user registration with email and password",
   "validation_criteria": [
     "User can register with a valid email and password",
     "System validates email format",
@@ -136,13 +136,13 @@ async def test_next_step_determination_basic(goal_decomposer, sample_context):
             choices=[MagicMock(message=mock_message)]
         )
         
-        subgoal = await goal_decomposer.determine_next_step(sample_context)
-        assert subgoal.next_step == "Implement user registration with email and password"
+        subgoal = await goal_decomposer.determine_next_state(sample_context)
+        assert subgoal.next_state == "Implement user registration with email and password"
         assert len(subgoal.validation_criteria) == 4
         assert "User authentication is the foundation" in subgoal.reasoning
 
 @pytest.mark.asyncio
-async def test_next_step_with_tools(goal_decomposer, sample_context):
+async def test_next_state_with_tools(goal_decomposer, sample_context):
     """Test next step determination with tool usage."""
     with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock) as mock_create:
         # First response calls a tool
@@ -162,7 +162,7 @@ async def test_next_step_with_tools(goal_decomposer, sample_context):
         second_message = MagicMock()
         second_message.content = """```json
 {
-  "next_step": "Set up user registration with email/password",
+  "next_state": "Set up user registration with email/password",
   "validation_criteria": [
     "Registration endpoint accepts email and password",
     "Validation for email format is implemented",
@@ -195,7 +195,7 @@ async def test_next_step_with_tools(goal_decomposer, sample_context):
                 # And also patch read_file and search_code to be safe
                 with patch("midpoint.agents.goal_decomposer.read_file", return_value="File content"):
                     with patch("midpoint.agents.goal_decomposer.search_code", return_value="Search results"):
-                        subgoal = await goal_decomposer.determine_next_step(sample_context)
+                        subgoal = await goal_decomposer.determine_next_state(sample_context)
                         
                         # Verify tools were tracked by checking the tracked_tools list
                         assert len(tracked_tools) > 0
@@ -206,12 +206,12 @@ async def test_next_step_with_tools(goal_decomposer, sample_context):
                         assert "list_directory" in subgoal.metadata["tool_usage"][0]
                         
                         # Verify the result
-                        assert subgoal.next_step == "Set up user registration with email/password"
+                        assert subgoal.next_state == "Set up user registration with email/password"
                         assert len(subgoal.validation_criteria) == 4
                         assert "Based on repository exploration" in subgoal.reasoning
 
 @pytest.mark.asyncio
-async def test_next_step_complex_goal(goal_decomposer, temp_repo):
+async def test_next_state_complex_goal(goal_decomposer, temp_repo):
     """Test next step determination for a complex goal."""
     complex_goal = Goal(
         description="Implement a full-stack e-commerce system with user authentication, product catalog, shopping cart, and checkout process",
@@ -243,7 +243,7 @@ async def test_next_step_complex_goal(goal_decomposer, temp_repo):
         mock_message = MagicMock()
         mock_message.content = """```json
 {
-  "next_step": "Set up the basic project structure with frontend and backend directories",
+  "next_state": "Set up the basic project structure with frontend and backend directories",
   "validation_criteria": [
     "Frontend directory created with React setup",
     "Backend directory created with API scaffolding",
@@ -259,8 +259,8 @@ async def test_next_step_complex_goal(goal_decomposer, temp_repo):
             choices=[MagicMock(message=mock_message)]
         )
         
-        subgoal = await goal_decomposer.determine_next_step(context)
-        assert subgoal.next_step == "Set up the basic project structure with frontend and backend directories"
+        subgoal = await goal_decomposer.determine_next_state(context)
+        assert subgoal.next_state == "Set up the basic project structure with frontend and backend directories"
         assert len(subgoal.validation_criteria) == 4
         assert "project structure" in subgoal.reasoning
 
@@ -272,7 +272,7 @@ async def test_iteration_handling(goal_decomposer, sample_context):
         first_message = MagicMock()
         first_message.content = """```json
 {
-  "next_step": "Implement user registration system",
+  "next_state": "Implement user registration system",
   "validation_criteria": [
     "User registration endpoint created",
     "Input validation implemented",
@@ -288,7 +288,7 @@ async def test_iteration_handling(goal_decomposer, sample_context):
         second_message = MagicMock()
         second_message.content = """```json
 {
-  "next_step": "Implement user login functionality",
+  "next_state": "Implement user login functionality",
   "validation_criteria": [
     "Login endpoint created",
     "Credentials validation works",
@@ -306,7 +306,7 @@ async def test_iteration_handling(goal_decomposer, sample_context):
         )
         
         # First iteration
-        subgoal1 = await goal_decomposer.determine_next_step(sample_context)
+        subgoal1 = await goal_decomposer.determine_next_state(sample_context)
         
         # Update context for second iteration
         sample_context.iteration = 1
@@ -319,12 +319,12 @@ async def test_iteration_handling(goal_decomposer, sample_context):
         )
         
         # Second iteration
-        subgoal2 = await goal_decomposer.determine_next_step(sample_context)
+        subgoal2 = await goal_decomposer.determine_next_state(sample_context)
         
         # Verify different next steps for different iterations
-        assert subgoal1.next_step != subgoal2.next_step
-        assert "registration" in subgoal1.next_step.lower()
-        assert "login" in subgoal2.next_step.lower()
+        assert subgoal1.next_state != subgoal2.next_state
+        assert "registration" in subgoal1.next_state.lower()
+        assert "login" in subgoal2.next_state.lower()
 
 @pytest.mark.asyncio
 async def test_error_handling(goal_decomposer):
@@ -344,7 +344,7 @@ async def test_error_handling(goal_decomposer):
     )
     
     with pytest.raises(ValueError, match="No goal provided in context"):
-        await goal_decomposer.determine_next_step(invalid_context)
+        await goal_decomposer.determine_next_state(invalid_context)
     
     # Test with missing repository path
     invalid_context.goal = Goal(
@@ -355,7 +355,7 @@ async def test_error_handling(goal_decomposer):
     invalid_context.state.repository_path = None
     
     with pytest.raises(ValueError, match="Repository path not provided in state"):
-        await goal_decomposer.determine_next_step(invalid_context)
+        await goal_decomposer.determine_next_state(invalid_context)
 
 @pytest.mark.asyncio
 async def test_user_prompt_creation(goal_decomposer, sample_context):
@@ -377,7 +377,7 @@ async def test_api_error_handling(goal_decomposer, sample_context):
     """Test handling of API errors."""
     with patch.object(goal_decomposer.client.chat.completions, "create", new_callable=AsyncMock, side_effect=Exception("API Error")):
         with pytest.raises(Exception, match="Error during next step determination: API Error"):
-            await goal_decomposer.determine_next_step(sample_context)
+            await goal_decomposer.determine_next_state(sample_context)
 
 @pytest.mark.asyncio
 async def test_initialization():
@@ -413,7 +413,7 @@ async def test_points_tracking(goal_decomposer, sample_context):
         mock_message = MagicMock()
         mock_message.content = """```json
 {
-  "next_step": "Implement user registration",
+  "next_state": "Implement user registration",
   "validation_criteria": ["Test validation"],
   "reasoning": "Test reasoning"
 }
@@ -424,7 +424,7 @@ async def test_points_tracking(goal_decomposer, sample_context):
             choices=[MagicMock(message=mock_message)]
         )
         
-        await goal_decomposer.determine_next_step(sample_context)
+        await goal_decomposer.determine_next_state(sample_context)
         
         assert len(points_tracked) == 1
         assert points_tracked[0][0] == "goal_decomposition"
@@ -451,7 +451,7 @@ async def test_tool_usage_tracking(goal_decomposer, sample_context):
         second_message = MagicMock()
         second_message.content = """```json
 {
-  "next_step": "Implement user registration",
+  "next_state": "Implement user registration",
   "validation_criteria": ["Test validation"],
   "reasoning": "Test reasoning"
 }
@@ -478,7 +478,7 @@ async def test_tool_usage_tracking(goal_decomposer, sample_context):
                 with patch("midpoint.agents.goal_decomposer.read_file", return_value="File content"):
                     with patch("midpoint.agents.goal_decomposer.search_code", return_value="Search results"):
                         
-                        subgoal = await goal_decomposer.determine_next_step(sample_context)
+                        subgoal = await goal_decomposer.determine_next_state(sample_context)
                         
                         # Verify tools were tracked
                         assert len(tracked_tools) > 0
@@ -491,9 +491,9 @@ async def test_tool_usage_tracking(goal_decomposer, sample_context):
 @pytest.mark.asyncio
 async def test_subgoal_validation(goal_decomposer, sample_context):
     """Test validation of the subgoal plan."""
-    # Test missing next_step
+    # Test missing next_state
     invalid_subgoal = SubgoalPlan(
-        next_step="",
+        next_state="",
         validation_criteria=["Test"],
         reasoning="Test reasoning"
     )
@@ -502,7 +502,7 @@ async def test_subgoal_validation(goal_decomposer, sample_context):
     
     # Test missing validation criteria
     invalid_subgoal = SubgoalPlan(
-        next_step="Test step",
+        next_state="Test step",
         validation_criteria=[],
         reasoning="Test reasoning"
     )
@@ -511,7 +511,7 @@ async def test_subgoal_validation(goal_decomposer, sample_context):
     
     # Test missing reasoning
     invalid_subgoal = SubgoalPlan(
-        next_step="Test step",
+        next_state="Test step",
         validation_criteria=["Test"],
         reasoning=""
     )

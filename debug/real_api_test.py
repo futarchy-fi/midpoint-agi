@@ -94,7 +94,7 @@ if __name__ == '__main__':
             import time
             start_time = time.time()
             
-            subgoal = await decomposer.determine_next_step(context)
+            subgoal = await decomposer.determine_next_state(context)
             
             end_time = time.time()
             duration = end_time - start_time

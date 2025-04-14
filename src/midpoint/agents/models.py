@@ -30,11 +30,11 @@ class Goal:
     current_state: Optional['State'] = None  # Current state after execution
 
 class SubgoalPlan(BaseModel):
-    """Represents the next step toward achieving a goal."""
+    """Represents the next state toward achieving a goal."""
     reasoning: str  # Required for both complete and incomplete goals
     goal_completed: bool = False  # Whether the goal is complete
     completion_summary: Optional[str] = None  # Summary of what was accomplished (for completed goals)
-    next_step: str
+    next_state: str
     validation_criteria: List[str]
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)

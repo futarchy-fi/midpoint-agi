@@ -38,10 +38,10 @@ class TestGoalDecompose(unittest.TestCase):
             import shutil
             shutil.rmtree(self.temp_dir)
     
-    @patch('midpoint.agents.goal_decomposer.GoalDecomposer.determine_next_step')
+    @patch('midpoint.agents.goal_decomposer.GoalDecomposer.determine_next_state')
     @patch('midpoint.agents.goal_decomposer.GoalDecomposer.create_top_goal_file')
     @patch('midpoint.agents.goal_decomposer.get_current_hash')
-    def test_decompose_goal_basic(self, mock_get_hash, mock_create_file, mock_determine_next_step):
+    def test_decompose_goal_basic(self, mock_get_hash, mock_create_file, mock_determine_next_state):
         """Test basic goal decomposition with validation bypassed."""
         # Setup mocks
         mock_get_hash.return_value = "abc123"
@@ -50,13 +50,13 @@ class TestGoalDecompose(unittest.TestCase):
         # Create a mock subgoal plan
         from midpoint.agents.models import SubgoalPlan
         mock_plan = SubgoalPlan(
-            next_step="Implement feature X",
+            next_state="Implement feature X",
             validation_criteria=["Test passes", "Feature works"],
             reasoning="This is a reasonable next step",
             requires_further_decomposition=True,
             relevant_context={}
         )
-        mock_determine_next_step.return_value = mock_plan
+        mock_determine_next_state.return_value = mock_plan
         
         # Call the decompose_goal function directly with bypass_validation
         import asyncio
@@ -74,7 +74,7 @@ class TestGoalDecompose(unittest.TestCase):
         
         # Verify the result
         self.assertTrue(result["success"])
-        self.assertEqual(result["next_step"], "Implement feature X")
+        self.assertEqual(result["next_state"], "Implement feature X")
         self.assertEqual(result["validation_criteria"], ["Test passes", "Feature works"])
         self.assertTrue(result["requires_further_decomposition"])
         self.assertEqual(result["git_hash"], "abc123")

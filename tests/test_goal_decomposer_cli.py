@@ -42,7 +42,7 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         # Create a sample subgoal file
         self.subgoal_file = self.logs_dir / "subgoal_20250322_123456_abcdef.json"
         self.subgoal_content = {
-            "next_step": "Test the CLI execution path",
+            "next_state": "Test the CLI execution path",
             "validation_criteria": ["Test passes", "No asyncio errors"],
             "reasoning": "We need to test the CLI execution path to catch asyncio issues",
             "requires_further_decomposition": False,
@@ -186,7 +186,7 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         mock_completion.choices = [MagicMock()]
         mock_completion.choices[0].message = MagicMock()
         mock_completion.choices[0].message.content = json.dumps({
-            "next_step": "Mocked next step",
+            "next_state": "Mocked next step",
             "validation_criteria": ["Test passes"],
             "reasoning": "This is a mocked response",
             "requires_further_decomposition": False,
@@ -208,7 +208,7 @@ class TestGoalDecomposerCLI(unittest.TestCase):
         
         # Verify the result
         self.assertTrue(result["success"])
-        self.assertEqual(result["next_step"], "Mocked next step")
+        self.assertEqual(result["next_state"], "Mocked next step")
 
     # 5. Test error paths
     def test_cli_with_nonexistent_input_file(self):

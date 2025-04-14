@@ -112,7 +112,7 @@ if __name__ == "__main__":
         # Setup mock for decompose_goal
         mock_result = {
             "success": True,
-            "next_step": "Implement feature X",
+            "next_state": "Implement feature X",
             "validation_criteria": ["Code passes tests", "Feature works as expected"],
             "requires_further_decomposition": True,
             "git_hash": "abcdef123456",
@@ -128,7 +128,7 @@ if __name__ == "__main__":
 async def decompose_goal(**kwargs):
     return {
         "success": True,
-        "next_step": "Implement feature X",
+        "next_state": "Implement feature X",
         "validation_criteria": ["Code passes tests", "Feature works as expected"],
         "requires_further_decomposition": True,
         "git_hash": "abcdef123456",
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         # Setup mock for decompose_goal
         mock_result = {
             "success": True,
-            "next_step": "Debug step",
+            "next_state": "Debug step",
             "validation_criteria": ["Debug successful"],
             "requires_further_decomposition": False,
             "goal_file": "debug.json"
@@ -228,7 +228,7 @@ if __name__ == "__main__":
 async def decompose_goal(**kwargs):
     return {
         "success": True,
-        "next_step": "Debug step",
+        "next_state": "Debug step",
         "validation_criteria": ["Debug successful"],
         "requires_further_decomposition": False,
         "git_hash": "abcdef123456",

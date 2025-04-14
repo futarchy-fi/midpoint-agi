@@ -1567,7 +1567,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 print(f"Summary: {result['completion_summary']}")
                 print(f"Reasoning: {result['reasoning']}")
             else:
-                print(f"\nNext step: {result['next_step']}")
+                print(f"\nNext state: {result['next_state']}")
                 print("\nValidation criteria:")
                 for criterion in result["validation_criteria"]:
                     print(f"- {criterion}")
@@ -1591,7 +1591,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
             goal_data.update({
                 "goal_completed": result.get("goal_completed", False),
                 "completion_summary": result.get("completion_summary"),
-                "next_step": result.get("next_step"),
+                "next_state": result.get("next_state"),
                 "validation_criteria": result.get("validation_criteria", []),
                 "reasoning": result["reasoning"],
                 "relevant_context": result.get("relevant_context", {}),
@@ -1624,7 +1624,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                 # Create subgoal data with updated memory state
                 subgoal_data = {
                     "goal_id": subgoal_id,
-                    "description": result["next_step"],
+                    "description": result["next_state"],
                     "parent_goal": goal_id,
                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                     "is_task": is_task,

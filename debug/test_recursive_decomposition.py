@@ -132,8 +132,8 @@ async def test_recursive_decomposition_basic(goal_decomposer, sample_context):
     if os.path.exists(log_file):
         os.remove(log_file)
     
-    # Mock the determine_next_step method to return predefined results
-    with patch.object(goal_decomposer, "determine_next_step", new_callable=AsyncMock) as mock_next_step:
+    # Mock the determine_next_state method to return predefined results
+    with patch.object(goal_decomposer, "determine_next_state", new_callable=AsyncMock) as mock_next_step:
         # First level: requires further decomposition
         first_subgoal = SubgoalPlan(
             next_step="Implement authentication system",
@@ -190,8 +190,8 @@ async def test_recursive_decomposition_multiple_levels(goal_decomposer, sample_c
     if os.path.exists(log_file):
         os.remove(log_file)
     
-    # Mock the determine_next_step method to return predefined results
-    with patch.object(goal_decomposer, "determine_next_step", new_callable=AsyncMock) as mock_next_step:
+    # Mock the determine_next_state method to return predefined results
+    with patch.object(goal_decomposer, "determine_next_state", new_callable=AsyncMock) as mock_next_step:
         # First level: requires further decomposition
         level1_subgoal = SubgoalPlan(
             next_step="Implement authentication system",
@@ -242,7 +242,7 @@ async def test_recursive_decomposition_multiple_levels(goal_decomposer, sample_c
         assert mock_next_step.call_count == 3
         
         # Verify metadata passing
-        # This is passed as the second argument to the second call to determine_next_step
+        # This is passed as the second argument to the second call to determine_next_state
         second_call_args = mock_next_step.call_args_list[1][0][0]
         assert "parent_goal" in second_call_args.metadata
         assert second_call_args.metadata["parent_goal"] == sample_context.goal.description
