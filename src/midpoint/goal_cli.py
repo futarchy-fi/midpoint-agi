@@ -3065,29 +3065,44 @@ def delete_goal(goal_id):
         
         # If there's an associated branch, delete it
         if branch_name:
-            try:
-                # Switch to a different branch if we're on the one we're deleting
-                current_branch = get_current_branch()
-                if current_branch == branch_name:
-                    # Switch to main branch or the first available branch
+            # Safeguard for critical branches
+            if branch_name in ["master", "main"]:
+                logging.warning(f"Skipping deletion of critical branch '{branch_name}' potentially associated with goal {goal_id}.")
+                print(f"Warning: Did not delete critical branch '{branch_name}'. Please check goal configurations.")
+            else:
+                # Proceed with deleting the non-critical branch
+                try:
+                    # Switch to a different branch if we're on the one we're deleting
+                    current_branch = get_current_branch()
+                    if current_branch == branch_name:
+                        # Switch to master branch (assuming it exists)
+                        try:
+                            subprocess.run(
+                                ["git", "checkout", "master"], # Changed from "main" to "master"
+                                check=True,
+                                capture_output=True,
+                                text=True
+                            )
+                        except subprocess.CalledProcessError:
+                            # Fallback if master doesn't exist
+                            logging.warning(f"Could not checkout master while trying to delete branch {branch_name}. Attempting deletion anyway.")
+                            # Proceed with deletion attempt even if checkout fails
+                            pass
+                    
+                    # Delete the branch
+                    logging.info(f"Attempting to delete branch: {branch_name}")
                     subprocess.run(
-                        ["git", "checkout", "main"],
-                        check=True,
+                        ["git", "branch", "-D", branch_name],
+                        check=True, # Will raise CalledProcessError if deletion fails
                         capture_output=True,
                         text=True
                     )
-                
-                # Delete the branch
-                subprocess.run(
-                    ["git", "branch", "-D", branch_name],
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
-                print(f"Deleted branch: {branch_name}")
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Failed to delete branch {branch_name}: {e}")
-                # Continue with deletion even if branch deletion fails
+                    print(f"Deleted branch: {branch_name}")
+                except subprocess.CalledProcessError as e:
+                    # Catch errors specifically from the deletion process (checkout or delete)
+                    logging.error(f"Failed to delete branch {branch_name}: {e.stderr}")
+                    # Continue with goal file deletion even if branch deletion fails
+                    print(f"Warning: Failed to delete branch {branch_name}. It might need manual deletion.")
         
         # Recursively delete all child goals and tasks
         for child_id in child_goals + child_tasks:
