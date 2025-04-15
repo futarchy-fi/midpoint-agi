@@ -10,13 +10,14 @@ import asyncio
 import time
 import json
 import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import re
 import os
 import logging
 from pathlib import Path
 import subprocess
+import traceback
 
 from .models import TaskContext, ExecutionTrace, State, Goal, ExecutionResult
 from .tools import initialize_all_tools
@@ -315,16 +316,6 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
             ExecutionResult containing the execution outcome
         """
         try:
-            # Validate memory state
-            if not context.memory_state:
-                raise ValueError("Memory state is required for task execution")
-            
-            # Validate memory state attributes
-            memory_hash = getattr(context.memory_state, "memory_hash", None)
-            memory_path = getattr(context.memory_state, "repository_path", None)
-            if not memory_hash or not memory_path:
-                raise ValueError("Memory state must have both memory_hash and repository_path")
-            
             # Use provided task description if available, otherwise use goal description
             task = task_description or context.goal.description
             
@@ -335,9 +326,9 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
             
             # Log memory state if available
             if context.memory_state:
-                logger.info(f"Memory repository: {memory_path}")
-                if memory_hash:
-                    logger.info(f"Initial memory hash: {memory_hash[:8]}")
+                logger.info(f"Memory repository: {context.state.memory_repository_path}")
+                if context.state.memory_hash:
+                    logger.info(f"Initial memory hash: {context.state.memory_hash[:8]}")
             elif context.state.memory_repository_path:
                 logger.info(f"Memory repository: {context.state.memory_repository_path}")
                 if context.state.memory_hash:
@@ -354,67 +345,146 @@ Git Hash: {context.state.git_hash}"""
             if context.memory_state:
                 user_prompt += f"""
 
-Memory Repository: {memory_path}
-Memory Hash: {memory_hash}"""
+Memory Repository: {context.state.memory_repository_path}
+Memory Hash: {context.state.memory_hash}"""
             
             # Execute the task
-            result_json_str = self._execute_task_with_llm(user_prompt, context)
+            result_json_str, tool_usage_list = self._execute_task_with_llm(user_prompt, context)
             
-            # Parse the result JSON to get the actual success status
+            # Parse the result JSON to get the actual success status and summary
             execution_success = False
-            error_message = "Unknown execution outcome"
+            summary = "Task execution failed internally."
+            validation_steps = []
+            error_message = "Unknown execution outcome" # Default error
+            final_git_hash = context.state.git_hash # Use initial hash as fallback
+
             try:
                 result_data = json.loads(result_json_str)
                 execution_success = result_data.get("success", False)
+                summary = result_data.get("summary", "No summary provided.")
+                # Ensure validation_steps is always a list
+                validation_steps = result_data.get("validation_steps") 
+                if validation_steps is None: # Handle null case
+                   validation_steps = []
+                elif not isinstance(validation_steps, list):
+                    # Attempt to handle non-list (e.g., string) - might need refinement
+                    validation_steps = [str(validation_steps)] 
+                    logger.warning("Validation steps were not a list, converted to list of strings.")
+                
+                # Get the final git hash reported by the LLM, if any
+                # This might represent the hash *after* a successful commit within the LLM flow
+                final_git_hash = result_data.get("git_hash") or context.state.git_hash
+
                 if not execution_success:
-                     error_message = result_data.get("summary") or result_data.get("error", "Task execution failed internally")
+                    # Use summary as error message if specifically marked as failure
+                    error_message = summary 
+                else:
+                    error_message = None # Clear error if success is true
+
             except json.JSONDecodeError as parse_error:
                 logger.error(f"Failed to parse final result JSON from _execute_task_with_llm: {parse_error}")
                 logger.error(f"Result string was: {result_json_str}")
-                error_message = "Failed to parse internal execution result"
+                summary = "Failed to parse LLM response JSON."
+                error_message = summary # Use parse failure as error message
                 execution_success = False # Ensure failure if JSON is bad
+                validation_steps = ["Failed to parse LLM response"] # Indicate failure reason
+            except Exception as e:
+                # Catch other potential errors during parsing/processing result_data
+                logger.error(f"Error processing LLM result data: {e}", exc_info=True)
+                summary = f"Error processing LLM result: {str(e)}"
+                error_message = summary
+                execution_success = False
+                validation_steps = ["Error processing LLM result"]
 
             # Get the current memory state if available
             current_memory_hash = None
             memory_repo_path = None
             
-            if context.memory_state:
+            # Determine memory path consistently
+            if hasattr(context, 'memory_state') and context.memory_state:
                 memory_repo_path = getattr(context.memory_state, "repository_path", None)
             if not memory_repo_path:
                 memory_repo_path = context.state.memory_repository_path
-            
+
+            # Get final memory hash
             if memory_repo_path:
                 try:
                     current_memory_hash = get_current_hash(memory_repo_path)
-                    logger.info(f"Updated memory hash: {current_memory_hash[:8]}")
+                    logger.info(f"Final memory hash after execution: {current_memory_hash[:8]}")
                 except Exception as e:
-                    logger.warning(f"Failed to get current memory hash: {e}")
+                    logger.warning(f"Failed to get final memory hash: {e}")
+                    # Use initial memory hash as fallback if final fetch fails
+                    current_memory_hash = context.state.memory_hash
+            else:
+                # If no memory repo path, use initial hash
+                current_memory_hash = context.state.memory_hash
             
-            # Create final state with updated memory hash
+            # Create final state using potentially updated hashes
             final_state = State(
-                git_hash=context.state.git_hash, # Note: This might be stale if commit failed
+                git_hash=final_git_hash, # Use hash reported by LLM or initial if missing
                 repository_path=context.state.repository_path,
-                description=context.state.description,
+                description="State after task execution attempt", # Generic description
                 branch_name=context.state.branch_name,
-                memory_hash=current_memory_hash,
+                memory_hash=current_memory_hash, # Use the hash obtained after execution attempt
                 memory_repository_path=memory_repo_path
             )
             
             # Return the result using the PARSED success status and include error message if failed
+            # Populate the new summary and validation_steps fields
+            result_metadata = {"tool_usage": tool_usage_list}
             return ExecutionResult(
                 success=execution_success,
+                summary=summary, # Pass the summary from LLM
+                suggested_validation_steps=validation_steps, # Pass the validation steps
                 branch_name=context.state.branch_name,
-                git_hash=context.state.git_hash,
+                git_hash=final_git_hash, # Pass the potentially updated git hash
                 repository_path=context.state.repository_path,
-                final_state=final_state,
-                error_message=None if execution_success else error_message
+                final_state=final_state, # Include the final state object
+                error_message=error_message, # Use derived error message
+                metadata=result_metadata # Add the metadata field
             )
             
         except Exception as e:
             # This outer exception block catches errors *before* _execute_task_with_llm finishes
             logger.error(f"High-level error executing task: {str(e)}", exc_info=True)
+            # === EDIT: Return failure ExecutionResult with metadata if possible ===
+            # We might not have tool_usage if the error happened before _execute_task_with_llm finished
+            # Default to empty list if tool_usage_list is not defined in this scope
+            error_tool_usage = locals().get("tool_usage_list", [])
+            error_metadata = {"tool_usage": error_tool_usage, "error_details": traceback.format_exc()}
 
-    def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> str:
+            # Try to construct a final state, may fail if context is incomplete
+            final_state = None
+            try:
+                current_memory_hash = context.state.memory_hash # Fallback
+                memory_repo_path = context.state.memory_repository_path # Fallback
+                if memory_repo_path:
+                     current_memory_hash = get_current_hash(memory_repo_path) or context.state.memory_hash
+                final_state = State(
+                    git_hash=context.state.git_hash, # Use initial hash
+                    repository_path=context.state.repository_path,
+                    description="State after high-level task execution error",
+                    branch_name=context.state.branch_name,
+                    memory_hash=current_memory_hash,
+                    memory_repository_path=memory_repo_path
+                )
+            except Exception as state_err:
+                 logger.error(f"Could not determine final state during high-level error handling: {state_err}")
+
+            return ExecutionResult(
+                success=False,
+                summary=f"High-level error during task execution: {str(e)}",
+                suggested_validation_steps=[],
+                branch_name=context.state.branch_name if context and context.state else "unknown",
+                git_hash=context.state.git_hash if context and context.state else "unknown",
+                repository_path=context.state.repository_path if context and context.state else "unknown",
+                final_state=final_state, # May be None
+                error_message=str(e),
+                metadata=error_metadata
+            )
+            # === END EDIT ===
+
+    def _execute_task_with_llm(self, user_prompt: str, context: TaskContext) -> Tuple[str, List[Any]]:
         """Execute a task using the LLM."""
         # Initialize messages
         messages = [
@@ -485,16 +555,71 @@ Memory Hash: {memory_hash}"""
             
             # Process tool calls and update tool usage
             if tool_calls:
+                logger.debug(f"Processing tool_calls: {tool_calls}") # DEBUG: Log the raw tool_calls list
                 for tool_call in tool_calls:
+                    logger.debug(f"  Processing individual tool_call: {tool_call}") # DEBUG: Log individual call
+                    logger.debug(f"  Type of tool_call: {type(tool_call)}") # DEBUG: Log type
                     tool_usage.append(tool_call)
-                    
+
                     # Record tool usage in conversation buffer
+                    # --- START EDIT ---
+                    # Correctly extract tool name and arguments, handling object/dict variations
+                    tool_name = 'unknown_tool' # Initialize
+                    tool_args_str = '{}' # Default to empty JSON string
+                    tool_args_parsed = {}
+                    logger.debug(f"  Initial tool_name: {tool_name}") # DEBUG
+                    try:
+                        # --- Check 1: Attribute access ---
+                        has_function_attr = hasattr(tool_call, 'function') and tool_call.function is not None
+                        logger.debug(f"  Checking hasattr(tool_call, 'function'): {has_function_attr}") # DEBUG
+                        if has_function_attr:
+                            tool_name = tool_call.function.name
+                            tool_args_str = tool_call.function.arguments # Arguments are typically JSON strings
+                            logger.debug(f"    Extracted via attributes: name={tool_name}, args_str={tool_args_str}") # DEBUG
+                        
+                        # --- Check 2: Dictionary access (if attribute access failed) ---
+                        elif isinstance(tool_call, dict):
+                            logger.debug(f"  Checking isinstance(tool_call, dict): True") # DEBUG
+                            # --- START REVISED DICT LOGIC ---
+                            # Directly access 'tool'/'name' and 'args'/'arguments' keys
+                            tool_name = tool_call.get('tool', tool_call.get('name', 'unknown_tool_dict_fallback')) # Check 'tool' first, then 'name'
+                            raw_args = tool_call.get('args', tool_call.get('arguments', {})) # Check 'args' first, then 'arguments'
+                            logger.debug(f"    Got raw_args: {raw_args}, type: {type(raw_args)}") # DEBUG
+                            
+                            # Arguments might be a string (JSON) or already a dict
+                            if isinstance(raw_args, str):
+                                tool_args_str = raw_args
+                            elif isinstance(raw_args, dict):
+                                tool_args_str = json.dumps(raw_args) # Convert dict back to JSON string for consistent parsing below
+                                logger.debug(f"    Converted dict args back to string: {tool_args_str}")
+                            else:
+                                logger.warning(f"    Unexpected type for args: {type(raw_args)}. Defaulting to empty dict.")
+                                tool_args_str = '{}' # Default if unexpected type
+                            # --- END REVISED DICT LOGIC ---
+                            logger.debug(f"    Extracted via dict: name={tool_name}, args_str={tool_args_str}") # DEBUG
+                        else:
+                            logger.warning(f"  Tool call is neither object with function nor dict: {tool_call}") # DEBUG
+
+                        # --- Argument Parsing ---
+                        logger.debug(f"  Attempting to parse args_str: {tool_args_str}") # DEBUG
+                        tool_args_parsed = json.loads(tool_args_str)
+                        logger.debug(f"    Successfully parsed args: {tool_args_parsed}") # DEBUG
+
+                    except Exception as e:
+                        # Log potential issues with accessing/parsing, but proceed
+                        logger.warning(f"Could not fully parse tool call info: {tool_call}. Error: {e}", exc_info=True) # Add traceback
+                        tool_args_parsed = {} # Use empty dict if parsing fails
+                        # Keep tool_name as it was potentially set before the error
+
+                    logger.debug(f"  Final tool_name before append: {tool_name}") # DEBUG
+                    logger.debug(f"  Final tool_args_parsed before append: {tool_args_parsed}") # DEBUG
                     self.conversation_buffer.append({
                         "type": "tool_usage",
-                        "tool_name": tool_call.get("name", "unknown_tool"),
-                        "tool_args": tool_call.get("arguments", {}),
+                        "tool_name": tool_name,
+                        "tool_args": tool_args_parsed, # Store parsed args if possible
                         "timestamp": datetime.datetime.now().isoformat()
                     })
+                    # --- END EDIT ---
             
             # Get the final assistant message content
             if isinstance(message, list):
@@ -543,7 +668,9 @@ Memory Hash: {memory_hash}"""
                         logger.info(f"  {i}. {step}")
                 # Save conversation BEFORE returning successfully
                 self._save_interaction_to_memory(context) # Sync call
-                return json.dumps(output_data)
+                # === EDIT: Return tool_usage list ===
+                return final_content, tool_usage
+                # === END EDIT ===
             else:
                 # Handle failure (JSON invalid or missing fields)
                 error_reason = "LLM response missing required fields or invalid JSON"
@@ -558,7 +685,9 @@ Memory Hash: {memory_hash}"""
                 }
                 # Save conversation BEFORE returning failure
                 self._save_interaction_to_memory(context) # Sync call
-                return json.dumps(default_response)
+                # === EDIT: Return tool_usage list ===
+                return json.dumps(default_response), tool_usage
+                # === END EDIT ===
             
         except Exception as e:
             # Log the general error
@@ -569,6 +698,17 @@ Memory Hash: {memory_hash}"""
                 self._save_interaction_to_memory(context) # Sync call
             except Exception as save_error:
                 logger.error(f"Failed to save conversation on error: {str(save_error)}")
+
+            # === EDIT: Return default error JSON and tool_usage list ===
+            # Return a default error JSON structure if an exception occurs
+            default_error_response = {
+                 "summary": f"Task failed with exception: {str(e)}",
+                 "success": False,
+                 "validation_steps": [f"Task execution failed due to exception: {str(e)}"],
+                 "error": str(e)
+            }
+            return json.dumps(default_error_response), tool_usage
+            # === END EDIT ===
 
     def is_git_ancestor(self, repo_path: str, ancestor_hash: str, descendant_hash: str) -> bool:
         """

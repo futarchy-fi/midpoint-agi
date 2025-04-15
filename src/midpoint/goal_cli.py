@@ -1786,80 +1786,70 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
         
         # Create and run the executor
         executor = TaskExecutor()
-        result = executor.execute_task(context, task_data["description"])
-        
-        if result.success:
-            # Get current git hash
-            current_hash = get_current_hash()
-            if not current_hash:
-                logging.error("Failed to get current git hash")
-                return False
+        execution_result = executor.execute_task(context, task_data["description"])
+
+        # --- Prepare the data for last_execution_result field ---
+        last_execution_data = {
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "success": execution_result.success,
+            "summary": execution_result.summary,
+            "suggested_validation_steps": execution_result.suggested_validation_steps,
+            "final_git_hash": execution_result.final_state.git_hash if execution_result.final_state else None,
+            "final_memory_hash": execution_result.final_state.memory_hash if execution_result.final_state else None,
+            "error_message": execution_result.error_message
+        }
+        # Remove null fields for cleaner output
+        last_execution_data = {k: v for k, v in last_execution_data.items() if v is not None}
+
+        # --- Update task_data regardless of success/failure --- 
+        # Overwrite or add the last_execution_result field
+        task_data["last_execution_result"] = last_execution_data
+
+        if execution_result.success:
+            logging.info(f"Task {task_id} execution reported success.")
             
-            # Get current memory hash if memory repository is available
-            memory_hash = None
-            memory_repo_path = task_data["initial_state"].get("memory_repository_path")
-            if memory_repo_path:
-                try:
-                    memory_hash = get_current_hash(memory_repo_path)
-                    logging.info(f"Updated memory hash: {memory_hash[:8]}")
-                except Exception as e:
-                    logging.warning(f"Failed to get updated memory hash: {e}")
-            
-            # Update task's current state
-            task_data["current_state"] = {
-                "git_hash": current_hash,
-                "repository_path": result.repository_path,
-                "description": f"State after executing task: {task_id}",
-                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "memory_hash": memory_hash or task_data["initial_state"].get("memory_hash"),
-                "memory_repository_path": memory_repo_path
-            }
-            
-            # Mark task as completed
+            # Still mark task as completed conceptually upon successful execution report
+            # (Though actual merging/acceptance is separate)
             task_data["complete"] = True
-            task_data["completion_time"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Save updated task data
-            with open(task_file, 'w') as f:
-                json.dump(task_data, f, indent=2)
-            
-            # Remove automatic parent state update
-            # parent_goal_id = task_data.get("parent_goal")
-            # if parent_goal_id:
-            #     update_parent_goal_state(
-            #         parent_goal_id=parent_goal_id,
-            #         task_id=task_id,
-            #         execution_result=result,
-            #         final_state=task_data["current_state"]
-            #     )
-            
-            print(f"\nTask {task_id} executed successfully")
-            if result.validation_results:
-                print(f"Result: {result.validation_results}")
+            task_data["completion_time"] = last_execution_data["timestamp"]
+
+            # Save updated task data (now only updates complete, completion_time, and last_execution_result)
+            try:
+                with open(task_file, 'w') as f:
+                    json.dump(task_data, f, indent=2)
+                logging.info(f"Saved updated task data for {task_id} (Success)")
+            except Exception as e:
+                logging.error(f"Failed to save successful task data for {task_id}: {e}")
+                # Even if save fails, we proceed to return True as execution succeeded
+
+            print(f"\nTask {task_id} executed successfully.")
+            print(f"Summary: {execution_result.summary}")
+            if execution_result.suggested_validation_steps:
+                 print("Suggested Validation Steps:")
+                 for step in execution_result.suggested_validation_steps:
+                     print(f"- {step}")
             return True
         else:
-            # --- START EDIT: Store failure information --- 
-            print(f"Failed to execute task: {result.error_message}", file=sys.stderr)
-            
-            # Update task data to reflect failure
+            logging.warning(f"Task {task_id} execution reported failure.")
+            print(f"Failed to execute task {task_id}: {execution_result.summary or execution_result.error_message}", file=sys.stderr)
+
+            # Update task data to reflect failure - keep current_state as it was before this failed attempt
             task_data["complete"] = False
             if "completion_time" in task_data:
                 del task_data["completion_time"] # Remove previous completion time if it exists
             
-            task_data["last_execution"] = {
-                "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "success": False,
-                "summary": result.error_message or "Task execution failed with no specific error message."
-            }
-            
-            # Save updated task data
+            # The last_execution_result field is already updated above
+            # Remove the old 'last_execution' field if it exists
+            if "last_execution" in task_data:
+                del task_data["last_execution"]
+
+            # Save updated task data with failure status and last_execution_result
             try:
                 with open(task_file, 'w') as f:
                     json.dump(task_data, f, indent=2)
-                logging.info(f"Updated task file {task_file} with failure status.")
+                logging.info(f"Saved updated task data for {task_id} (Failure)")
             except Exception as e:
-                logging.error(f"Failed to write failure status to task file {task_file}: {e}")
-            # --- END EDIT --- 
+                logging.error(f"Failed to save failed task data for {task_id}: {e}")
             return False
             
     finally:

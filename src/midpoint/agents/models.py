@@ -81,18 +81,20 @@ class ExecutionTrace:
 
 @dataclass
 class ExecutionResult:
-    """Represents the result of a task execution."""
+    """Represents the result of a task execution, including summary from the LLM."""
     success: bool  # Whether the execution was successful
     branch_name: str  # The git branch where execution occurred
     git_hash: str  # The git hash after execution
-    error_message: Optional[str] = None  # Error message if execution failed
+    summary: Optional[str] = None # LLM's summary of what was done or why it failed
+    suggested_validation_steps: Optional[List[str]] = None # LLM's suggested steps to validate (if successful)
+    error_message: Optional[str] = None  # System error message if execution failed unexpectedly
     execution_time: float = 0.0  # Time taken to execute the task
     repository_path: Optional[str] = None  # Path to the repository
     memory_repository_path: Optional[str] = None  # Path to the memory repository
     task_id: Optional[str] = None  # ID of the task that was executed
     goal_id: Optional[str] = None  # ID of the goal that was executed
-    validation_results: List[str] = field(default_factory=list)  # Results of validation steps
-    final_state: Optional['State'] = None  # Final state after execution (git_hash, memory_hash, etc.)
+    final_state: Optional['State'] = None  # Final state after execution (contains final git_hash, memory_hash, etc.)
+    metadata: Optional[Dict[str, Any]] = None # Generic metadata field (e.g., for tool usage)
 
 @dataclass
 class ValidationResult:

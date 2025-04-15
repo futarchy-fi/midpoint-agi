@@ -284,6 +284,14 @@ class ToolProcessor:
                 else:
                     result_str = str(result)
                 
+                # === START: Truncate search_code output ===
+                MAX_OUTPUT_LENGTH = 10000 # Approx 2500 tokens
+                if function_name == "search_code" and len(result_str) > MAX_OUTPUT_LENGTH:
+                    truncated_output = result_str[:MAX_OUTPUT_LENGTH] + "\n\n[...truncated...]"
+                    logging.warning(f"Truncated {function_name} output from {len(result_str)} to {len(truncated_output)} characters.")
+                    result_str = truncated_output
+                # === END: Truncate search_code output ===
+                
                 # Add to responses
                 tool_responses.append({
                     "role": "tool",
