@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime
+from typing import Optional, Dict, Any
 
 # --- Constants ---
 GOAL_DIR = ".goal"
@@ -15,7 +16,7 @@ def _ensure_goal_dir() -> Path:
     goal_path.mkdir(parents=True, exist_ok=True)
     return goal_path
 
-def _load_goal_data(goal_id: str) -> dict | None:
+def _load_goal_data(goal_id: str) -> Optional[Dict[str, Any]]:
     """Load JSON data for a specific goal ID."""
     goal_path = _ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"

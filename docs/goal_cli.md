@@ -114,6 +114,12 @@ Options:
 goal status
 ```
 
+#### Show code and memory diffs for a goal
+```bash
+goal diff <goal-id>
+```
+This command displays the `git diff` output between the initial and current states recorded for the specified goal, separately for the code repository and the memory repository (if configured and available in the goal's state). This is useful for understanding the exact changes made during the goal's execution.
+
 ### Visualization Tools
 
 #### Show visual representation of goal hierarchy

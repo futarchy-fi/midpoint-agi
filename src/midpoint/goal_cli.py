@@ -11,9 +11,10 @@ import subprocess
 import asyncio
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union, Set, Callable
 import sys
 import time
+import tempfile
 
 # Local imports (ensure correct relative paths)
 from .agents.models import Goal, SubgoalPlan, TaskContext, ExecutionResult, MemoryState, State
@@ -2068,6 +2069,10 @@ def main_command(args):
         return show_validation_history(args.goal_id, args.debug, args.quiet)
     elif args.command == "analyze":
         return analyze_goal(args.goal_id, args.human)
+    elif args.command == "diff":
+        return show_goal_diffs(args.goal_id)
+    elif args.command == "revert":
+        return revert_goal(args.goal_id)
     else:
         return None
 
@@ -2932,6 +2937,10 @@ def main():
     # goal graph
     subparsers.add_parser("graph", help="Generate graphical visualization")
     
+    # goal diff <goal-id>
+    diff_parser = subparsers.add_parser("diff", help="Show code and memory diffs for a specific goal")
+    diff_parser.add_argument("goal_id", help="ID of the goal to show diffs for")
+    
     # goal revert <goal-id>
     revert_parser = subparsers.add_parser("revert", help="Revert a goal's current state back to its initial state")
     revert_parser.add_argument("goal_id", help="ID of the goal to revert")
@@ -3560,6 +3569,152 @@ def analyze_goal(goal_id, human_mode):
         print(raw_llm_response)
         print("-------------------------------------")
         return False # Indicate failure
+
+
+def load_goal_data(goal_id: str) -> Optional[Dict[str, Any]]:
+    """Loads the JSON data for a given goal ID."""
+    goal_path = ensure_goal_dir()
+    goal_file = goal_path / f"{goal_id}.json"
+    if not goal_file.exists():
+        logging.error(f"Goal file not found for ID: {goal_id}")
+        return None
+    try:
+        with open(goal_file, 'r') as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        logging.error(f"Error decoding JSON from goal file: {goal_file}")
+        return None
+    except Exception as e:
+        logging.error(f"Error reading goal file {goal_file}: {e}")
+        return None
+
+
+def run_diff_command(repo_path: str, initial_hash: str, final_hash: str) -> Optional[str]:
+    """Runs 'git diff' in the specified repository and returns the output."""
+    if not repo_path or not os.path.exists(repo_path):
+        logging.warning(f"Repository path not found or not specified: {repo_path}")
+        return None
+    if not initial_hash or not final_hash:
+        logging.warning("Initial or final hash missing, cannot perform diff.")
+        return None
+    if initial_hash == final_hash:
+        logging.info(f"Initial and final hashes are the same ({initial_hash[:8]}) in {repo_path}. No changes.")
+        return "(No changes)"
+
+    # Use '..' notation which is standard for git diff range
+    # Add '--' to prevent ambiguity if hashes resemble filenames
+    command = ["git", "diff", f"{initial_hash}..{final_hash}", "--"]
+    logging.debug(f"Running diff in {repo_path}: {' '.join(command)}")
+    try:
+        # Using subprocess.run to capture output directly
+        result = subprocess.run(
+            command,
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+            errors='ignore' # Ignore potential decoding errors in diff output
+        )
+        # Return stdout if it exists, otherwise indicate no textual changes
+        return result.stdout if result.stdout else "(No textual changes detected)"
+    except FileNotFoundError:
+         logging.error(f"Git command not found. Ensure Git is installed and in PATH.")
+         return f"Error: Git command not found in {repo_path}"
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running git diff in {repo_path}: {e}")
+        logging.error(f"Stderr: {e.stderr}")
+        # Provide more context on error
+        error_message = f"Error running git diff in {repo_path}."
+        # Check stderr for common git diff errors
+        if "ambiguous argument" in e.stderr or "unknown revision" in e.stderr:
+             error_message += f" One of the hashes ({initial_hash[:8]}, {final_hash[:8]}) might be invalid or not found in this repository."
+        elif "fatal: bad object" in e.stderr:
+            error_message += f" One of the hashes ({initial_hash[:8]}, {final_hash[:8]}) is not a valid git object."
+        else:
+            # Include generic stderr if specific patterns don't match
+            error_message += f" Stderr: {e.stderr.strip()}"
+        return error_message
+    except Exception as e:
+        logging.error(f"Unexpected error running git diff in {repo_path}: {e}")
+        return f"Unexpected error during diff in {repo_path}: {e}"
+
+
+def show_goal_diffs(goal_id: str):
+    """Shows the code and memory diffs for a specific goal."""
+    logging.info(f"Showing diffs for goal: {goal_id}")
+    goal_data = load_goal_data(goal_id)
+    if not goal_data:
+        return # Error already logged by load_goal_data
+
+    initial_state = goal_data.get("initial_state")
+    current_state = goal_data.get("current_state")
+
+    if not initial_state or not current_state:
+        logging.error(f"Goal {goal_id} is missing initial or current state data.")
+        return
+
+    # Extract state information consistently from current_state where possible
+    initial_git_hash = initial_state.get("git_hash")
+    current_git_hash = current_state.get("git_hash")
+    # Prefer repository_path from current_state, fallback to initial
+    code_repo_path = current_state.get("repository_path") or initial_state.get("repository_path")
+
+    initial_memory_hash = initial_state.get("memory_hash")
+    current_memory_hash = current_state.get("memory_hash")
+    # Prefer memory_repository_path from current_state, fallback to initial
+    memory_repo_path = current_state.get("memory_repository_path") or initial_state.get("memory_repository_path")
+
+    print(f"--- Diffs for Goal: {goal_id} ('{goal_data.get('description', 'N/A')}') ---")
+    print(f"Initial State Timestamp: {initial_state.get('timestamp', 'N/A')}")
+    print(f"Current State Timestamp: {current_state.get('timestamp', 'N/A')}")
+
+    # --- Code Diff ---
+    print(f"\n=== Code Repository Diff ({code_repo_path or 'Path unknown'}) ===")
+    print(f"Initial Hash: {initial_git_hash or 'N/A'}")
+    print(f"Final Hash:   {current_git_hash or 'N/A'}")
+    if code_repo_path and initial_git_hash and current_git_hash:
+        code_diff_output = run_diff_command(code_repo_path, initial_git_hash, current_git_hash)
+        print("\n--- Git Diff Output ---")
+        # Check if output is None (error) or empty string/specific message
+        if code_diff_output is None:
+            print("Could not generate code diff due to previous error.")
+        elif code_diff_output == "(No changes)":
+             print(code_diff_output)
+        elif code_diff_output == "(No textual changes detected)":
+             print(code_diff_output)
+        elif "Error:" in code_diff_output: # Check if run_diff_command returned an error message
+             print(code_diff_output)
+        else:
+            print(code_diff_output) # Print the actual diff
+        print("--- End Git Diff ---")
+    else:
+        print("\nSkipping code diff: Missing repository path or hashes.")
+
+    # --- Memory Diff ---
+    print(f"\n=== Memory Repository Diff ({memory_repo_path or 'Path unknown'}) ===")
+    print(f"Initial Hash: {initial_memory_hash or 'N/A'}")
+    print(f"Final Hash:   {current_memory_hash or 'N/A'}")
+    if memory_repo_path and initial_memory_hash and current_memory_hash:
+        memory_diff_output = run_diff_command(memory_repo_path, initial_memory_hash, current_memory_hash)
+        print("\n--- Git Diff Output (Memory) ---")
+        # Check if output is None (error) or empty string/specific message
+        if memory_diff_output is None:
+            print("Could not generate memory diff due to previous error.")
+        elif memory_diff_output == "(No changes)":
+             print(memory_diff_output)
+        elif memory_diff_output == "(No textual changes detected)":
+             print(memory_diff_output)
+        elif "Error:" in memory_diff_output: # Check if run_diff_command returned an error message
+             print(memory_diff_output)
+        else:
+            print(memory_diff_output) # Print the actual diff
+        print("--- End Git Diff (Memory) ---")
+    elif not memory_repo_path:
+         print("\nSkipping memory diff: Memory repository path not configured or found in goal state.")
+    else: # Has path but missing hashes
+        print("\nSkipping memory diff: Missing initial or final memory hash.")
+
+    print("\n--- End Diffs ---")
 
 
 if __name__ == "__main__":
