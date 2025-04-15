@@ -253,35 +253,49 @@ Your Analysis Steps:
    - Are required tools or capabilities available?
    - Have similar attempts failed before?
 
-3. DECIDE: Based on your analysis, choose ONE of the following actions:
-    - "decompose": Recommended when the goal needs new subgoals or subtasks. Use this when:
-       a) The goal has no children tasks/subgoals yet and is too complex for a single task
-       b) The goal has children tasks that are completed but failed validation, requiring new approaches
-       c) Some children tasks are completed and validated, but remaining work is still complex
-       d) Previous decomposition attempts were unsuccessful and a new approach is needed
-    
-    - "execute": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
-    
-    - "validate": Recommended only when sufficient children tasks have been completed AND successfully validated, to potentially satisfy all the requirements for the goal.
-    
-    - "mark_complete": Recommended when the goal is already validated or clearly finished based on context.
-    
-    - "update_parent": Recommended when a child was completed but the parent state doesn't reflect it.
-    
-    - "give_up": Recommended when:
-       a) The goal is ill-defined or ambiguous
-       b) The goal is fundamentally impossible with current tools/capabilities
-       c) The history of failed attempts shows a lack of variability and latest attempts have been repetitive and uncreative
+3. DECIDE: Based on your analysis, match the goal's current state to ONE of these action categories:
 
-4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
-   The justification MUST be detailed. For `decompose`, explain *what specific aspects* make the goal too complex for a single task.
-   For `execute`, explain *why* it's simple enough.
-   For `give_up`, explain *what went wrong or why the goal is impossible/irrelevant* (e.g., required tools unavailable, repeated failures, description ambiguous).
+EXECUTE ACTIONS - When direct implementation appears possible:
+- "execute-direct": Goal involves clear, simple, concrete actions that can be implemented immediately
+- "execute-explore": Goal is new with few prior attempts; direct execution is worth trying before decomposition
+- "execute-conclude": Based on completed and validated subtasks, the overall goal can now be finalized directly
+
+DECOMPOSE ACTIONS - When breaking down the goal is beneficial:
+- "decompose-planning": Goal would benefit from creating a structured plan before implementation
+- "decompose-pivot": Previous attempts failed; a different strategy or approach is needed
+- "decompose-interpret": Goal definition needs reinterpretation to make it achievable
+- "decompose-quality": Breaking into smaller steps would improve implementation quality
+- "decompose-large": Goal would take more than a few minutes of implementation work to complete; breaking it down will create more manageable units of work
+
+STOP ACTIONS - When continuing the goal is not advisable:
+- "stop-ill-defined": Goal is too ambiguous or poorly defined to implement effectively
+- "stop-impossible": Goal validation criteria cannot be satisfied with available resources/capabilities
+- "stop-noprogress": Multiple attempts show no progress toward promising approaches
+- "stop-irrelevant": New information indicates the goal is no longer relevant or useful
+
+OTHER ACTIONS:
+- "validate": All required implementation appears complete; goal is ready for validation
+- "mark_complete": Goal is already validated or clearly finished based on context
+
+4. STRATEGIC GUIDANCE: Provide specific, actionable guidance on HOW to implement your recommended action.
+   This should include:
+   - For "execute" actions: Concrete steps, approach, or techniques to use for implementation
+   - For "decompose" actions: Suggestions on how to break down the goal effectively
+   - For "validate" actions: What aspects should be checked and how
+   - For "stop" actions: A report of why this way of approaching the goal did not work
+   
+   Make your guidance specific, practical, and tailored to the goal's context.
+
+5. OUTPUT: Provide your decision as a JSON object with three fields:
+   - "action" (string): Your chosen action category
+   - "justification" (string): Why this action is most appropriate
+   - "strategic_guidance" (string): Specific guidance on how to implement the action
 
 Available Tools (for observation only):
 {tool_descriptions_text}
 
-IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justification\": \"The goal is complex and requires further breakdown based on X.\"}}. Do not wrap it in markdown.
+Return ONLY raw JSON, like {{\"action\": \"decompose-planning\", \"justification\": \"The goal requires structured planning because...\", \"strategic_guidance\": \"Start by creating a detailed outline of...\"}}.
+Do not wrap it in markdown.
 """
         return system_prompt
 
@@ -438,25 +452,29 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                     log_with_timestamp("Parsing LLM response...", llm_logger)
                     output_data = json.loads(content)
                      # Validate expected fields
-                    if not all(key in output_data for key in ["action", "justification"]):
+                    if not all(key in output_data for key in ["action", "justification", "strategic_guidance"]):
                         # If missing, try extracting from markdown code blocks
                         log_with_timestamp("Missing expected fields, trying to extract from code blocks...", llm_logger)
                         json_match = re.search(r'```(?:json)?\s*(\{.+?\})?\s*```', content, re.DOTALL)
                         if json_match:
                             try:
                                 output_data = json.loads(json_match.group(1))
-                                if not all(key in output_data for key in ["action", "justification"]):
-                                    raise ValueError("Extracted JSON missing 'action' or 'justification'")
+                                if not all(key in output_data for key in ["action", "justification", "strategic_guidance"]):
+                                    raise ValueError("Extracted JSON missing one or more required fields (action, justification, or strategic_guidance)")
                             except (json.JSONDecodeError, ValueError) as inner_e:
                                  logging.error(f"Failed to parse extracted JSON or validate fields: {inner_e}")
                                  log_with_timestamp(f"Failed to parse extracted JSON or validate fields: {inner_e}", llm_logger)
                                  raise ValueError("LLM response JSON invalid or missing fields even after extraction.")
                         else:
-                             raise ValueError("LLM response missing 'action' or 'justification' and no JSON block found.")
+                             raise ValueError("LLM response missing required fields and no JSON block found.")
 
-                    # Handle give_up action
-                    if output_data.get("action") == "give_up":
-                        log_with_timestamp("Goal analyzer recommended giving up", llm_logger)
+                    # Get the action directly from the response
+                    action = output_data.get("action", "")
+                    strategic_guidance = output_data.get("strategic_guidance", "No specific guidance provided.")
+                    
+                    # Handle stop actions (previously give_up)
+                    if action.startswith("stop-"):
+                        log_with_timestamp(f"Goal analyzer recommended stopping: {action}", llm_logger)
                         
                         # Load the goal file to get parent information
                         goal_path = Path(".goal")
@@ -483,7 +501,9 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                                         "attempted_goal_id": goal_id,
                                         "attempted_goal_description": goal_data.get("description", "N/A"),
                                         "failure_reason": output_data.get("justification", "No reason provided"),
-                                        "failure_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        "failure_timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                                        "stop_reason": action,
+                                        "alternative_approaches": strategic_guidance
                                     }
                                     parent_data["failed_attempts_history"].append(failure_record)
                                     
@@ -493,30 +513,91 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                                     
                                     log_with_timestamp(f"Updated parent goal {parent_goal_id} with failure history", llm_logger)
                         
-                        # Update current goal file to mark it as given up
-                        goal_data["status"] = "given_up"
-                        if "last_analysis" not in goal_data:
-                            goal_data["last_analysis"] = {}
-                        goal_data["last_analysis"]["action"] = "give_up"
-                        goal_data["last_analysis"]["justification"] = output_data.get("justification", "No justification provided")
-                        goal_data["last_analysis"]["timestamp"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        # Update current goal file to mark it as given up/stopped
+                        goal_data["status"] = "stopped"
+                        
+                        # Create or update the last_analysis field with the current analysis results
+                        goal_data["last_analysis"] = {
+                            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                            "action": action,
+                            "suggested_action": action,  # For backward compatibility
+                            "justification": output_data.get("justification", "No justification provided"),
+                            "strategic_guidance": strategic_guidance,
+                            "mode": "auto",  # Indicates this was done by the automatic goal analyzer
+                            "final_memory_hash": memory_hash
+                        }
+                        
+                        # Remove old fields that aren't needed
+                        if "confidence_score" in goal_data["last_analysis"]:
+                            del goal_data["last_analysis"]["confidence_score"]
+                        if "action_probabilities" in goal_data["last_analysis"]:
+                            del goal_data["last_analysis"]["action_probabilities"]
+                        if "suggested_command" in goal_data["last_analysis"]:
+                            del goal_data["last_analysis"]["suggested_command"]
                         
                         with open(goal_file, 'w') as f:
                             json.dump(goal_data, f, indent=2)
                         
-                        log_with_timestamp(f"Marked goal {goal_id} as given up", llm_logger)
+                        log_with_timestamp(f"Marked goal {goal_id} as stopped: {action}", llm_logger)
+                    else:
+                        # For non-stop actions, update the goal file with the analysis result
+                        goal_path = Path(".goal")
+                        goal_file = goal_path / f"{goal_id}.json"
+                        if goal_file.exists():
+                            try:
+                                with open(goal_file, 'r') as f:
+                                    goal_data = json.load(f)
+                                
+                                # Create or update the last_analysis field with the current analysis results
+                                goal_data["last_analysis"] = {
+                                    "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                                    "action": action,
+                                    "suggested_action": action,  # For backward compatibility
+                                    "justification": output_data.get("justification", "No justification provided"),
+                                    "strategic_guidance": strategic_guidance,
+                                    "mode": "auto",  # Indicates this was done by the automatic goal analyzer
+                                    "final_memory_hash": memory_hash
+                                }
+                                
+                                # Remove old fields that aren't needed
+                                if "confidence_score" in goal_data["last_analysis"]:
+                                    del goal_data["last_analysis"]["confidence_score"]
+                                if "action_probabilities" in goal_data["last_analysis"]:
+                                    del goal_data["last_analysis"]["action_probabilities"]
+                                if "suggested_command" in goal_data["last_analysis"]:
+                                    del goal_data["last_analysis"]["suggested_command"]
+                                
+                                # Save updated goal data
+                                with open(goal_file, 'w') as f:
+                                    json.dump(goal_data, f, indent=2)
+                                
+                                log_with_timestamp(f"Updated goal {goal_id} with analysis results including strategic guidance", llm_logger)
+                            except Exception as e:
+                                error_msg = f"Failed to update goal file {goal_file}: {e}"
+                                logging.error(error_msg)
+                                log_with_timestamp(error_msg, llm_logger)
                     
                     # Create the final result dictionary
                     final_output = {
-                        "action": output_data["action"],
+                        "action": action,
                         "justification": output_data["justification"],
-                        "metadata": { "raw_response": content, "tool_usage": tool_usage }
+                        "strategic_guidance": strategic_guidance,
+                        "metadata": output_data.get("metadata", {})
                     }
+                    
+                    # Add tool usage to metadata
+                    if "metadata" not in final_output:
+                        final_output["metadata"] = {}
+                    final_output["metadata"]["raw_response"] = content
+                    final_output["metadata"]["tool_usage"] = tool_usage
+                    
                     logging.info(f"✅ Analysis complete. Suggested action: {final_output['action']}")
                     logging.debug(f"Justification: {final_output['justification']}")
+                    logging.debug(f"Strategic Guidance: {final_output['strategic_guidance']}")
                     log_with_timestamp("==== PARSED OUTPUT ====", llm_logger)
                     log_with_timestamp(f"Action: {final_output['action']}", llm_logger)
                     log_with_timestamp(f"Justification: {final_output['justification']}", llm_logger)
+                    log_with_timestamp(f"Strategic Guidance: {final_output['strategic_guidance']}", llm_logger)
                     log_with_timestamp("==== END PARSED OUTPUT ====", llm_logger)
                     break # Success, exit retry loop
                 
@@ -541,7 +622,7 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
                         log_with_timestamp("Preparing to retry LLM call...", llm_logger)
                         # Add the failed assistant response AND the user error message for context
                         messages.append({"role": "assistant", "content": raw_content}) 
-                        messages.append({"role": "user", "content": f"Your previous response could not be parsed or was invalid: {str(e)}. Please provide ONLY the required JSON object with 'action' and 'justification' fields. Do not include any other text or markdown formatting."})
+                        messages.append({"role": "user", "content": f"Your previous response could not be parsed or was invalid: {str(e)}. Please provide ONLY the required JSON object with 'action', 'justification', and 'strategic_guidance' fields. Do not include any other text or markdown formatting."})
                         # No 'continue' needed here, loop will naturally continue
 
             # --- Handle Unexpected Errors during LLM call/processing for this attempt ---
@@ -1117,11 +1198,19 @@ def analyze_goal(
     else:
          logging.info("Memory repo path not specified or doesn't exist, cannot get updated memory hash.")
 
+    # Get the action directly
+    action = analysis_result_dict.get("action", "error")
+    strategic_guidance = analysis_result_dict.get("strategic_guidance", "No specific guidance provided.")
+    
+    # Determine success based on action (not being an error)
+    success = action != "error"
+    
     # Construct Final Result 
     final_result = {
-        "success": analysis_result_dict.get("action") != "error",
-        "action": analysis_result_dict.get("action", "error"),
+        "success": success,
+        "action": action,
         "justification": analysis_result_dict.get("justification", "Analysis failed or produced invalid output"),
+        "strategic_guidance": strategic_guidance,
         "metadata": analysis_result_dict.get("metadata", {}), 
         "git_hash": updated_git_hash, 
         "initial_git_hash": current_git_hash, 
@@ -1131,10 +1220,12 @@ def analyze_goal(
     }
 
     # Log final results to the LLM logger as well for completeness
-    llm_logger.debug(f"Analysis for goal {final_goal_id} finished with action: {final_result['action']}")
+    llm_logger.debug(f"Analysis for goal {final_goal_id} finished with action: {action}")
+    llm_logger.debug(f"Strategic guidance: {strategic_guidance[:100]}...")  # Log first 100 chars of guidance
     llm_logger.debug(f"Final analysis result: {json.dumps(final_result, indent=2)}")
 
-    logging.info(f"Analysis for goal {final_goal_id} finished with action: {final_result['action']}")
+    logging.info(f"Analysis for goal {final_goal_id} finished with action: {action}")
+    logging.info(f"Strategic guidance: {strategic_guidance[:100]}...")  # Log first 100 chars of guidance
     logging.debug(f"Final analysis result: {json.dumps(final_result, indent=2)}")
 
     return final_result
