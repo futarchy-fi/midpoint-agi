@@ -128,7 +128,9 @@ def create_validation_record(goal_id: str, criteria_results: List[Dict[str, Any]
         "score": score,
         "validated_by": "LLM" if auto else os.getenv("USER", "unknown"),
         "automated": auto,
-        "repository_state": repo_state
+        "repository_state": repo_state,
+        "reasoning": next((cr.get("reasoning") for cr in criteria_results if not cr.get("passed", True)), 
+                          "All criteria passed" if score == 1.0 else "Some criteria failed")
     }
     
     return validation_record
@@ -169,7 +171,9 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
                 "last_validated_by": validation_record["validated_by"],
                 "last_git_hash": validation_record["git_hash"],
                 "last_branch": validation_record["branch"],
-                "automated": validation_record["automated"]
+                "automated": validation_record["automated"],
+                "criteria_results": validation_record["criteria_results"],
+                "reasoning": validation_record["reasoning"]
             }
             
             with open(goal_file, 'w') as f:
@@ -330,7 +334,8 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         return {
             "criteria_results": criteria_results,
             "score": validation_result.score,
-            "timestamp": timestamp
+            "timestamp": timestamp,
+            "reasoning": validation_result.reasoning
         }
     except Exception as e:
         if debug:
@@ -339,18 +344,20 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         
         # Return failed validation results
         criteria_results = []
+        error_reason = f"Validation failed due to system error: {str(e)}"
         for criterion in criteria:
             criteria_results.append({
                 "criterion": criterion,
                 "passed": False,
-                "reasoning": f"Validation failed due to error: {str(e)}",
+                "reasoning": error_reason,
                 "evidence": []
             })
         
         return {
             "criteria_results": criteria_results,
             "score": 0.0,
-            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "reasoning": error_reason
         }
 
 
