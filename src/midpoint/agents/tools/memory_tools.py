@@ -522,7 +522,7 @@ def retrieve_recent_memory(memory_hash, char_limit=5000, repo_path=None):
             except Exception as e:
                 logging.warning(f"Memory: Failed to restore original branch: {str(e)}") 
 
-async def get_memory_diff(initial_hash: str, final_hash: str, memory_repo_path: str = None, max_size: int = 50000) -> Dict[str, Any]:
+def get_memory_diff(initial_hash: str, final_hash: str, memory_repo_path: str = None, max_size: int = 50000) -> Dict[str, Any]:
     """
     Get a diff between two memory repository states.
     

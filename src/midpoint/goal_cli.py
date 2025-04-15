@@ -15,12 +15,14 @@ from typing import Optional, List, Dict, Any, Tuple, Union, Set, Callable
 import sys
 import time
 import tempfile
+import shutil
 
 # Local imports (ensure correct relative paths)
 from .agents.models import Goal, SubgoalPlan, TaskContext, ExecutionResult, MemoryState, State
 from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
 from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
-from .agents.tools.git_tools import get_current_hash, get_current_branch
+from .agents.tools.git_tools import get_current_hash, get_current_branch, get_repository_diff
+from .agents.tools.memory_tools import get_memory_diff
 
 # Import validator for automated validation
 from .agents.goal_validator import GoalValidator
@@ -2070,7 +2072,10 @@ def main_command(args):
     elif args.command == "analyze":
         return analyze_goal(args.goal_id, args.human)
     elif args.command == "diff":
-        return show_goal_diffs(args.goal_id)
+        # Use the show_code and show_memory flags if available, otherwise use defaults
+        show_code = getattr(args, 'code', True) or getattr(args, 'complete', False) or not (getattr(args, 'memory', False) or getattr(args, 'complete', False))
+        show_memory = getattr(args, 'memory', False) or getattr(args, 'complete', False)
+        return show_goal_diffs(args.goal_id, show_code=show_code, show_memory=show_memory)
     elif args.command == "revert":
         return revert_goal(args.goal_id)
     else:
@@ -2940,6 +2945,17 @@ def main():
     # goal diff <goal-id>
     diff_parser = subparsers.add_parser("diff", help="Show code and memory diffs for a specific goal")
     diff_parser.add_argument("goal_id", help="ID of the goal to show diffs for")
+    # Add mutually exclusive group for diff modes
+    mode_group = diff_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--code", action="store_true", help="Show only code diff (default)")
+    mode_group.add_argument("--memory", action="store_true", help="Show only memory diff")
+    mode_group.add_argument("--complete", action="store_true", help="Show both code and memory diffs")
+    # Set defaults based on flags
+    diff_parser.set_defaults(func=lambda args: show_goal_diffs(
+                                 args.goal_id,
+                                 show_code=(args.code or args.complete or not (args.memory or args.complete)), # Default to True if no flag set
+                                 show_memory=(args.memory or args.complete)
+                             ))
     
     # goal revert <goal-id>
     revert_parser = subparsers.add_parser("revert", help="Revert a goal's current state back to its initial state")
@@ -3639,82 +3655,163 @@ def run_diff_command(repo_path: str, initial_hash: str, final_hash: str) -> Opti
         return f"Unexpected error during diff in {repo_path}: {e}"
 
 
-def show_goal_diffs(goal_id: str):
-    """Shows the code and memory diffs for a specific goal."""
-    logging.info(f"Showing diffs for goal: {goal_id}")
+def show_goal_diffs(goal_id: str, show_code: bool = True, show_memory: bool = False):
+    """Shows code and/or memory diffs for a specific goal, comparing initial state
+    against both current state and the last execution result if available.
+
+    Args:
+        goal_id: The ID of the goal.
+        show_code: Whether to display the code repository diff.
+        show_memory: Whether to display the memory repository diff.
+    """
+    logging.info(f"Showing diffs for goal: {goal_id} (code: {show_code}, memory: {show_memory})")
     goal_data = load_goal_data(goal_id)
     if not goal_data:
-        return # Error already logged by load_goal_data
+        return # Error already logged
 
     initial_state = goal_data.get("initial_state")
     current_state = goal_data.get("current_state")
+    last_execution = goal_data.get("last_execution_result")
 
-    if not initial_state or not current_state:
-        logging.error(f"Goal {goal_id} is missing initial or current state data.")
+    if not initial_state:
+        logging.error(f"Goal {goal_id} is missing initial state data. Cannot compute diffs.")
         return
 
-    # Extract state information consistently from current_state where possible
+    # --- Extract Initial State Info ---
     initial_git_hash = initial_state.get("git_hash")
-    current_git_hash = current_state.get("git_hash")
-    # Prefer repository_path from current_state, fallback to initial
-    code_repo_path = current_state.get("repository_path") or initial_state.get("repository_path")
-
     initial_memory_hash = initial_state.get("memory_hash")
-    current_memory_hash = current_state.get("memory_hash")
-    # Prefer memory_repository_path from current_state, fallback to initial
-    memory_repo_path = current_state.get("memory_repository_path") or initial_state.get("memory_repository_path")
+    initial_timestamp = initial_state.get('timestamp', 'N/A')
+    # Use initial state paths as baseline, can be overridden by current/execution state if needed
+    base_code_repo_path = initial_state.get("repository_path")
+    base_memory_repo_path = initial_state.get("memory_repository_path")
 
+    # --- Check for State Diff ---
+    state_diff_exists = False
+    current_git_hash = None
+    current_memory_hash = None
+    current_timestamp = 'N/A'
+    state_code_repo_path = base_code_repo_path
+    state_memory_repo_path = base_memory_repo_path
+
+    if current_state:
+        current_git_hash = current_state.get("git_hash")
+        current_memory_hash = current_state.get("memory_hash")
+        current_timestamp = current_state.get('timestamp', 'N/A')
+        # Prefer paths from current_state if available
+        state_code_repo_path = current_state.get("repository_path") or base_code_repo_path
+        state_memory_repo_path = current_state.get("memory_repository_path") or base_memory_repo_path
+
+        if (initial_git_hash and current_git_hash and initial_git_hash != current_git_hash) or \
+           (initial_memory_hash and current_memory_hash and initial_memory_hash != current_memory_hash):
+            state_diff_exists = True
+
+    # --- Check for Execution Diff ---
+    execution_diff_exists = False
+    exec_final_git_hash = None
+    exec_final_memory_hash = None
+    exec_timestamp = 'N/A'
+    # Note: ExecutionResult doesn't store repo paths, assume they are the same as initial/current
+
+    if last_execution:
+        exec_final_git_hash = last_execution.get("final_git_hash")
+        exec_final_memory_hash = last_execution.get("final_memory_hash")
+        exec_timestamp = last_execution.get('timestamp', 'N/A')
+
+        if (initial_git_hash and exec_final_git_hash and initial_git_hash != exec_final_git_hash) or \
+           (initial_memory_hash and exec_final_memory_hash and initial_memory_hash != exec_final_memory_hash):
+            execution_diff_exists = True
+
+    # --- Display Header ---
     print(f"--- Diffs for Goal: {goal_id} ('{goal_data.get('description', 'N/A')}') ---")
-    print(f"Initial State Timestamp: {initial_state.get('timestamp', 'N/A')}")
-    print(f"Current State Timestamp: {current_state.get('timestamp', 'N/A')}")
+    print(f"Initial State Timestamp: {initial_timestamp}")
+    if state_diff_exists:
+         print(f"Current State Timestamp: {current_timestamp}")
+    if execution_diff_exists:
+        print(f"Last Execution Timestamp: {exec_timestamp}")
 
-    # --- Code Diff ---
-    print(f"\n=== Code Repository Diff ({code_repo_path or 'Path unknown'}) ===")
-    print(f"Initial Hash: {initial_git_hash or 'N/A'}")
-    print(f"Final Hash:   {current_git_hash or 'N/A'}")
-    if code_repo_path and initial_git_hash and current_git_hash:
-        code_diff_output = run_diff_command(code_repo_path, initial_git_hash, current_git_hash)
-        print("\n--- Git Diff Output ---")
-        # Check if output is None (error) or empty string/specific message
-        if code_diff_output is None:
-            print("Could not generate code diff due to previous error.")
-        elif code_diff_output == "(No changes)":
-             print(code_diff_output)
-        elif code_diff_output == "(No textual changes detected)":
-             print(code_diff_output)
-        elif "Error:" in code_diff_output: # Check if run_diff_command returned an error message
-             print(code_diff_output)
-        else:
-            print(code_diff_output) # Print the actual diff
-        print("--- End Git Diff ---")
+    # --- Function to print a specific diff type ---
+    def print_diff(diff_type_label: str, start_hash_git: str, end_hash_git: str,
+                     start_hash_mem: str, end_hash_mem: str,
+                     code_repo_path: str, memory_repo_path: str):
+        print(f"\n=== {diff_type_label} ===")
+
+        # Code Diff (Conditional)
+        if show_code:
+            print(f"\n--- Code Repository Diff ({code_repo_path or 'Path unknown'}) --- ")
+            print(f"Initial Hash: {start_hash_git or 'N/A'}")
+            print(f"Final Hash:   {end_hash_git or 'N/A'}")
+            if code_repo_path and start_hash_git and end_hash_git:
+                try:
+                    diff_result = get_repository_diff(code_repo_path, start_hash_git, end_hash_git)
+                    print("\nDiff Output:")
+                    print(diff_result.get("diff_content", "Error: Could not get diff content."))
+                    if diff_result.get("truncated", False):
+                        print("[Diff truncated due to size limit]")
+                except Exception as e:
+                    print(f"\nError generating code diff: {e}")
+            else:
+                print("\nSkipping code diff: Missing repository path or necessary hashes.")
+        elif not show_memory: # If neither is shown, print a message
+             print("\n(Code diff display skipped by flags)")
+
+        # Memory Diff (Conditional)
+        if show_memory:
+            print(f"\n--- Memory Repository Diff ({memory_repo_path or 'Path unknown'}) --- ")
+            print(f"Initial Hash: {start_hash_mem or 'N/A'}")
+            print(f"Final Hash:   {end_hash_mem or 'N/A'}")
+            if memory_repo_path and start_hash_mem and end_hash_mem:
+                try:
+                    diff_result = get_memory_diff(initial_hash=start_hash_mem, final_hash=end_hash_mem, memory_repo_path=memory_repo_path)
+                    print("\nDiff Output (Memory):")
+                    print(diff_result.get("diff_content", "Error: Could not get diff content."))
+                    if diff_result.get("truncated", False):
+                        print("[Diff truncated due to size limit]")
+                except Exception as e:
+                     print(f"\nError generating memory diff: {e}")
+            elif not memory_repo_path:
+                print("\nSkipping memory diff: Memory repository path not configured or found.")
+            else:
+                print("\nSkipping memory diff: Missing necessary memory hashes.")
+        elif not show_code: # If neither is shown, print a message
+             print("\n(Memory diff display skipped by flags)")
+
+        # Only print End Diff if at least one diff was attempted
+        if show_code or show_memory:
+            print("--- End Diff --- ")
+
+    # --- Display Logic ---
+    if state_diff_exists and execution_diff_exists:
+        print("\nShowing both State diff (Initial vs Current) and Execution diff (Initial vs Last Execution).")
+        print_diff("State Diff (Initial vs Current)",
+                   initial_git_hash, current_git_hash,
+                   initial_memory_hash, current_memory_hash,
+                   state_code_repo_path, state_memory_repo_path)
+        print_diff("Execution Diff (Initial vs Last Execution)",
+                   initial_git_hash, exec_final_git_hash,
+                   initial_memory_hash, exec_final_memory_hash,
+                   base_code_repo_path, base_memory_repo_path) # Use base paths for execution diff
+    elif state_diff_exists:
+        print("\nShowing State diff (Initial vs Current). No different execution result found.")
+        print_diff("State Diff (Initial vs Current)",
+                   initial_git_hash, current_git_hash,
+                   initial_memory_hash, current_memory_hash,
+                   state_code_repo_path, state_memory_repo_path)
+    elif execution_diff_exists:
+        print("\nShowing Execution diff (Initial vs Last Execution). State hashes have not changed.")
+        print_diff("Execution Diff (Initial vs Last Execution)",
+                   initial_git_hash, exec_final_git_hash,
+                   initial_memory_hash, exec_final_memory_hash,
+                   base_code_repo_path, base_memory_repo_path) # Use base paths for execution diff
     else:
-        print("\nSkipping code diff: Missing repository path or hashes.")
+        print("\nNo differences found between initial state, current state, and last execution result hashes.")
+        # Optionally show the hashes for confirmation
+        print(f"  Initial Hashes: Git={initial_git_hash or 'N/A'}, Memory={initial_memory_hash or 'N/A'}")
+        if current_state:
+            print(f"  Current Hashes: Git={current_git_hash or 'N/A'}, Memory={current_memory_hash or 'N/A'}")
+        if last_execution:
+            print(f"  Execution Hashes: Git={exec_final_git_hash or 'N/A'}, Memory={exec_final_memory_hash or 'N/A'}")
 
-    # --- Memory Diff ---
-    print(f"\n=== Memory Repository Diff ({memory_repo_path or 'Path unknown'}) ===")
-    print(f"Initial Hash: {initial_memory_hash or 'N/A'}")
-    print(f"Final Hash:   {current_memory_hash or 'N/A'}")
-    if memory_repo_path and initial_memory_hash and current_memory_hash:
-        memory_diff_output = run_diff_command(memory_repo_path, initial_memory_hash, current_memory_hash)
-        print("\n--- Git Diff Output (Memory) ---")
-        # Check if output is None (error) or empty string/specific message
-        if memory_diff_output is None:
-            print("Could not generate memory diff due to previous error.")
-        elif memory_diff_output == "(No changes)":
-             print(memory_diff_output)
-        elif memory_diff_output == "(No textual changes detected)":
-             print(memory_diff_output)
-        elif "Error:" in memory_diff_output: # Check if run_diff_command returned an error message
-             print(memory_diff_output)
-        else:
-            print(memory_diff_output) # Print the actual diff
-        print("--- End Git Diff (Memory) ---")
-    elif not memory_repo_path:
-         print("\nSkipping memory diff: Memory repository path not configured or found in goal state.")
-    else: # Has path but missing hashes
-        print("\nSkipping memory diff: Missing initial or final memory hash.")
-
-    print("\n--- End Diffs ---")
+    print("\n--- End Diffs --- ")
 
 
 if __name__ == "__main__":
