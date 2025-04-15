@@ -136,12 +136,21 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
     
     # Try to get memory state (optional)
     memory_hash = None
+    # Use ~/.midpoint/memory as default if MEMORY_REPO_PATH not set
     memory_repo_path = os.environ.get("MEMORY_REPO_PATH")
+    if not memory_repo_path:
+        # Expand ~ to user's home directory
+        memory_repo_path = os.path.expanduser("~/.midpoint/memory")
+        logging.info(f"MEMORY_REPO_PATH not set, using default: {memory_repo_path}")
+        # Create directory if it doesn't exist
+        os.makedirs(memory_repo_path, exist_ok=True)
+        
     if memory_repo_path and os.path.exists(memory_repo_path):
         try:
             memory_hash = get_current_hash(memory_repo_path)
         except Exception as e:
             logging.warning(f"Could not get initial memory hash: {e}")
+            # Still use the path even if we can't get the hash
     
     initial_state_data = {
         "git_hash": current_hash,

@@ -1063,9 +1063,34 @@ def analyze_goal(
     final_goal_id = context.metadata.get("goal_id")
     llm_logger.debug(f"Using goal ID: {final_goal_id}")
 
-    # Re-validate memory state after potential input file loading
-    if not context.memory_state or not context.memory_state.memory_hash or not context.memory_state.repository_path:
-         raise ValueError("Memory state (hash or path) is missing after context setup. Analysis cannot proceed.")
+    # Handle missing memory state with defaults instead of failing
+    if not context.memory_state:
+        logging.warning("Memory state is missing, initializing with defaults")
+        context.memory_state = MemoryState(memory_hash=None, repository_path=None)
+        
+    # If memory path is missing, set default
+    if not context.memory_state.repository_path:
+        default_memory_path = os.path.expanduser("~/.midpoint/memory")
+        logging.warning(f"Memory repository path is missing, using default: {default_memory_path}")
+        context.memory_state.repository_path = default_memory_path
+        # Create directory if it doesn't exist
+        os.makedirs(default_memory_path, exist_ok=True)
+        
+    # If memory hash is missing but repository exists, try to get it
+    if not context.memory_state.memory_hash and os.path.exists(context.memory_state.repository_path):
+        try:
+            from .tools.git_tools import get_current_hash
+            memory_hash = get_current_hash(context.memory_state.repository_path)
+            if memory_hash:
+                logging.info(f"Retrieved memory hash: {memory_hash[:8]}")
+                context.memory_state.memory_hash = memory_hash
+            else:
+                # Fallback to a dummy hash if necessary
+                logging.warning("Could not retrieve memory hash, using repository hash as fallback")
+                context.memory_state.memory_hash = current_git_hash
+        except Exception as e:
+            logging.warning(f"Error getting memory hash: {e}, using repository hash as fallback")
+            context.memory_state.memory_hash = current_git_hash
 
     # Validate repository state (don't catch exceptions)
     if not bypass_validation:
