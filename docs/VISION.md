@@ -51,7 +51,7 @@ The system consists of five specialized agents, each with a distinct role in the
 
 **Outputs**:
 - Analysis result containing:
-  - Recommended action (decompose, create_task, validate, mark_complete, update_parent, give_up)
+  - Recommended action (decompose, execute, validate, mark_complete, update_parent, give_up)
   - Detailed justification for the action
   - Relevant context for the next step
 

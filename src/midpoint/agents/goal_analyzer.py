@@ -260,7 +260,7 @@ Your Analysis Steps:
        c) Some children tasks are completed and validated, but remaining work is still complex
        d) Previous decomposition attempts were unsuccessful and a new approach is needed
     
-    - "create_task": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
+    - "execute": Recommended only when the remaining work is very specific, straightforward, and can be completed in a single atomic step.
     
     - "validate": Recommended only when sufficient children tasks have been completed AND successfully validated, to potentially satisfy all the requirements for the goal.
     
@@ -275,7 +275,7 @@ Your Analysis Steps:
 
 4. OUTPUT: Provide your decision as a JSON object containing ONLY the "action" (string) and "justification" (string) fields.
    The justification MUST be detailed. For `decompose`, explain *what specific aspects* make the goal too complex for a single task.
-   For `create_task`, explain *why* it's simple enough.
+   For `execute`, explain *why* it's simple enough.
    For `give_up`, explain *what went wrong or why the goal is impossible/irrelevant* (e.g., required tools unavailable, repeated failures, description ambiguous).
 
 Available Tools (for observation only):
@@ -889,10 +889,10 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
             prompt_lines.append("This goal has FAILED VALIDATION with a score below the success threshold.")
             prompt_lines.append("Review the detailed Validation Status section above.")
             prompt_lines.append("Focus specifically on the failed criteria and their reasoning to understand what needs to be fixed.")
-            prompt_lines.append("If the issues are specific and straightforward to fix, recommend 'create_task' with a clear justification of what needs to be fixed.")
+            prompt_lines.append("If the issues are specific and straightforward to fix, recommend 'execute' with a clear justification of what needs to be fixed.")
             prompt_lines.append("If the validation failure indicates fundamental flaws requiring a new approach, recommend 'decompose' with justification.")
         
-        prompt_lines.append("\nFor goals with no children, carefully consider if `create_task` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
+        prompt_lines.append("\nFor goals with no children, carefully consider if `execute` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
         prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
 
         final_prompt = "\n".join(prompt_lines)

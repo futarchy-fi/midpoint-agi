@@ -2982,13 +2982,13 @@ def main():
     
     # Add new subparser for analyzing a goal
     analyze_parser = subparsers.add_parser("analyze", 
-                                   help="Analyze a goal and suggest next steps (decompose, create_task, validate, etc.)",
+                                   help="Analyze a goal and suggest next steps (decompose, execute, validate, etc.)",
                                    description="""
 Intelligent analysis of a goal's current state to determine the best next action.
 Analysis considers child goals/tasks status, validation results, and remaining work.
 Primarily recommends "decompose" for complex goals that need further breakdown,
 or "validate" when enough children have been successfully completed to potentially
-satisfy all requirements. Other possible recommendations include "create_task" for
+satisfy all requirements. Other possible recommendations include "execute" for
 simple remaining work, "mark_complete", "update_parent", or "give_up" in special cases.
                                    """)
     analyze_parser.add_argument("goal_id", help="ID of the goal to analyze")
@@ -3452,7 +3452,7 @@ def analyze_goal(goal_id, human_mode):
     - "decompose": When goal needs new subgoals/subtasks. This is the default for most
       incomplete complex goals, including cases where previous tasks failed validation
       or when there's significant work remaining after some completed tasks.
-    - "create_task": Only for very specific, straightforward remaining work that can be
+    - "execute": Only for very specific, straightforward remaining work that can be
       completed in a single atomic step.
     - "validate": Only when sufficient children tasks have been completed AND
       successfully validated, to confirm all requirements have been met.
