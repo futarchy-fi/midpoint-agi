@@ -34,8 +34,8 @@ async def call_t1_memory_diff():
         print(f"  final_hash: {final_hash}")
         print(f"  memory_repo_path: {memory_repo_path}")
         
-        # Get the memory diff
-        diff_result = await get_memory_diff(
+        # Get the memory diff - removed await since get_memory_diff is synchronous
+        diff_result = get_memory_diff(
             initial_hash=initial_hash,
             final_hash=final_hash,
             memory_repo_path=memory_repo_path

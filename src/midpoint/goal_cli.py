@@ -1760,7 +1760,10 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
                     memory_hash=initial_state["memory_hash"],
                     repository_path=initial_state["memory_repository_path"]
                 )
-                logging.info(f"Using memory state from task file - hash: {initial_state['memory_hash'][:8]}")
+                if initial_state["memory_hash"]:  # Add null check here
+                    logging.info(f"Using memory state from task file - hash: {initial_state['memory_hash'][:8]}")
+                else:
+                    logging.info("Memory hash is None in task file")
         
         # Create task context
         context = TaskContext(
