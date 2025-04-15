@@ -239,12 +239,14 @@ Context Provided:
 Your Analysis Steps:
 1. OBSERVE: Carefully review all the provided context. Pay special attention to:
    - Last execution status and any failures
+   - Validation status and any failed validation criteria
    - Failed attempts history
    - Available tools and their capabilities
    - Parent goal context and requirements
 
 2. ORIENT: Assess the goal's progress and feasibility. Consider:
    - Is the goal complete?
+   - Did the goal pass validation? If not, what specific criteria failed and why?
    - Is the current state significantly different from the initial state?
    - Are children complete?
    - Does the memory suggest recent failures or successes?
@@ -815,6 +817,54 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         else:
             prompt_lines.append("No specific last execution status recorded.")
 
+        # Validation Status - Add detailed validation information for better analysis
+        prompt_lines.append("\n## Validation Status")
+        validation_status = goal_data.get('validation_status')
+        if validation_status and isinstance(validation_status, dict):
+            prompt_lines.append(f"Last Validated: {validation_status.get('last_validated', 'Unknown')}")
+            
+            # Get score and format as percentage
+            score = validation_status.get('last_score')
+            if score is not None:
+                score_pct = score * 100  # Convert to percentage
+                prompt_lines.append(f"Validation Score: {score_pct:.1f}% (Threshold: {goal_data.get('success_threshold', 80):.1f}%)")
+            else:
+                prompt_lines.append("Validation Score: Not available")
+                
+            prompt_lines.append(f"Validated By: {validation_status.get('last_validated_by', 'Unknown')}")
+            prompt_lines.append(f"Git Hash at Validation: {validation_status.get('last_git_hash', 'Unknown')}")
+            
+            # Include overall reasoning
+            reasoning = validation_status.get('reasoning')
+            if reasoning:
+                prompt_lines.append(f"Validation Reasoning: {reasoning}")
+            
+            # Include detailed criteria results
+            criteria_results = validation_status.get('criteria_results')
+            if criteria_results and isinstance(criteria_results, list):
+                prompt_lines.append("\nDetailed Validation Criteria Results:")
+                for i, result in enumerate(criteria_results, 1):
+                    passed = result.get('passed', False)
+                    status_icon = "✅" if passed else "❌"
+                    criterion = result.get('criterion', f"Criterion {i}")
+                    prompt_lines.append(f"  {status_icon} {criterion}")
+                    
+                    # For failed criteria, show reasoning and evidence
+                    if not passed:
+                        reasoning = result.get('reasoning')
+                        if reasoning:
+                            prompt_lines.append(f"    Reason for failure: {reasoning}")
+                        
+                        evidence = result.get('evidence')
+                        if evidence and isinstance(evidence, list):
+                            prompt_lines.append(f"    Evidence:")
+                            for item in evidence:
+                                prompt_lines.append(f"      - {item}")
+            else:
+                prompt_lines.append("No detailed validation criteria results available.")
+        else:
+            prompt_lines.append("No validation results available for this goal.")
+
         # --- 5. Code Inspection ---
         llm_logger.debug("Performing code inspection for relevant files")
         prompt_lines.append("\n## Code Inspection")
@@ -828,7 +878,21 @@ IMPORTANT: Return ONLY raw JSON, like {{\"action\": \"decompose\", \"justificati
         prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
         prompt_lines.append("If necessary, use tools to observe the current state further.")
         prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
-        prompt_lines.append("For goals with no children, carefully consider if `create_task` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
+        
+        # Add specific instructions for handling failed validations
+        validation_status = goal_data.get('validation_status', {})
+        validation_score = validation_status.get('last_score')
+        success_threshold = goal_data.get('success_threshold', 0.8)
+        
+        if validation_score is not None and validation_score < success_threshold:
+            prompt_lines.append("\nIMPORTANT VALIDATION FAILURE INSTRUCTIONS:")
+            prompt_lines.append("This goal has FAILED VALIDATION with a score below the success threshold.")
+            prompt_lines.append("Review the detailed Validation Status section above.")
+            prompt_lines.append("Focus specifically on the failed criteria and their reasoning to understand what needs to be fixed.")
+            prompt_lines.append("If the issues are specific and straightforward to fix, recommend 'create_task' with a clear justification of what needs to be fixed.")
+            prompt_lines.append("If the validation failure indicates fundamental flaws requiring a new approach, recommend 'decompose' with justification.")
+        
+        prompt_lines.append("\nFor goals with no children, carefully consider if `create_task` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
         prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
 
         final_prompt = "\n".join(prompt_lines)
