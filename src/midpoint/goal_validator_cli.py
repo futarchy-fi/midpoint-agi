@@ -169,7 +169,7 @@ async def validate_goal_cli(goal_id: str,
                 print(f"Memory diff: {goal_metadata['initial_memory_hash'][:7]} → {goal_metadata['final_memory_hash'][:7]}")
         
         # Validate the goal
-        validation_result = await validator.validate_execution(goal, execution_result)
+        validation_result = validator.validate_execution(goal, execution_result)
         
         # Create validation record
         from midpoint.validation import create_validation_record, save_validation_record

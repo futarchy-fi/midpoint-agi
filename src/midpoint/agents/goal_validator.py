@@ -15,7 +15,7 @@ import os
 import random
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 from midpoint.agents.models import Goal, ExecutionResult, CriterionResult, ValidationResult, State
 from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
@@ -99,7 +99,7 @@ class GoalValidator:
             raise ValueError("Invalid OpenAI API key format")
             
         # Initialize OpenAI client
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
         
         # Store the model name
         self.model = model
@@ -237,7 +237,7 @@ class GoalValidator:
                     score=0.0,
                     validated_by="LLM",
                     automated=True,
-                    repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                    repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path, description="Repository state at validation failure") if current_hash != "unknown" else None,
                     reasoning="Could not extract valid JSON from LLM response"
                 )
 
@@ -297,7 +297,7 @@ class GoalValidator:
                 validated_by="LLM",
                 automated=True,
                 # Provide the state as observed *before* LLM interaction
-                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path, description="Repository state at validation time") if current_hash != "unknown" else None,
                 reasoning=reasoning
             )
 
@@ -323,7 +323,7 @@ class GoalValidator:
                 score=0.0,
                 validated_by="System", # System error, not LLM error
                 automated=True,
-                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path, description="Repository state at validation error") if current_hash != "unknown" else None,
                 reasoning=f"Automated validation failed with exception: {str(e)}"
             )
     
@@ -711,17 +711,47 @@ class GoalValidator:
         # Store the complete conversation including tools for context saving
         self.last_validation_messages = response
         
-        # Extract response from LLM
-        if response and len(response) > 0:
-            assistant_message = next((msg for msg in response if msg["role"] == "assistant"), None)
-            # The final message might just be the JSON, or could be preceded by tool calls
-            # We return the content of the *last* assistant message assuming it holds the final JSON
-            if assistant_message and assistant_message.get("content"):
-                return assistant_message.get("content", "")
-            else:
-                # If the last message has no content (e.g., only tool calls), return empty
-                logging.warning("Final assistant message had no content.")
-                return ""
+        # Debug: Log types and structure
+        logging.debug(f"Response type: {type(response)}, length: {len(response) if isinstance(response, list) else 'N/A'}")
+        
+        # First try to get the content from the last message in response
+        if response and isinstance(response, list) and len(response) > 0:
+            # Try to find the last assistant message with content
+            for msg in reversed(response):
+                if isinstance(msg, dict):
+                    logging.debug(f"Examining message: {msg.get('role')}, has content: {bool(msg.get('content'))}")
+                    if msg.get('role') == 'assistant' and msg.get('content'):
+                        logging.debug(f"Found assistant message with content")
+                        return msg.get('content')
+        
+            # If we didn't find an assistant message with content, try any message with content
+            for msg in reversed(response):
+                if isinstance(msg, dict) and msg.get('content'):
+                    logging.debug(f"Found message with content, role: {msg.get('role')}")
+                    return msg.get('content')
+                    
+            # If we still don't have content, check if there's any message with 'content' attribute
+            for msg in reversed(response):
+                if hasattr(msg, 'content') and msg.content:
+                    logging.debug(f"Found message object with content attribute")
+                    return msg.content
+
+            logging.warning("No message with content found in the response")
+            
+            # Attempt to parse tool_calls for raw LLM text
+            if tool_calls and len(tool_calls) > 0:
+                logging.debug(f"Checking {len(tool_calls)} tool calls for potential content")
+                for tc in tool_calls:
+                    if isinstance(tc, dict) and tc.get('tool') == 'text_response':
+                        logging.debug(f"Found text_response in tool usage")
+                        return tc.get('args', {}).get('content', '')
+                        
+            logging.warning("Final assistant message had no content.")
+            return json.dumps({
+                "criteria_results": [],
+                "score": 0.0,
+                "reasoning": "Validation failed: No message content found in LLM response."
+            })
         
         # If we get here, something went wrong, no response list or empty
         logging.warning("No response messages received from LLM interaction.")

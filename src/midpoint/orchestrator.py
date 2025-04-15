@@ -162,7 +162,7 @@ class Orchestrator:
                     validation_criteria=subgoal_plan.validation_criteria,
                     success_threshold=0.8
                 )
-                validation_result = await self.validator.validate_execution(
+                validation_result = self.validator.validate_execution(
                     goal=subgoal,
                     execution_result=execution_result
                 )

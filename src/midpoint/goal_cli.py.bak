@@ -33,6 +33,8 @@ from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
 # Import the new parent update functions
 from .goal_operations.goal_update import propagate_success_state_to_parent, propagate_failure_history_to_parent
 
+from .agents.goal_validator import GoalValidator # Import the validator
+
 # Configure basic logging
 logging.basicConfig(
     level=logging.INFO,
@@ -2022,9 +2024,11 @@ def main_command(args):
         return execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
     elif args.command == "solve":
         return handle_solve_command(args)
+    # --- START EDIT: Add handler for validate command ---
     elif args.command == "validate":
-        from .validation import handle_validate_goal
-        return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
+        # Use asyncio.run to execute the async validation handler
+        return asyncio.run(handle_validate_command(args)) 
+    # --- END EDIT ---
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -3823,6 +3827,159 @@ def show_goal_diffs(goal_id: str, show_code: bool = True, show_memory: bool = Fa
             print(f"  Execution Hashes: Git={exec_final_git_hash or 'N/A'}, Memory={exec_final_memory_hash or 'N/A'}")
 
     print("\n--- End Diffs --- ")
+
+
+# --- START: New Function to Handle Validation Command ---
+async def handle_validate_command(args):
+    """Handles the logic for the 'goal validate' command."""
+    goal_id = args.goal_id
+    debug = args.debug
+    quiet = args.quiet
+    auto_mode = args.auto  # Use a different variable name to avoid conflict with 'auto' keyword
+    
+    if not quiet:
+        print(f"--- Attempting validation for goal: {goal_id} ---")
+
+    goal_data = load_goal_data(goal_id)
+    if not goal_data:
+        print(f"ERROR: Goal {goal_id} not found.", file=sys.stderr)
+        return False
+
+    # Check if goal is already complete
+    if goal_data.get("complete", False):
+        if not quiet:
+            print(f"Warning: Goal {goal_id} is already marked as complete.")
+            # Optionally add a prompt here to ask user if they want to re-validate
+            # For now, we'll proceed with validation anyway
+
+    if not auto_mode:
+        print("Manual validation mode is not fully implemented yet.")
+        print("Please use --auto flag for automated validation.")
+        # Placeholder: Implement manual validation prompts/checks if needed
+        # For now, just return or perhaps show criteria
+        print("\nValidation Criteria:")
+        for criterion in goal_data.get("validation_criteria", []):
+            print(f"- {criterion}")
+        return True # Indicate command ran, but didn't perform auto-validation
+
+    # --- Automated Validation Logic ---
+    if not quiet:
+        print("Starting automated validation...")
+    
+    try:
+        # Prepare Goal object (using current state from file)
+        repo_path = os.getcwd() # Assume current directory
+        initial_state_data = goal_data.get("initial_state", {})
+        current_state_data = goal_data.get("current_state", {})
+        
+        initial_git_hash = initial_state_data.get("git_hash")
+        initial_memory_hash = initial_state_data.get("memory_hash")
+        current_git_hash = current_state_data.get("git_hash")
+        current_memory_hash = current_state_data.get("memory_hash")
+        branch_name = current_state_data.get("branch_name") or get_current_branch() # Fallback to live branch
+
+        if not current_git_hash:
+             print(f"ERROR: Final git_hash not found in goal's current_state for {goal_id}. Cannot validate.", file=sys.stderr)
+             return False
+
+        goal = Goal(
+            id=goal_id,
+            description=goal_data.get("description", ""),
+            validation_criteria=goal_data.get("validation_criteria", []),
+            success_threshold=goal_data.get("success_threshold", 0.8), # Use a default threshold
+            initial_state=State(\
+                repository_path=initial_state_data.get("repository_path", repo_path),\
+                description=initial_state_data.get("description", "Initial state for validation"),
+                git_hash=initial_state_data.get("git_hash"),
+                memory_hash=initial_state_data.get("memory_hash"),git_hash=initial_state_data.get("git_hash"),
+                repository_path=initial_state_data.get("repository_path"),
+                branch_name=initial_state_data.get("branch_name")
+            ) if initial_state_data else None,
+            current_state=State(
+                git_hash=current_state_data.get("git_hash"),
+                memory_hash=current_state_data.get("memory_hash"),
+                repository_path=current_state_data.get("repository_path"),
+                memory_repository_path=current_state_data.get("memory_repository_path"),
+                branch_name=current_state_data.get("branch_name")
+            ) if current_state_data else None,
+            # Add other necessary Goal fields if needed by validator
+        )
+
+        # Prepare mock ExecutionResult
+        execution_result = ExecutionResult(
+            success=True, # Assume success to trigger validation
+            repository_path=repo_path,
+            branch_name=branch_name,
+            git_hash=current_git_hash, 
+            task_id='', # Not relevant for direct validation
+            goal_id=goal_id,
+            error_message=None,
+            final_state=goal.current_state # Pass the current state
+        )
+
+        # Instantiate and run validator
+        validator = GoalValidator(model=args.model) # Pass model from args
+        # NOTE: Assuming validate_execution is async on master branch based on prior analysis
+        validation_result_obj = await validator.validate_execution(goal, execution_result) 
+
+        # Process and save results
+        timestamp = validation_result_obj.timestamp # Get timestamp from result object
+        validation_status_data = {
+            "last_validated": timestamp,
+            "last_score": validation_result_obj.score,
+            "last_validated_by": validation_result_obj.validated_by,
+            "last_git_hash": validation_result_obj.repository_state.git_hash if validation_result_obj.repository_state else current_git_hash,
+            "last_branch": validation_result_obj.repository_state.branch_name if validation_result_obj.repository_state else branch_name,
+            "automated": auto_mode,
+            # Optionally store detailed criteria results here if desired
+        }
+        
+        goal_data["validation_status"] = validation_status_data
+        # Optionally update goal's 'complete' status based on score vs threshold?
+        # goal_data["complete"] = validation_result_obj.score >= goal.success_threshold
+
+        if not save_goal_data(goal_id, goal_data):
+             print(f"ERROR: Failed to save updated validation status to goal file {goal_id}.json", file=sys.stderr)
+             # Continue to print results even if save failed
+        
+        # Print results
+        if not quiet:
+            print(f"\nAutomated Validation Results for Goal {goal_id}:")
+            score = validation_result_obj.score
+            criteria_results = validation_result_obj.criteria_results
+            passed_count = sum(1 for res in criteria_results if res.passed)
+            total_count = len(criteria_results)
+
+            print(f"  Overall Score: {score:.2%} ({passed_count}/{total_count} criteria passed)")
+            print(f"  Validated By: {validation_status_data['last_validated_by']}")
+            print(f"  Timestamp: {timestamp}")
+            print(f"  Git Hash: {validation_status_data['last_git_hash'][:8]}")
+            print(f"  Branch: {validation_status_data['last_branch']}")
+
+            print("\n  Criteria Details:")
+            if not criteria_results:
+                    print("    No criteria results found.")
+            else:
+                    for i, res in enumerate(criteria_results, 1):
+                        criterion = res.criterion
+                        passed = res.passed
+                        reasoning = res.reasoning
+                        print(f"    {i}. [{ '✅' if passed else '❌' }] {criterion}")
+                        if not passed or debug:
+                            print(f"       Reasoning: {reasoning}")
+                            evidence = res.evidence
+                            if evidence:
+                                print(f"       Evidence: {evidence}")
+            print("\nValidation record saved to goal file.")
+
+        return True # Indicate success
+
+    except Exception as e:
+        print(f"CRITICAL ERROR during automated validation for {goal_id}: {e}", file=sys.stderr)
+        logging.exception("Automated validation failed") # Log full traceback
+        return False
+
+# --- END: New Function ---
 
 
 if __name__ == "__main__":

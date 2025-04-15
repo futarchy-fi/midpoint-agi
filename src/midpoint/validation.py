@@ -21,6 +21,9 @@ from midpoint.goal_cli import (
 # Import agents for automated validation
 from midpoint.agents.goal_validator import GoalValidator
 
+# Import necessary classes from midpoint.agents.models
+from midpoint.agents.models import Goal, ExecutionResult, State
+
 
 # Function to ensure the validation history directory exists
 def ensure_validation_history_dir():
@@ -234,9 +237,6 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
     current_hash = repo_state["current_hash"]
     branch_name = repo_state["current_branch"]
     
-    # Create a Goal object from the goal data
-    from midpoint.agents.models import Goal, ExecutionResult, State
-    
     # Get memory repository path and hash information
     memory_repo_path = None
     memory_hash = None
@@ -272,13 +272,15 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
             git_hash=goal_data.get("initial_state", {}).get("git_hash"),
             memory_hash=initial_memory_hash,
             repository_path=repo_path,
-            memory_repository_path=memory_repo_path
+            memory_repository_path=memory_repo_path,
+            description=goal_data.get("description", "Initial state")
         ),
         current_state=State(
             git_hash=current_hash,
             memory_hash=memory_hash,
             repository_path=repo_path,
-            memory_repository_path=memory_repo_path
+            memory_repository_path=memory_repo_path,
+            description=goal_data.get("description", "Current state")
         )
     )
     
@@ -300,7 +302,7 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
             print(f"Validating goal: {goal_data.get('description', '')}")
             print(f"Validation criteria: {len(criteria)}")
         
-        validation_result = await validator.validate_execution(goal, execution_result)
+        validation_result = validator.validate_execution(goal, execution_result)
         
         # Generate timestamp for file naming
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -411,4 +413,87 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
         
     except Exception as e:
         logging.error(f"Failed to validate goal {goal_id}: {e}")
-        return False, {} 
+        return False, {}
+
+
+def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> bool:
+    """
+    Synchronous wrapper for the validate_goal function.
+    
+    Args:
+        goal_id: ID of the goal to validate
+        debug: Whether to show debug output
+        quiet: Whether to only show warnings and result
+        auto: Whether to use automated LLM validation
+        
+    Returns:
+        bool: True if validation was successful, False otherwise
+    """
+    import asyncio
+    
+    try:
+        # Configure logging based on args
+        if debug:
+            logging.basicConfig(level=logging.DEBUG)
+        elif quiet:
+            logging.basicConfig(level=logging.WARNING)
+        else:
+            logging.basicConfig(level=logging.INFO)
+            
+        success, result = asyncio.run(validate_goal(goal_id, debug, quiet, auto))
+        
+        # Handle the validation result
+        if success:
+            if not auto:
+                # Handle manual validation (user interaction needed)
+                print(f"Manual validation needed for goal {goal_id}")
+                # TODO: Implement manual validation UI here
+                return True
+            else:
+                # Display automated validation results
+                print(f"\nAutomated Validation Results for Goal {goal_id}:")
+                
+                if not result:
+                    print("ERROR: Validation reported success but returned empty result dictionary.")
+                    return False
+                    
+                score = result.get("score", 0.0)
+                criteria_results = result.get("criteria_results", [])
+                passed_count = sum(1 for res in criteria_results if res.get("passed"))
+                total_count = len(criteria_results)
+                
+                print(f"  Overall Score: {score:.2%} ({passed_count}/{total_count} criteria passed)")
+                print(f"  Validated By: {result.get('validated_by', 'Unknown')}")
+                print(f"  Timestamp: {result.get('timestamp', 'N/A')}")
+                print(f"  Git Hash: {result.get('git_hash', 'N/A')[:8] if result.get('git_hash') else 'N/A'}")
+                
+                # Print detailed criteria results if not in quiet mode
+                if not quiet:
+                    print("\n  Criteria Details:")
+                    if not criteria_results:
+                        print("    No criteria results found.")
+                    else:
+                        for i, res in enumerate(criteria_results, 1):
+                            criterion = res.get("criterion", "Unknown Criterion")
+                            passed = res.get("passed", False)
+                            reasoning = res.get("reasoning", "No reasoning provided.")
+                            print(f"    {i}. {'✅' if passed else '❌'} {criterion}")
+                            if not passed or debug:
+                                print(f"       Reasoning: {reasoning}")
+                                evidence = res.get("evidence", [])
+                                if evidence:
+                                    print(f"       Evidence: {evidence}")
+                
+                print("\nValidation record saved.")
+                return True
+        else:
+            print(f"ERROR: Validation process failed for goal {goal_id}. Check logs for details.")
+            return False
+            
+    except Exception as e:
+        print(f"CRITICAL ERROR during validation: {e}", file=sys.stderr)
+        if debug:
+            import traceback
+            traceback.print_exc()
+        logging.exception("Validation failed")
+        return False 
