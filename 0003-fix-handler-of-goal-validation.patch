@@ -1,0 +1,154 @@
+From 0729e1eed9a1baf9cb1efc0e23dab8c891b52480 Mon Sep 17 00:00:00 2001
+From: krandder <azsantos.k@gmail.com>
+Date: Mon, 14 Apr 2025 17:13:36 -0700
+Subject: [PATCH 3/7] fix handler of goal validation
+
+---
+ src/midpoint/goal_cli.py | 119 ++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 110 insertions(+), 9 deletions(-)
+
+diff --git a/src/midpoint/goal_cli.py b/src/midpoint/goal_cli.py
+index 9a18254..89749ca 100644
+--- a/src/midpoint/goal_cli.py
++++ b/src/midpoint/goal_cli.py
+@@ -2019,16 +2019,113 @@ def get_child_tasks(parent_id):
+ 
+ def main_command(args):
+     """Async entry point for CLI commands."""
+-    # Handle async commands
+-    if args.command == "decompose":
+-        return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
+-    elif args.command == "execute":
+-        return execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+-    elif args.command == "solve":
++    # Handle async commands first (as they might need the loop)
++    if args.command == "solve":
++        # solve command handles its own async management internally
+         return handle_solve_command(args)
+-    
+-    # All other commands are synchronous, so just call them directly
+-    if args.command == "new":
++    elif args.command == "decompose": # Assuming decompose_goal might become async
++        # If decompose_goal becomes async, use asyncio.run
++        # For now, assume it might be sync based on current structure
++        try:
++            # Assuming decompose_goal is sync based on its definition
++            result = decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
++            print(json.dumps(result, indent=2))
++            return result
++        except Exception as e:
++            logging.error(f"Error during decompose: {e}", exc_info=True)
++            return None
++    elif args.command == "execute": # Assuming execute_task might become async
++        # If execute_task becomes async, use asyncio.run
++        # For now, assume it might be sync based on its definition
++        try:
++            # Assuming execute_task is sync based on its definition
++            result = execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
++            print(json.dumps(result, indent=2))
++            return result
++        except Exception as e:
++            logging.error(f"Error during execute: {e}", exc_info=True)
++            return None
++    # ADDED VALIDATE COMMAND HANDLING
++    elif args.command == "validate":
++        if not args.auto:
++            logging.error("Manual validation not yet implemented via this command. Use --auto flag.")
++            # In the future, could call a manual validation flow here
++            return None
++        
++        original_branch = None
++        try:
++            # Get current branch using subprocess for CLI robustness
++            result = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, check=True, cwd=".")
++            original_branch = result.stdout.strip()
++            logging.info(f"Starting validation on branch: '{original_branch}'")
++        except Exception as e:
++            logging.warning(f"Could not determine current branch before validation: {e}. Branch cleanup may not occur.")
++            original_branch = None # Ensure it's None if detection failed
++
++        validation_result_dict = None
++        try:
++            # Call the async validate_goal function using asyncio.run
++            # Pass necessary args - assuming args.goal_id, args.debug, args.quiet, args.auto exist
++            validation_success, validation_result_dict = asyncio.run(validate_goal(
++                goal_id=args.goal_id,
++                debug=args.debug,
++                quiet=args.quiet,
++                auto=args.auto
++            ))
++
++            if validation_success and validation_result_dict:
++                logging.info(f"Validation completed for {args.goal_id}.")
++                print("\n--- Validation Results ---")
++                score = validation_result_dict.get('score', 'N/A')
++                reasoning = validation_result_dict.get('reasoning', 'No overall reasoning provided.')
++                print(f"Overall Score: {score:.2f}" if isinstance(score, float) else f"Overall Score: {score}")
++                print(f"Overall Reasoning: {reasoning}")
++                print("\nCriteria:")
++                for i, cr in enumerate(validation_result_dict.get('criteria_results', []), 1):
++                    passed_str = "PASSED" if cr.get('passed') else "FAILED"
++                    print(f"  {i}. [{passed_str}] {cr.get('criterion', 'Unknown')}")
++                    print(f"     Reasoning: {cr.get('reasoning', 'N/A')}")
++                    if cr.get('evidence'):
++                         print(f"     Evidence: {cr.get('evidence')}")
++                print("------------------------")
++            else:
++                logging.error(f"Validation process failed for goal {args.goal_id}. See logs for details.")
++                # Attempt to print partial results if available
++                if isinstance(validation_result_dict, dict) and validation_result_dict:
++                     print(f"Partial/Error Result: {json.dumps(validation_result_dict, indent=2)}")
++
++        except Exception as e:
++            logging.error(f"An error occurred during the validation process: {e}", exc_info=True)
++        finally:
++            # --- Branch Cleanup Logic ---            
++            if original_branch:
++                try:
++                    result = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, check=True, cwd=".")
++                    current_branch_after = result.stdout.strip()
++                    
++                    if current_branch_after != original_branch:
++                        logging.warning(f"Validation left repository on branch '{current_branch_after}'. Attempting to restore '{original_branch}'...")
++                        try:
++                             restore_result = subprocess.run(
++                                 ["git", "checkout", original_branch],
++                                 capture_output=True, text=True, check=True, cwd="."
++                             )
++                             logging.info(f"Successfully restored original branch '{original_branch}'.")
++                        except subprocess.CalledProcessError as checkout_error:
++                            logging.error(f"CRITICAL: Failed to restore original branch '{original_branch}'! Error: {checkout_error.stderr}")
++                            print(f"\nWARNING: Failed to checkout original branch '{original_branch}'. Please check manually.", file=sys.stderr)
++                    else:
++                        logging.info(f"Validation finished on the original branch: '{original_branch}'.")
++                except Exception as cleanup_error:
++                    logging.error(f"CRITICAL: Error during branch cleanup check/restore: {cleanup_error}")
++                    print(f"\nWARNING: Error during branch cleanup for '{original_branch}'. Please check manually.", file=sys.stderr)
++            else:
++                logging.warning("Could not determine original branch; skipping cleanup check.")
++        # Return the result dictionary or None
++        return validation_result_dict
++
++    # --- Existing synchronous commands --- 
++    elif args.command == "new":
+         return create_new_goal(args.description)
+     elif args.command == "sub":
+         return create_new_subgoal(args.parent_id, args.description)
+@@ -2065,10 +2162,14 @@ def main_command(args):
+     elif args.command == "update-parent":
+         return handle_update_parent_command(args)
+     elif args.command == "validate-history":
++        # Assuming show_validation_history is synchronous
+         return show_validation_history(args.goal_id, args.debug, args.quiet)
+     elif args.command == "analyze":
++        # Assuming analyze_goal is synchronous
+         return analyze_goal(args.goal_id, args.human)
+     else:
++        logging.error(f"Unknown command: {args.command}")
++        # Optionally print help or suggest commands
+         return None
+ 
+ 
+-- 
+2.39.5 (Apple Git-154)
+

@@ -6,7 +6,6 @@ task execution results. It MUST NOT contain any task-specific logic or hardcoded
 All validation decisions should be made by the LLM at runtime.
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -15,13 +14,11 @@ from typing import List, Dict, Any, Optional, Tuple
 import os
 import random
 from pathlib import Path
-import subprocess
 
 from openai import AsyncOpenAI
 
 from midpoint.agents.models import Goal, ExecutionResult, CriterionResult, ValidationResult, State
 from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
-from midpoint.agents.tools.memory_tools import get_memory_diff
 from .tools import (
     list_directory,
     read_file,
@@ -30,8 +27,6 @@ from .tools import (
     web_search,
     web_scrape
 )
-# Import validate_repository_state from goal_decomposer
-from .goal_decomposer import validate_repository_state
 from .tools.processor import ToolProcessor
 from .tools.registry import ToolRegistry
 from .config import get_openai_api_key
@@ -39,33 +34,42 @@ from .config import get_openai_api_key
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# System prompt for the validator
+# System prompt for the validator - MODIFIED
 VALIDATION_SYSTEM_PROMPT = """
 You are the Goal Validator, an expert at verifying whether a goal's validation criteria have been met.
 
-Your task is to analyze the evidence provided and determine if each validation criterion has been met.
-You should look for concrete evidence in the repository changes and any other information provided.
+Your task is to determine if the work done for a goal meets its validation criteria.
+Follow an OODA loop:
 
-Be precise and objective in your assessment. Clearly explain your reasoning for each criterion.
-You should provide specific evidence from the diffs or other sources to support your conclusions.
+1.  **OBSERVE:** You will be given the initial and potentially final state hashes (git and memory). Use available tools (`run_terminal_cmd`, `read_file`, potentially others) to:
+    *   Verify you are on the correct git branch specified in the execution result.
+    *   Get the repository diff (`git diff <initial_hash> <final_hash> | cat`).
+    *   Get the memory diff (e.g., using `git diff` in the memory repo if applicable, or by reading relevant files if needed).
+    *   Read specific files if needed to understand the changes related to the criteria.
 
-YOUR RESPONSE MUST BE A VALID JSON OBJECT with this exact structure:
-{
-    "criteria_results": [
-        {
-            "criterion": "string",
-            "passed": boolean,
-            "reasoning": "string",
-            "evidence": ["string"]
-        }
-    ],
-    "score": float,
-    "reasoning": "string"
-}
+2.  **ORIENT:** Analyze the evidence gathered (diffs, file contents) in relation to the goal's validation criteria.
 
-Do not include any explanatory text before or after the JSON object.
-Just output the JSON structure directly.
-If you cannot properly validate, still return a valid JSON object with appropriate failure messages.
+3.  **DECIDE:** For each validation criterion, determine if the evidence shows it has been met. Be precise and objective.
+
+4.  **OUTPUT:** Provide ONLY a valid JSON object with this exact structure:
+    {
+        "criteria_results": [
+            {
+                "criterion": "string",
+                "passed": boolean,
+                "reasoning": "string",
+                "evidence": ["string"] // Specific references to diffs or file contents
+            }
+        ],
+        "score": float, // Overall score 0.0-1.0 based on passed criteria
+        "reasoning": "string" // Overall reasoning for the score
+    }
+
+IMPORTANT:
+- Base your validation ONLY on the changes between the initial and final states provided.
+- Cite specific evidence from the diffs or files you examined.
+- Do not include any explanatory text before or after the JSON object.
+- If you cannot gather necessary evidence with tools (e.g., tool error, insufficient info), reflect this failure in the reasoning and mark relevant criteria as failed.
 """
 
 class GoalValidator:
@@ -76,7 +80,7 @@ class GoalValidator:
     - Remain completely task-agnostic
     - Not contain any hardcoded validation rules
     - Delegate all validation decisions to the LLM
-    - Use the provided tools to gather evidence for validation
+    - Let the LLM use tools to gather evidence for validation
 
     As outlined in the VISION.md document, this validator:
     1. Evaluates whether a subgoal has been successfully achieved
@@ -107,56 +111,17 @@ class GoalValidator:
         self.last_validation_messages = None
         
         # System prompt for the LLM that will make all validation decisions
-        self.system_prompt = """You are a goal validation agent responsible for evaluating execution results.
-Your role is to:
-1. Check if execution was successful
-2. Validate changes against goal criteria
-3. Provide detailed reasoning for validation decisions
-4. Calculate a validation score
-
-IMPORTANT: You must be thorough and objective in your validation. Your job is to ensure that each validation criterion 
-has been properly satisfied. Be specific in your reasoning and cite concrete evidence rather than making general statements.
-
-For each validation criterion:
-1. Use the available tools to gather evidence about the changes
-2. Analyze the repository and memory diffs to find relevant changes
-3. Examine how the changes relate to the specific validation criterion
-4. Determine if the changes satisfy the criterion
-5. Provide clear reasoning with specific references to parts of the diffs
-
-When analyzing diffs:
-- Look for file additions, modifications, and deletions
-- Check file content changes and their relationship to the criteria
-- Examine memory documents that were added or modified
-- Consider both the quantity and quality of changes
-
-Focus on the SPECIFIC CHANGES that occurred from initial to final state, not just the final state in isolation.
-Your validation must explicitly reference evidence from the diffs when available.
-
-Your response must be in JSON format with these fields:
-{
-    "criteria_results": [
-        {
-            "criterion": "string",
-            "passed": boolean,
-            "reasoning": "string",
-            "evidence": ["string"]  // Specific references to parts of the diffs
-        }
-    ],
-    "overall_score": float,  // Between 0 and 1
-    "overall_reasoning": "string"
-}"""
+        self.system_prompt = VALIDATION_SYSTEM_PROMPT # Use updated prompt
 
         # Get tools from registry
         self.tools = ToolRegistry.get_tool_schemas()
 
-    async def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
+    def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
         """
         Validate execution results against a goal using LLM.
         
-        This method takes a goal and execution result and validates the execution
-        results against the goal using an LLM. This method handles repository
-        state validation and content validation.
+        NOTE: This synchronous method relies on its caller providing an asyncio event loop
+        because it internally calls async helper functions/tools.
         
         Args:
             goal: The goal to validate
@@ -175,275 +140,96 @@ Your response must be in JSON format with these fields:
                 validated_by="System",
                 automated=True,
                 repository_state=None,
+                reasoning="Execution reported as failed."
             )
         
-        # Validate repository state
-        repo_info = {}
+        # Get current state information to provide context to the LLM
+        current_repo_path = execution_result.repository_path
+        current_branch = "unknown"
+        current_hash = "unknown"
         try:
-            current_branch = await get_current_branch(execution_result.repository_path)
-            if current_branch != execution_result.branch_name:
-                logging.info(f"Current branch {current_branch} does not match execution branch {execution_result.branch_name}")
-                # Try to switch to correct branch using subprocess
-                try:
-                    proc = subprocess.run(
-                        ["git", "checkout", execution_result.branch_name],
-                        cwd=execution_result.repository_path,
-                        capture_output=True,
-                        text=True
-                    )
-                    if proc.returncode == 0:
-                        logging.info(f"Switched to branch {execution_result.branch_name}")
-                    else:
-                        raise ValueError(f"Failed to checkout branch: {proc.stderr}")
-                except Exception as e:
-                    logging.error(f"Failed to switch to branch {execution_result.branch_name}: {e}")
-                    # Return failed validation
-                    return ValidationResult(
-                        goal_id=goal.id,
-                        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-                        criteria_results=[],
-                        score=0.0,
-                        validated_by="System",
-                        automated=True,
-                        repository_state=None,
-                    )
-        
-            # Get repository info
-            current_hash = await get_current_hash(execution_result.repository_path)
-            repo_info = {
-                "git_hash": current_hash,
-                "branch_name": current_branch,
-                "repository_path": execution_result.repository_path,
-                "description": "Goal validation state"
-            }
+            # Call async helper directly, relies on caller's loop
+            current_branch = get_current_branch(current_repo_path)
+            # Call async helper directly, relies on caller's loop
+            current_hash = get_current_hash(current_repo_path)
+            logging.info(f"Current state for validation: Branch='{current_branch}', Hash='{current_hash[:8]}'")
         except Exception as e:
-            logging.error(f"Failed to get repository info: {e}")
-        
-        # Get any diffs between initial and final states
-        repo_diff = "No repository changes detected"
-        try:
-            if (hasattr(goal, 'initial_state') and goal.initial_state and 
-                hasattr(goal.initial_state, 'git_hash') and goal.initial_state.git_hash):
-                initial_hash = goal.initial_state.git_hash
-                # Using a different approach to get the diff since get_diff is not available
-                proc = subprocess.run(
-                    ["git", "diff", initial_hash, current_hash],
-                    cwd=execution_result.repository_path,
-                    capture_output=True,
-                    text=True
-                )
-                if proc.returncode == 0:
-                    repo_diff = proc.stdout if proc.stdout.strip() else "No repository changes detected"
-                    
-                    # Auto-fail if repo diff is too large (over 100KB)
-                    if len(repo_diff) > 100000:
-                        logging.warning(f"Repository diff is too large ({len(repo_diff)} bytes). Auto-failing validation.")
-                        failed_criteria = []
-                        for criterion in goal.validation_criteria:
-                            failed_criteria.append(
-                                CriterionResult(
-                                    criterion=criterion,
-                                    passed=False,
-                                    reasoning="Validation failed due to repository changes being too large to validate",
-                                    evidence=["Repository diff exceeded maximum size (100KB)"]
-                                )
-                            )
-                        return ValidationResult(
-                            goal_id=goal.id,
-                            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-                            criteria_results=failed_criteria,
-                            score=0.0,
-                            validated_by="System",
-                            automated=True,
-                            repository_state=State(**repo_info) if repo_info else None,
-                            reasoning="Repository changes were too large to validate"
-                        )
-        except Exception as e:
-            logging.error(f"Failed to get repo diff: {e}")
-            repo_diff = f"Error getting repository diff: {str(e)}"
-        
-        memory_diff_content = "No memory changes detected"
-        memory_diff_files = []
-        try:
-            if (hasattr(goal, 'initial_state') and goal.initial_state and 
-                hasattr(goal.initial_state, 'memory_hash') and goal.initial_state.memory_hash and
-                hasattr(goal, 'current_state') and goal.current_state and
-                hasattr(goal.current_state, 'memory_hash') and goal.current_state.memory_hash):
-                memory_diff = await get_memory_diff(goal.initial_state.memory_hash, 
-                                            goal.current_state.memory_hash,
-                                            execution_result.repository_path)
-                
-                if memory_diff:
-                    memory_diff_content = memory_diff.get('diff_content', 'No memory changes detected')
-                    memory_diff_files = memory_diff.get('changed_files', [])
-                    
-                    # If memory hashes are different but no changes detected, something's wrong
-                    # Add details about the changed files
-                    if (memory_diff_content == "No memory changes detected" or not memory_diff_content.strip()) and \
-                       goal.initial_state.memory_hash != goal.current_state.memory_hash:
-                        logging.warning(f"Memory hashes differ ({goal.initial_state.memory_hash} vs {goal.current_state.memory_hash}) but no diff content found")
-                        
-                        # Get the content of any changed files
-                        if memory_diff_files:
-                            memory_repo_path = memory_diff.get('memory_repo_path', execution_result.repository_path)
-                            additional_content = ["Memory hashes differ but standard diff shows no changes. Showing file contents instead:"]
-                            
-                            for file_path in memory_diff_files:
-                                try:
-                                    # Save current state
-                                    current_branch = await get_current_branch(memory_repo_path)
-                                    
-                                    # Try to checkout the final hash to read files
-                                    checkout_proc = subprocess.run(
-                                        ["git", "checkout", goal.current_state.memory_hash],
-                                        cwd=memory_repo_path,
-                                        capture_output=True,
-                                        text=True
-                                    )
-                                    
-                                    if checkout_proc.returncode == 0:
-                                        # Try to read the file content
-                                        file_full_path = os.path.join(memory_repo_path, file_path)
-                                        if os.path.exists(file_full_path):
-                                            with open(file_full_path, 'r') as f:
-                                                file_content = f.read()
-                                            additional_content.append(f"\n--- FILE: {file_path} ---\n{file_content}")
-                                    
-                                    # Restore original branch
-                                    subprocess.run(
-                                        ["git", "checkout", current_branch],
-                                        cwd=memory_repo_path,
-                                        capture_output=True,
-                                        text=True
-                                    )
-                                except Exception as file_error:
-                                    logging.error(f"Error reading changed file {file_path}: {file_error}")
-                                    additional_content.append(f"Error reading {file_path}: {str(file_error)}")
-                        
-                            if len(additional_content) > 1:  # If we have any file content
-                                memory_diff_content = "\n".join(additional_content)
-            
-                    # Auto-fail if memory diff is too large (over 100KB)
-                    if len(memory_diff_content) > 100000:
-                        logging.warning(f"Memory diff is too large ({len(memory_diff_content)} bytes). Auto-failing validation.")
-                        failed_criteria = []
-                        for criterion in goal.validation_criteria:
-                            failed_criteria.append(
-                                CriterionResult(
-                                    criterion=criterion,
-                                    passed=False,
-                                    reasoning="Validation failed due to memory changes being too large to validate",
-                                    evidence=["Memory diff exceeded maximum size (100KB)"]
-                                )
-                            )
-                        return ValidationResult(
-                            goal_id=goal.id,
-                            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-                            criteria_results=failed_criteria,
-                            score=0.0,
-                            validated_by="System",
-                            automated=True,
-                            repository_state=State(**repo_info) if repo_info else None,
-                            reasoning="Memory changes were too large to validate"
-                        )
-        except Exception as e:
-            logging.error(f"Failed to get memory diff: {e}")
-            memory_diff_content = f"Error getting memory diff: {str(e)}"
-        
-        # If memory hashes are different but no diff content, fail validation immediately
-        if (hasattr(goal, 'initial_state') and goal.initial_state and 
-            hasattr(goal.initial_state, 'memory_hash') and goal.initial_state.memory_hash and
-            hasattr(goal, 'current_state') and goal.current_state and
-            hasattr(goal.current_state, 'memory_hash') and goal.current_state.memory_hash and
-            goal.initial_state.memory_hash != goal.current_state.memory_hash and
-            (memory_diff_content == "No memory changes detected" or memory_diff_content.startswith("Error getting memory diff"))):
-            
-            logging.error(f"Memory hash changed from {goal.initial_state.memory_hash} to {goal.current_state.memory_hash} but diffs could not be obtained correctly")
-            
-            # Auto-fail validation
-            failed_criteria = []
-            for criterion in goal.validation_criteria:
-                failed_criteria.append(
-                    CriterionResult(
-                        criterion=criterion,
-                        passed=False,
-                        reasoning="Validation failed because memory diffs could not be obtained correctly",
-                        evidence=[f"Memory hash changed from {goal.initial_state.memory_hash} to {goal.current_state.memory_hash} but diff tools failed to show changes"]
-                    )
-                )
-            return ValidationResult(
-                goal_id=goal.id,
-                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
-                criteria_results=failed_criteria,
-                score=0.0,
-                validated_by="System",
-                automated=True,
-                repository_state=State(**repo_info) if repo_info else None,
-                reasoning="Memory diffs could not be obtained correctly"
-            )
-        
-        # Prepare context for LLM
+            logging.error(f"Failed to get initial repository state: {e}")
+            # Proceed, but LLM will need to verify/handle this
+
+        # Extract initial state info from the goal object
+        initial_git_hash = None
+        initial_memory_hash = None
+        if hasattr(goal, 'initial_state') and goal.initial_state:
+            initial_git_hash = getattr(goal.initial_state, 'git_hash', None)
+            initial_memory_hash = getattr(goal.initial_state, 'memory_hash', None)
+
+        # Extract current memory hash from the goal object (if available)
+        current_memory_hash = None
+        if hasattr(goal, 'current_state') and goal.current_state:
+             current_memory_hash = getattr(goal.current_state, 'memory_hash', None)
+        # Fallback to execution result if not on goal
+        if not current_memory_hash and execution_result.final_state:
+             current_memory_hash = getattr(execution_result.final_state, 'memory_hash', None)
+
+        # Prepare the user prompt for the LLM
+        prompt_lines = [
+            f"Please validate the goal: '{goal.description}'",
+            "Based on the changes between the initial and current states.",
+            "\n**Goal Details:**",
+            f"- Description: {goal.description}",
+            f"- Validation Criteria:",
+        ]
+        prompt_lines.extend([f"  - {c}" for c in goal.validation_criteria])
+
+        prompt_lines.append("\n**State Information:**")
+        prompt_lines.append(f"- Target Branch: {execution_result.branch_name}") # Branch LLM should be on
+        prompt_lines.append(f"- Initial Git Hash: {initial_git_hash or 'Not specified'}")
+        prompt_lines.append(f"- Final Git Hash: {current_hash}") # The hash LLM should currently see
+        prompt_lines.append(f"- Initial Memory Hash: {initial_memory_hash or 'Not specified'}")
+        prompt_lines.append(f"- Final Memory Hash: {current_memory_hash or 'Not specified'}")
+        prompt_lines.append(f"- Repository Path: {current_repo_path}")
+        # We might need to provide memory repo path if it's separate and needed for tools
+        # memory_repo_path = ... # How to get this reliably? Assume tools can infer for now or add if needed.
+
+        prompt_lines.append("\n**Instructions:**")
+        prompt_lines.append("1. Verify you are on the target git branch using tools.")
+        prompt_lines.append("2. Use tools to get the repository diff between the initial and final git hashes.")
+        prompt_lines.append("3. Use tools to investigate memory changes between the initial and final memory hashes (e.g., diff or reading files)." if initial_memory_hash and current_memory_hash else "3. No memory comparison needed or possible.")
+        prompt_lines.append("4. Analyze the gathered evidence against the validation criteria.")
+        prompt_lines.append("5. Provide your assessment in the required JSON format.")
+
+        user_prompt = "\n".join(prompt_lines)
+
         messages = [
-            {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
-            {"role": "user", "content": f"""
-You are tasked with validating whether the execution results match the goal criteria.
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
 
-### Goal
-{goal.description}
-
-### Validation Criteria
-{json.dumps(goal.validation_criteria, indent=2)}
-
-### Evidence
-
-#### Repository Changes
-```diff
-{repo_diff}
-```
-
-#### Memory Repository Changes
-```diff
-{memory_diff_content}
-```
-
-#### Memory Changed Files
-{json.dumps(memory_diff_files, indent=2) if memory_diff_files else "No files changed in memory"}
-
-{additional_evidence_section}
-
-Evaluate the evidence above to determine if the goal's validation criteria are met. 
-Do not perform any new actions or tool calls to satisfy the criteria.
-Only validate based on the evidence provided from previous execution.
-"""
-        },
-    ]
-        
-        # Store the messages for later saving
+        # Store the messages for later saving (consider if this is still needed/useful)
         self.last_validation_messages = messages
-        
+
         try:
-            # Use the LLM to validate the goal
-            validation_response = await self._validate_with_tools(goal, messages)
-            
+            # Use the LLM to perform validation, allowing tool use
+            validation_response_content = self._validate_with_tools(goal, messages)
+
             # Log the raw response for debugging
-            logging.info(f"Raw validation response (first 200 chars): {validation_response[:200] if validation_response else 'empty'}")
-            
-            # Extract criteria_results from validation_response and convert to ValidationResult
-            criteria_data = self._extract_validation_json(validation_response)
-            
+            logging.info(f"Raw validation response (first 200 chars): {validation_response_content[:200] if validation_response_content else 'empty'}")
+
+            # Extract criteria_results from validation_response
+            criteria_data = self._extract_validation_json(validation_response_content)
+
             if not criteria_data or "criteria_results" not in criteria_data:
-                logging.error("No validation criteria results found in response")
-                # Return failed validation with error message
-                failed_criteria = []
-                for criterion in goal.validation_criteria:
-                    failed_criteria.append(
-                        CriterionResult(
-                            criterion=criterion,
-                            passed=False,
-                            reasoning=f"Validation failed due to error: Could not extract valid JSON from LLM response",
-                            evidence=[]
-                        )
-                    )
+                logging.error("No valid validation criteria results found in LLM response")
+                # Create a generic failure if JSON is invalid
+                failed_criteria = [
+                    CriterionResult(
+                        criterion=c,
+                        passed=False,
+                        reasoning="Validation failed: Could not parse valid JSON from LLM response.",
+                        evidence=[f"Raw response: {validation_response_content[:200]}..."]
+                    ) for c in goal.validation_criteria
+                ]
                 return ValidationResult(
                     goal_id=goal.id,
                     timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -451,33 +237,57 @@ Only validate based on the evidence provided from previous execution.
                     score=0.0,
                     validated_by="LLM",
                     automated=True,
-                    repository_state=State(**repo_info) if repo_info else None,
+                    repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                    reasoning="Could not extract valid JSON from LLM response"
                 )
-                
+
             # Create criterion results from validation data
             criteria_results = []
+            all_criteria_found = True
+            goal_criteria_set = set(goal.validation_criteria)
+            response_criteria_set = set()
             for criteria in criteria_data.get("criteria_results", []):
+                criterion_text = criteria.get("criterion", "")
+                response_criteria_set.add(criterion_text)
                 criteria_results.append(
                     CriterionResult(
-                        criterion=criteria.get("criterion", ""),
+                        criterion=criterion_text,
                         passed=criteria.get("passed", False),
                         reasoning=criteria.get("reasoning", ""),
                         evidence=criteria.get("evidence", [])
                     )
                 )
-                
+            # Check if LLM missed any criteria
+            missing_criteria = goal_criteria_set - response_criteria_set
+            if missing_criteria:
+                all_criteria_found = False
+                for criterion in missing_criteria:
+                    criteria_results.append(
+                        CriterionResult(
+                            criterion=criterion,
+                            passed=False,
+                            reasoning="Validation failed: LLM did not provide an assessment for this criterion.",
+                            evidence=[]
+                        )
+                    )
+
             # Calculate score
-            score = criteria_data.get("score", 0.0)
-            if score > 1.0:  # Normalize score if it's given as percentage
-                score = score / 100.0
-                
-            if score == 0.0 and criteria_results:
-                # Calculate score based on passed criteria if not provided
+            score = criteria_data.get("score", criteria_data.get("overall_score")) # Try both keys
+            reasoning = criteria_data.get("reasoning", criteria_data.get("overall_reasoning", ""))
+
+            # If score is missing or invalid, recalculate based on results
+            if score is None or not isinstance(score, (float, int)):
+                logging.warning("Score missing or invalid in LLM response, recalculating.")
                 passed_count = sum(1 for cr in criteria_results if cr.passed)
                 total_count = len(criteria_results)
-                if total_count > 0:
-                    score = passed_count / total_count
-            
+                score = (passed_count / total_count) if total_count > 0 else 0.0
+            elif score > 1.0: # Normalize score if it's given as percentage
+                score = score / 100.0
+
+            # Add note about missing criteria to reasoning if needed
+            if not all_criteria_found:
+                reasoning += f"\nNote: LLM did not evaluate all criteria ({len(missing_criteria)} missing)."
+
             # Return validation result
             return ValidationResult(
                 goal_id=goal.id,
@@ -486,10 +296,13 @@ Only validate based on the evidence provided from previous execution.
                 score=score,
                 validated_by="LLM",
                 automated=True,
-                repository_state=State(**repo_info) if repo_info else None,
+                # Provide the state as observed *before* LLM interaction
+                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                reasoning=reasoning
             )
+
         except Exception as e:
-            logging.error(f"Error during automated validation: {e}")
+            logging.error(f"Error during automated validation: {e}", exc_info=True) # Add traceback
             # Create failed criteria results for each validation criterion
             failed_criteria = []
             for criterion in goal.validation_criteria:
@@ -497,7 +310,7 @@ Only validate based on the evidence provided from previous execution.
                     CriterionResult(
                         criterion=criterion,
                         passed=False,
-                        reasoning=f"Validation failed due to error: {str(e)}",
+                        reasoning=f"Validation failed due to system error: {str(e)}",
                         evidence=[]
                     )
                 )
@@ -508,9 +321,10 @@ Only validate based on the evidence provided from previous execution.
                 timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
                 criteria_results=failed_criteria,
                 score=0.0,
-                validated_by="LLM",
+                validated_by="System", # System error, not LLM error
                 automated=True,
-                repository_state=State(**repo_info) if repo_info else None,
+                repository_state=State(git_hash=current_hash, branch_name=current_branch, repository_path=current_repo_path) if current_hash != "unknown" else None,
+                reasoning=f"Automated validation failed with exception: {str(e)}"
             )
     
     def _generate_criterion_reasoning(self, criterion: str, passed: bool, evidence: List[str]) -> str:
@@ -556,9 +370,12 @@ Only validate based on the evidence provided from previous execution.
         
         return "\n".join(reasoning)
 
-    async def validate_goal(self, goal_path: str, repository_path: str = ".") -> ValidationResult:
+    def validate_goal(self, goal_path: str, repository_path: str = ".") -> ValidationResult:
         """
         Validate a goal using a dummy execution result.
+        
+        NOTE: This synchronous method relies on its caller providing an asyncio event loop
+        for the internal calls to async helpers and self.validate_execution.
         
         Args:
             goal_path: Path to the goal JSON file
@@ -580,48 +397,80 @@ Only validate based on the evidence provided from previous execution.
             initial_memory_hash = initial_state.get('memory_hash')
             initial_timestamp = initial_state.get('timestamp')
             
+            # Use current_state hash from goal file as the definitive 'final' hash
             current_git_hash = current_state.get('git_hash')
             current_memory_hash = current_state.get('memory_hash')
             current_timestamp = current_state.get('timestamp')
-            
-            # Log hashes for debugging
-            logging.debug(f"Initial hash: {initial_git_hash}")
-            logging.debug(f"Current hash: {current_git_hash}")
-            
+
+            if not current_git_hash:
+                logging.warning(f"Current git hash not found in goal file {goal_path}, attempting to get from repo.")
+                current_git_hash = get_current_hash(repository_path)
+            if not current_git_hash:
+                 raise ValueError(f"Could not determine current git hash for validation from {goal_path} or repository.")
+
+            logging.debug(f"Using Initial Git Hash: {initial_git_hash}")
+            logging.debug(f"Using Final Git Hash:   {current_git_hash}")
+            logging.debug(f"Using Initial Mem Hash: {initial_memory_hash}")
+            logging.debug(f"Using Final Mem Hash:   {current_memory_hash}")
+
+            # Get the branch name associated with the current state hash
+            # This might require a separate lookup or be stored in the goal file?
+            # For now, fetch from the repo, assuming we're on the right branch.
+            current_branch_name = get_current_branch(repository_path)
+            logging.debug(f"Assuming current branch is: {current_branch_name}")
+
             # Create Goal object
             goal = Goal(
                 id=goal_data.get('goal_id', ''),
                 description=goal_data.get('description', ''),
                 validation_criteria=goal_data.get('validation_criteria', []),
-                success_threshold=80.0,  # Default threshold
+                success_threshold=goal_data.get("success_threshold", 80.0),
                 initial_state=State(
                     git_hash=initial_git_hash,
                     memory_hash=initial_memory_hash,
                     timestamp=initial_timestamp
                 ),
-                current_state=State(
+                current_state=State( # Pass current state from goal file
                     git_hash=current_git_hash,
                     memory_hash=current_memory_hash,
                     timestamp=current_timestamp
                 )
             )
             
-            # Create dummy execution result
+            # Create ExecutionResult reflecting the state defined in the goal file
             execution_result = ExecutionResult(
-                success=True,
+                success=True, # Assume success to trigger validation
                 repository_path=repository_path,
-                branch_name=get_current_branch(repository_path),
-                git_hash=current_git_hash,
+                branch_name=current_branch_name, # Branch associated with final state
+                git_hash=current_git_hash,    # Final hash
                 task_id='',
                 goal_id=goal_data.get('goal_id', ''),
-                error_message=None
+                error_message=None,
+                # Include final state based on goal file's current_state
+                final_state=State(
+                    git_hash=current_git_hash,
+                    memory_hash=current_memory_hash,
+                    timestamp=current_timestamp,
+                    repository_path=repository_path,
+                    branch_name=current_branch_name
+                )
             )
             
-            # Validate execution
-            return await self.validate_execution(goal, execution_result)
+            # Validate execution (sync call)
+            return self.validate_execution(goal, execution_result)
         except Exception as e:
-            logging.error(f"Error validating goal: {e}")
-            raise
+            logging.error(f"Error validating goal: {e}", exc_info=True)
+            # Return a structured error
+            return ValidationResult(
+                 goal_id=goal_path, # Use path as fallback ID
+                 timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                 criteria_results=[],
+                 score=0.0,
+                 validated_by="System",
+                 automated=True,
+                 repository_state=None,
+                 reasoning=f"Failed to set up validation for {goal_path}: {str(e)}"
+             )
 
     def _extract_validation_json(self, content: str) -> dict:
         """
@@ -835,9 +684,13 @@ Only validate based on the evidence provided from previous execution.
         logging.warning("No valid JSON validation response could be processed")
         return {"criteria_results": []} 
 
-    async def _validate_with_tools(self, goal: Goal, messages: List[Dict[str, str]]) -> str:
+    # Keep this method synchronous
+    def _validate_with_tools(self, goal: Goal, messages: List[Dict[str, str]]) -> str:
         """
         Use LLM with tools to validate a goal.
+        
+        NOTE: This synchronous method relies on its caller providing an asyncio event loop
+        for the internal call to self.tool_processor.run_llm_with_tools.
         
         Args:
             goal: The goal to validate
@@ -846,10 +699,11 @@ Only validate based on the evidence provided from previous execution.
         Returns:
             The response content from the LLM
         """
-        logging.info(f"Validating goal {goal.id} with LLM")
+        logging.info(f"Validating goal {goal.id} with LLM using tools")
         
         # Run LLM with tools
-        response, tool_calls = await self.tool_processor.run_llm_with_tools(
+        # Call async tool processor directly, relies on caller's loop
+        response, tool_calls = self.tool_processor.run_llm_with_tools(
             messages=messages,
             model=self.model
         )
@@ -860,46 +714,19 @@ Only validate based on the evidence provided from previous execution.
         # Extract response from LLM
         if response and len(response) > 0:
             assistant_message = next((msg for msg in response if msg["role"] == "assistant"), None)
+            # The final message might just be the JSON, or could be preceded by tool calls
+            # We return the content of the *last* assistant message assuming it holds the final JSON
             if assistant_message and assistant_message.get("content"):
                 return assistant_message.get("content", "")
+            else:
+                # If the last message has no content (e.g., only tool calls), return empty
+                logging.warning("Final assistant message had no content.")
+                return ""
         
-        # If we didn't get a content response but got tool calls instead, report an error
-        if tool_calls:
-            logging.warning("Validator used tools instead of validating based on provided evidence")
-            
-            # Create a description of tools used, for debugging purposes
-            tool_descriptions = []
-            for i, tool_call in enumerate(tool_calls):
-                if tool_call.get("tool") and tool_call.get("args"):
-                    tool_name = tool_call.get("tool")
-                    args = tool_call.get("args", {})
-                    tool_descriptions.append(f"Used tool: {tool_name} with arguments: {json.dumps(args)}")
-            
-            # Return a validation response indicating tool usage isn't valid for validation
-            return json.dumps({
-                "criteria_results": [
-                    {
-                        "criterion": "Validation based on evidence",
-                        "passed": False,
-                        "reasoning": "The validator attempted to use tools instead of validating based on the provided evidence",
-                        "evidence": tool_descriptions
-                    }
-                ],
-                "score": 0.0,
-                "reasoning": "Validation should examine the provided evidence, not execute tools"
-            })
-        
-        # If we get here, we have neither content nor tool calls to work with
-        logging.warning("No content or tool calls in LLM response")
+        # If we get here, something went wrong, no response list or empty
+        logging.warning("No response messages received from LLM interaction.")
         return json.dumps({
-            "criteria_results": [
-                {
-                    "criterion": "Valid response required",
-                    "passed": False,
-                    "reasoning": "No content or tool calls in LLM response",
-                    "evidence": ["LLM did not provide a meaningful response"]
-                }
-            ],
+            "criteria_results": [],
             "score": 0.0,
-            "reasoning": "Validation failed due to empty LLM response"
+            "reasoning": "Validation failed: No response received from LLM."
         }) 
