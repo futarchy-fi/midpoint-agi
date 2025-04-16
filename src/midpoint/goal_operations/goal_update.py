@@ -54,6 +54,9 @@ def propagate_success_state_to_parent(child_id: str) -> bool:
     validated child goal/task to its parent goal.
     Assumes the child's state represents the desired state for the parent
     after the child's successful completion.
+    
+    Also updates the parent's completed_subgoals list to track which child goals
+    have been completed, with validation details.
     """
     logging.info(f"Attempting to propagate success state from child {child_id} to parent.")
     child_data = _load_goal_data(child_id)
@@ -83,8 +86,89 @@ def propagate_success_state_to_parent(child_id: str) -> bool:
     parent_data["current_state"] = child_state
     parent_data["last_updated_by_child"] = child_id
     parent_data["last_update_timestamp"] = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+    
+    # Create or update the completed_subgoals list
+    if "completed_subgoals" not in parent_data or not isinstance(parent_data["completed_subgoals"], list):
+        parent_data["completed_subgoals"] = []
+    
+    # Check if this child is already in the completed_subgoals list
+    child_already_tracked = False
+    for i, entry in enumerate(parent_data["completed_subgoals"]):
+        if isinstance(entry, dict) and entry.get("subgoal_id") == child_id:
+            # Update the existing entry with latest information
+            child_already_tracked = True
+            parent_data["completed_subgoals"][i] = {
+                "subgoal_id": child_id,
+                "description": child_data.get("description", ""),
+                "completion_time": child_data.get("completion_time") or child_data.get("completion_timestamp") or datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "validation_status": child_data.get("validation_status", {}),
+                "final_state": {
+                    "git_hash": child_state.get("git_hash", ""),
+                    "memory_hash": child_state.get("memory_hash", "")
+                }
+            }
+            break
+    
+    # If not already tracked, add it to the list
+    if not child_already_tracked:
+        parent_data["completed_subgoals"].append({
+            "subgoal_id": child_id,
+            "description": child_data.get("description", ""),
+            "completion_time": child_data.get("completion_time") or child_data.get("completion_timestamp") or datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "validation_status": child_data.get("validation_status", {}),
+            "final_state": {
+                "git_hash": child_state.get("git_hash", ""),
+                "memory_hash": child_state.get("memory_hash", "")
+            }
+        })
+    
+    # For backward compatibility, update completed_tasks/merged_subgoals if they exist
+    # but don't create them if they don't exist
+    if "completed_tasks" in parent_data and isinstance(parent_data["completed_tasks"], list):
+        # Check if this child is already in completed_tasks
+        task_exists = False
+        for task in parent_data["completed_tasks"]:
+            if isinstance(task, dict) and task.get("task_id") == child_id:
+                task_exists = True
+                break
+        
+        # If not, add it for backward compatibility
+        if not task_exists:
+            parent_data["completed_tasks"].append({
+                "task_id": child_id,
+                "description": child_data.get("description", ""),
+                "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "final_state": {
+                    "git_hash": child_state.get("git_hash", ""),
+                    "memory_hash": child_state.get("memory_hash", "")
+                }
+            })
+    
+    # Update completion status counters for better tracking
+    parent_data["completed_subgoal_count"] = len(parent_data["completed_subgoals"])
+    total_children = len(_get_children_ids(parent_id))
+    parent_data["total_subgoal_count"] = total_children
+    
     return _save_goal_data(parent_id, parent_data)
+
+# Helper function to get all children IDs for a parent
+def _get_children_ids(parent_id: str) -> list:
+    """Get IDs of all child goals/subgoals for a given parent."""
+    children = []
+    goal_dir = _ensure_goal_dir()
+    
+    try:
+        for file_path in goal_dir.glob("*.json"):
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                
+            # Check if this is a child of the parent (case-insensitive)
+            if data.get("parent_goal", "").upper() == parent_id.upper():
+                children.append(data.get("goal_id"))
+    except Exception as e:
+        logging.error(f"Error getting children for {parent_id}: {e}")
+    
+    return children
 
 def propagate_failure_history_to_parent(child_id: str) -> bool:
     """

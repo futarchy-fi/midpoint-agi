@@ -542,17 +542,19 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
    - Take into account the overall context of the repository
    - Take into account, if available, the descriptions of the PREVIOSULY FAILED ATTEMPTS to progress towards the goal. These are invaluable as lessons, and when creating new subtasks, we should be careful not to repeat the same mistakes.
 3. DECIDE:
-    - First, identify a complete set of ideally (3-5) subtasks needed to achieve the goal
-    - For each subtask, estimate the effort required and dependencies on other subtasks
-    - Evaluate which subtask should be completed first based on dependencies and logical progression
-    - Ensure that the first subtask is meaningfully different from the main goal and parent tasks
+   - CRITICAL: Make the FIRST subtask SIGNIFICANTLY SMALLER and more CONCRETE than the parent goal
+   - The first subtask should be a specific, focused action - NOT a research/review task that's similar to the parent
+   - Each decomposition should make progress - create subtasks that are ~10-30% of the parent goal's scope
+   - Bad example: If parent is "Research database options", first subtask should NOT be "Research SQL databases"
+   - Good example: If parent is "Research database options", first subtask should be "List specific requirements for the database"
+   - Adopt a test-driven approach: Consider validation first, implementation second
+   - Identify a set of 3-5 subtasks to achieve the goal
 4. OUTPUT: Provide a structured response with clear subtasks and the first one to tackle.
 
-For complex goals, consider if the best next step is exploration, research, or a "study session" 
-rather than immediately jumping to implementation.
-
-You have access to a memory repository where your responses will be automatically stored.
-The memory system captures your planning process and decisions automatically.
+For non-trivial tasks, prefer a test-driven development (TDD) approach:
+1. First understand how success will be validated
+2. Then write tests that define success criteria
+3. Only then implement the solution that passes the tests
 
 You have access to these tools:
 {tool_descriptions_text}
@@ -674,20 +676,32 @@ You have access to these tools:
                         # Fallback to justification within last_analysis if the specific key isn't found
                         analysis_justification = goal_data.get("last_analysis", {}).get("justification")
                     
+                    # Get suggested_action and strategic_guidance from last_analysis
+                    last_analysis = goal_data.get("last_analysis", {})
+                    suggested_action = last_analysis.get("suggested_action")
+                    strategic_guidance = last_analysis.get("strategic_guidance")
+                    
                     if analysis_justification:
                          logging.info(f"Found analysis justification for goal {goal_id}.")
-                    else:
-                         logging.warning(f"Could not find analysis justification in goal file {goal_file_path}")
+                    if strategic_guidance:
+                         logging.info(f"Found strategic guidance for goal {goal_id}.")
+                    if not analysis_justification and not strategic_guidance:
+                         logging.warning(f"Could not find analysis justification or strategic guidance in goal file {goal_file_path}")
                 except Exception as e:
-                    logging.error(f"Error loading or reading goal file {goal_file_path} to get justification: {e}")
+                    logging.error(f"Error loading or reading goal file {goal_file_path} to get analysis data: {e}")
             else:
-                 logging.warning(f"Goal file {goal_file_path} not found, cannot load justification.")
+                 logging.warning(f"Goal file {goal_file_path} not found, cannot load analysis data.")
         else:
-             logging.warning("Goal ID not found in context metadata, cannot load justification.")
+             logging.warning("Goal ID not found in context metadata, cannot load analysis data.")
         # --- End Loading Analysis Justification ---
 
-        # Prepare the user prompt, passing the justification
-        user_prompt = self._create_user_prompt(context, analysis_justification=analysis_justification)
+        # Prepare the user prompt, passing the justification and strategic guidance
+        user_prompt = self._create_user_prompt(
+            context, 
+            analysis_justification=analysis_justification,
+            suggested_action=suggested_action,
+            strategic_guidance=strategic_guidance
+        )
         
         # Get memory repository path if available
         memory_repo_path = context.state.memory_repository_path if hasattr(context.state, "memory_repository_path") else None
@@ -1018,7 +1032,7 @@ You have access to these tools:
             # Let the main function handle the specific error types
             raise
     
-    def _create_user_prompt(self, context: TaskContext, analysis_justification: Optional[str] = None) -> str:
+    def _create_user_prompt(self, context: TaskContext, analysis_justification: Optional[str] = None, suggested_action: Optional[str] = None, strategic_guidance: Optional[str] = None) -> str:
         """Create the user prompt for the agent."""
         current_goal_id = context.metadata.get('goal_id', 'Unknown') # Get current goal ID
         prompt = f"""Goal ({current_goal_id}): {context.goal.description}
@@ -1026,13 +1040,24 @@ You have access to these tools:
 Validation Criteria for Final Goal:
 {chr(10).join(f"- {criterion}" for criterion in context.goal.validation_criteria)}
 """
-        # --- Add Analysis Justification ---
+        # --- Add Analysis Context ---
+        analysis_context_lines = []
+        
+        if suggested_action:
+            analysis_context_lines.append(f"- Suggested Action: {suggested_action}")
+        
         if analysis_justification:
+            analysis_context_lines.append(f"- Reason for Decomposition: {analysis_justification}")
+            
+        if strategic_guidance:
+            analysis_context_lines.append(f"- OPTIONAL Strategic Guidance: {strategic_guidance}\n  NOTE: This guidance is completely optional. You should use your own judgment to determine the best approach.")
+            
+        if analysis_context_lines:
             prompt += f"""
 Analysis Context:
-- Reason for Decomposition: {analysis_justification}
+{chr(10).join(analysis_context_lines)}
 """
-        # --- End Analysis Justification ---
+        # --- End Analysis Context ---
 
         prompt += f"""
 Current State:
@@ -1050,28 +1075,16 @@ Memory State:
 
         # Add completed tasks information if available
         if hasattr(context, 'metadata') and context.metadata and 'completed_tasks' in context.metadata:
-            logging.info("Found completed tasks in metadata:")
             completed_tasks = context.metadata['completed_tasks']
             total_tasks = context.metadata.get('total_task_count', len(completed_tasks))
-            logging.info(f"Number of completed tasks: {len(completed_tasks)}")
             prompt += "\nCompleted Tasks:\n"
             for i, task in enumerate(completed_tasks, 1):
-                logging.info(f"Task {i}:")
-                logging.info(f"  Description: {task.get('description', 'No description')}")
-                
                 if task.get('validation_criteria'):
-                    prompt += "   Validation criteria:\n"
-                    for criterion in task['validation_criteria']:
-                        prompt += f"   - {criterion}\n"
+                    prompt += f"- Task {i}: {task.get('description', 'No description')}\n"
+                    # Only add validation criteria if available, not full details to save space
                 
-                if task.get('final_state'):
-                    prompt += f"   Final state: {task['final_state'].get('description', '')}\n"
-                prompt += "\n"  # Add blank line between tasks
-            
             # Add task completion status
             prompt += f"\nTask Completion Status: {len(completed_tasks)}/{total_tasks} tasks completed\n"
-            if len(completed_tasks) == total_tasks:
-                prompt += "\nAll tasks have been completed. Please evaluate if the goal's validation criteria have been met.\n"
         else:
             logging.info("No completed tasks found in metadata")
 
@@ -1081,15 +1094,16 @@ Memory State:
             prompt += f"\nIMPORTANT: Your first subtask MUST be meaningfully different and more specific than the goal currently being decomposed ('{current_goal_id}').\n"
         
         prompt += f"""
-Context:
-- Iteration: {context.iteration}
-- Previous Steps: {len(context.metadata.get('completed_tasks', [])) if context.metadata else 0}
+Development Approach:
+- Follow Test-Driven Development (TDD): research validation → design tests → implement solution
+- First subtask should typically focus on understanding validation criteria and test requirements
+- For complex code changes, create tests before implementation
 
 You MUST provide a structured response in JSON format with these fields:
-- all_subtasks: A list of 3-5 clear subtasks needed *specifically* to complete the current Goal ({current_goal_id}).
-- next_state: A clear description of the first subtask that should be tackled
+- all_subtasks: A list of 3-5 clear subtasks needed to complete the goal
+- next_state: A clear description of the first subtask to tackle
 - validation_criteria: List of measurable criteria to verify this subtask has been reached
-- further_steps: List of the remaining subtasks needed to complete the goal after this one
+- further_steps: List of the remaining subtasks needed after this one
 - reasoning: Explanation of why this subtask should be done first
 - relevant_context: Object containing relevant information to pass to child goals
 

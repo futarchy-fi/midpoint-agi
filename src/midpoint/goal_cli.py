@@ -991,23 +991,26 @@ def show_goal_status():
             else:
                 status = "🔷"  # Complete but not validated
 
-        # Priority 4: Pending/Decomposed Status (if not complete or failed)
+        # Priority 4: Check for completed subgoals first
+        elif (("completed_subgoals" in goal and goal["completed_subgoals"]) or 
+              ("completed_tasks" in goal and goal["completed_tasks"]) or
+              ("merged_subgoals" in goal and goal["merged_subgoals"])):
+            status = "🔷"  # Has at least one completed subgoal (shown with blue diamond)
+
+        # Priority 5: Pending/Decomposed Status (if no completed subgoals)
         else:
-            if goal.get("is_task", False):
-                status = "⏳"  # Task pending execution
+            # Goal-specific status
+            subgoals = {k: v for k, v in goal_files.items() 
+                      if v.get("parent_goal", "").upper() == goal_id.upper()}
+            all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
+            
+            if not subgoals:
+                status = "🔘"  # No subgoals (not yet decomposed)
+            elif all_subgoals_complete:
+                 # This state means goal should likely be complete or needs validation
+                 status = "🔷" # Default to complete but not validated if somehow reached here
             else:
-                # Goal-specific status
-                subgoals = {k: v for k, v in goal_files.items() 
-                          if v.get("parent_goal", "").upper() == goal_id.upper()}
-                all_subgoals_complete = all(sg.get("complete", False) or sg.get("completed", False) for sg in subgoals.values())
-                
-                if not subgoals:
-                    status = "🔘"  # No subgoals (not yet decomposed)
-                elif all_subgoals_complete:
-                     # This state means goal should likely be complete or needs validation
-                     status = "🔷" # Default to complete but not validated if somehow reached here
-                else:
-                    status = "⚪"  # Some subgoals incomplete
+                status = "⚪"  # Some subgoals incomplete
         
         # Fallback
         if not status:
@@ -1015,7 +1018,15 @@ def show_goal_status():
 
         # Get progress text
         progress_text = ""
-        if "completed_task_count" in goal and "total_task_count" in goal:
+        
+        # Use completed_subgoal_count and total_subgoal_count if available
+        if "completed_subgoal_count" in goal and "total_subgoal_count" in goal:
+            completed = goal["completed_subgoal_count"]
+            total = goal["total_subgoal_count"]
+            if total > 0:
+                progress_text = f" ({completed}/{total})"
+        # Fallback to completed_task_count if the new fields aren't available
+        elif "completed_task_count" in goal and "total_task_count" in goal:
             completed = goal["completed_task_count"]
             total = goal["total_task_count"]
             if total > 0:
@@ -1054,22 +1065,42 @@ def show_goal_status():
                 if cmd:
                     print(f"{indent}   Suggested command: {cmd}")
         
-        # Print completed tasks if available
-        if "completed_tasks" in goal and goal["completed_tasks"] and not goal.get("complete", False):
-            print(f"{indent}   Completed tasks:")
-            for task in goal["completed_tasks"]:
-                task_id = task.get("task_id", "")
-                timestamp = task.get("timestamp", "")
-                task_memory_hash = task.get("final_state", {}).get("memory_hash", "")
-                memory_hash_display = f" [mem:{task_memory_hash[:8]}]" if task_memory_hash else ""
-                print(f"{indent}     - {task_id}{memory_hash_display} at {timestamp}")
-        
-        # Print merged subgoals if available
-        if "merged_subgoals" in goal and goal["merged_subgoals"]:
-            for merge_info in goal["merged_subgoals"]:
-                subgoal_id = merge_info.get("subgoal_id", "")
-                merge_time = merge_info.get("merge_time", "")
-                print(f"{indent}   Merged: {subgoal_id} at {merge_time}")
+        # Print completed subgoals if available (consolidated from previously separate sections)
+        if "completed_subgoals" in goal and goal["completed_subgoals"] and not goal.get("complete", False):
+            print(f"{indent}   Completed subgoals:")
+            for subgoal in goal["completed_subgoals"]:
+                subgoal_id = subgoal.get("subgoal_id", "")
+                completion_time = subgoal.get("completion_time", "")
+                subgoal_memory_hash = subgoal.get("final_state", {}).get("memory_hash", "")
+                memory_hash_display = f" [mem:{subgoal_memory_hash[:8]}]" if subgoal_memory_hash else ""
+                
+                # Get validation score if available
+                validation_score = ""
+                if subgoal.get("validation_status") and isinstance(subgoal["validation_status"], dict):
+                    score = subgoal["validation_status"].get("last_score")
+                    if score is not None:
+                        validation_score = f" (Validated: {score:.2%})"
+                
+                print(f"{indent}     - {subgoal_id}{memory_hash_display}{validation_score}: {subgoal.get('description', '')}")
+        # Fallback to the old fields for backward compatibility
+        elif not goal.get("complete", False):
+            # Check and display completed_tasks (old format)
+            if "completed_tasks" in goal and goal["completed_tasks"]:
+                print(f"{indent}   Completed tasks:")
+                for task in goal["completed_tasks"]:
+                    task_id = task.get("task_id", "")
+                    timestamp = task.get("timestamp", "")
+                    task_memory_hash = task.get("final_state", {}).get("memory_hash", "")
+                    memory_hash_display = f" [mem:{task_memory_hash[:8]}]" if task_memory_hash else ""
+                    print(f"{indent}     - {task_id}{memory_hash_display} at {timestamp}")
+            
+            # Check and display merged_subgoals (old format)
+            if "merged_subgoals" in goal and goal["merged_subgoals"]:
+                print(f"{indent}   Merged subgoals:")
+                for merge_info in goal["merged_subgoals"]:
+                    subgoal_id = merge_info.get("subgoal_id", "")
+                    merge_time = merge_info.get("merge_time", "")
+                    print(f"{indent}     - {subgoal_id} at {merge_time}")
         
         # Print validation status if available
         if "validation_status" in goal:
@@ -3567,11 +3598,13 @@ def analyze_goal(goal_id, human_mode):
             "timestamp": timestamp,
             "mode": "human" if human_mode else "auto",
             "suggested_action": action,
-            "action_probabilities": probabilities, # Store None if not found
+            "strategic_guidance": analysis_result.get("strategic_guidance", "No specific guidance provided."),
             "justification": justification,
             "final_memory_hash": analysis_result.get("metadata", {}).get("final_memory_hash", analysis_result.get("memory_hash")), 
-            "confidence_score": analysis_result.get("metadata", {}).get("confidence_score"), 
-            "suggested_command": analysis_result.get("metadata", {}).get("suggested_command")
+            # Removing these fields as they're not used and may be causing confusion
+            # "action_probabilities": probabilities, 
+            # "confidence_score": analysis_result.get("metadata", {}).get("confidence_score"), 
+            # "suggested_command": analysis_result.get("metadata", {}).get("suggested_command")
         }
         
         # Save to goal file

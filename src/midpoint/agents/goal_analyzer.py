@@ -277,14 +277,14 @@ OTHER ACTIONS:
 - "validate": All required implementation appears complete; goal is ready for validation
 - "mark_complete": Goal is already validated or clearly finished based on context
 
-4. STRATEGIC GUIDANCE: Provide specific, actionable guidance on HOW to implement your recommended action.
+4. STRATEGIC GUIDANCE: Provide high-level, principle-based guidance on the approach to implement your recommended action.
    This should include:
-   - For "execute" actions: Concrete steps, approach, or techniques to use for implementation
-   - For "decompose" actions: Suggestions on how to break down the goal effectively
-   - For "validate" actions: What aspects should be checked and how
-   - For "stop" actions: A report of why this way of approaching the goal did not work
+   - For "execute" actions: Key considerations, design principles, and heuristics to guide implementation
+   - For "decompose" actions: Conceptual frameworks for how to think about breaking down the goal
+   - For "validate" actions: Evaluation criteria and quality principles to consider
+   - For "stop" actions: Fundamental insights about why this approach is problematic
    
-   Make your guidance specific, practical, and tailored to the goal's context.
+   Make your guidance abstract, principle-focused, and centered on "how to think about" rather than "what to do." Avoid listing specific implementation steps or creating a concrete task list, as that's the job of the goal decomposer.
 
 5. OUTPUT: Provide your decision as a JSON object with three fields:
    - "action" (string): Your chosen action category
@@ -517,7 +517,7 @@ Do not wrap it in markdown.
                         goal_data["status"] = "stopped"
                         
                         # Create or update the last_analysis field with the current analysis results
-                        goal_data["last_analysis"] = {
+                        last_analysis = {
                             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                             "action": action,
                             "suggested_action": action,  # For backward compatibility
@@ -527,18 +527,68 @@ Do not wrap it in markdown.
                             "final_memory_hash": memory_hash
                         }
                         
-                        # Remove old fields that aren't needed
-                        if "confidence_score" in goal_data["last_analysis"]:
-                            del goal_data["last_analysis"]["confidence_score"]
-                        if "action_probabilities" in goal_data["last_analysis"]:
-                            del goal_data["last_analysis"]["action_probabilities"]
-                        if "suggested_command" in goal_data["last_analysis"]:
-                            del goal_data["last_analysis"]["suggested_command"]
+                        # Log our intent
+                        log_with_timestamp(f"DEBUG: About to update goal file {goal_file} with strategic_guidance", llm_logger)
+                        logging.error(f"DEBUG: About to update goal file {goal_file} with strategic_guidance")  # Use error level for visibility
+                        
+                        # If there's an existing last_analysis, carry over any fields we want to keep
+                        if "last_analysis" in goal_data and isinstance(goal_data["last_analysis"], dict):
+                            # Preserve any custom fields that might be needed elsewhere but aren't in our new structure
+                            for key, value in goal_data["last_analysis"].items():
+                                if key not in last_analysis and key not in ["confidence_score", "action_probabilities", "suggested_command"]:
+                                    last_analysis[key] = value
+                        
+                        # Explicitly ensure strategic_guidance is present (failsafe)
+                        if "strategic_guidance" not in last_analysis or not last_analysis["strategic_guidance"]:
+                            last_analysis["strategic_guidance"] = strategic_guidance
+                            
+                        # Explicitly remove fields we don't want
+                        for field_to_remove in ["confidence_score", "action_probabilities", "suggested_command"]:
+                            if field_to_remove in last_analysis:
+                                del last_analysis[field_to_remove]
+                        
+                        # Set the last_analysis field
+                        goal_data["last_analysis"] = last_analysis
+                        
+                        # Double-check that strategic_guidance is present
+                        if "strategic_guidance" not in goal_data["last_analysis"]:
+                            logging.error(f"DEBUG: strategic_guidance missing after assignment - forcing it")
+                            goal_data["last_analysis"]["strategic_guidance"] = "FORCE ADDED: " + strategic_guidance
+                        
+                        # Also try adding it directly to the top level for visibility
+                        goal_data["DEBUG_strategic_guidance"] = strategic_guidance
+                        
+                        # Output a debug message with the final structure to verify
+                        log_with_timestamp(f"Final last_analysis structure: {json.dumps(goal_data['last_analysis'], indent=2)}", llm_logger)
+                        logging.error(f"DEBUG: Final last_analysis structure: {json.dumps(goal_data['last_analysis'], indent=2)}")
+                        
+                        # Try to be absolutely sure by writing to a different file as well
+                        debug_file = goal_path / f"{goal_id}_debug.json"
+                        try:
+                            with open(debug_file, 'w') as f:
+                                json.dump(goal_data, f, indent=2)
+                            log_with_timestamp(f"DEBUG: Wrote debug file to {debug_file}", llm_logger)
+                            logging.error(f"DEBUG: Wrote debug file to {debug_file}")
+                        except Exception as e:
+                            log_with_timestamp(f"DEBUG: Failed to write debug file: {e}", llm_logger)
+                            logging.error(f"DEBUG: Failed to write debug file: {e}")
                         
                         with open(goal_file, 'w') as f:
                             json.dump(goal_data, f, indent=2)
                         
-                        log_with_timestamp(f"Marked goal {goal_id} as stopped: {action}", llm_logger)
+                        # Verify the file was written correctly
+                        try:
+                            with open(goal_file, 'r') as f:
+                                verify_data = json.load(f)
+                            if "strategic_guidance" in verify_data.get("last_analysis", {}):
+                                log_with_timestamp(f"DEBUG: Verified strategic_guidance exists in written file", llm_logger)
+                                logging.error(f"DEBUG: Verified strategic_guidance exists in written file")
+                            else:
+                                log_with_timestamp(f"DEBUG: strategic_guidance MISSING in written file", llm_logger)
+                                logging.error(f"DEBUG: strategic_guidance MISSING in written file")
+                        except Exception as e:
+                            log_with_timestamp(f"DEBUG: Failed to verify file: {e}", llm_logger)
+                            logging.error(f"DEBUG: Failed to verify file: {e}")
                     else:
                         # For non-stop actions, update the goal file with the analysis result
                         goal_path = Path(".goal")
@@ -549,7 +599,7 @@ Do not wrap it in markdown.
                                     goal_data = json.load(f)
                                 
                                 # Create or update the last_analysis field with the current analysis results
-                                goal_data["last_analysis"] = {
+                                last_analysis = {
                                     "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                                     "action": action,
                                     "suggested_action": action,  # For backward compatibility
@@ -559,13 +609,31 @@ Do not wrap it in markdown.
                                     "final_memory_hash": memory_hash
                                 }
                                 
-                                # Remove old fields that aren't needed
-                                if "confidence_score" in goal_data["last_analysis"]:
-                                    del goal_data["last_analysis"]["confidence_score"]
-                                if "action_probabilities" in goal_data["last_analysis"]:
-                                    del goal_data["last_analysis"]["action_probabilities"]
-                                if "suggested_command" in goal_data["last_analysis"]:
-                                    del goal_data["last_analysis"]["suggested_command"]
+                                # Log our intent
+                                log_with_timestamp(f"DEBUG: About to update goal file {goal_file} with strategic_guidance", llm_logger)
+                                logging.error(f"DEBUG: About to update goal file {goal_file} with strategic_guidance")  # Use error level for visibility
+                                
+                                # If there's an existing last_analysis, carry over any fields we want to keep
+                                if "last_analysis" in goal_data and isinstance(goal_data["last_analysis"], dict):
+                                    # Preserve any custom fields that might be needed elsewhere but aren't in our new structure
+                                    for key, value in goal_data["last_analysis"].items():
+                                        if key not in last_analysis and key not in ["confidence_score", "action_probabilities", "suggested_command"]:
+                                            last_analysis[key] = value
+                                
+                                # Explicitly ensure strategic_guidance is present (failsafe)
+                                if "strategic_guidance" not in last_analysis or not last_analysis["strategic_guidance"]:
+                                    last_analysis["strategic_guidance"] = strategic_guidance
+                                    
+                                # Explicitly remove fields we don't want
+                                for field_to_remove in ["confidence_score", "action_probabilities", "suggested_command"]:
+                                    if field_to_remove in last_analysis:
+                                        del last_analysis[field_to_remove]
+                                
+                                # Set the last_analysis field
+                                goal_data["last_analysis"] = last_analysis
+                                
+                                # Output a debug message with the final structure to verify
+                                log_with_timestamp(f"Final last_analysis structure: {json.dumps(goal_data['last_analysis'], indent=2)}", llm_logger)
                                 
                                 # Save updated goal data
                                 with open(goal_file, 'w') as f:

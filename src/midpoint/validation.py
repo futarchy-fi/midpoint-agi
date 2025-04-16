@@ -138,14 +138,14 @@ def create_validation_record(goal_id: str, criteria_results: List[Dict[str, Any]
 
 async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]) -> str:
     """
-    Save a validation record to the validation history directory.
+    Save validation record to file and update goal data with validation status.
     
     Args:
         goal_id: ID of the goal being validated
-        validation_record: Validation record to save
+        validation_record: Dictionary containing validation results
         
     Returns:
-        str: Path to the saved validation record file
+        str: Path to the saved validation record
     """
     # Create validation history directory if it doesn't exist
     validation_dir = Path("logs/validation_history")
@@ -165,6 +165,7 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
             with open(goal_file, 'r') as f:
                 goal_data = json.load(f)
             
+            # Create validation status entry
             goal_data["validation_status"] = {
                 "last_validated": validation_record["timestamp"],
                 "last_score": validation_record["score"],
@@ -176,8 +177,52 @@ async def save_validation_record(goal_id: str, validation_record: Dict[str, Any]
                 "reasoning": validation_record["reasoning"]
             }
             
+            # Mark the goal as complete if validation passes
+            success_threshold = goal_data.get("success_threshold", 0.8)
+            if validation_record["score"] >= success_threshold:
+                # Mark goal as complete if it wasn't already
+                if not goal_data.get("complete", False) and not goal_data.get("completed", False):
+                    goal_data["complete"] = True
+                    goal_data["completion_time"] = validation_record["timestamp"]
+                    logging.info(f"Goal {goal_id} marked as complete with validation score: {validation_record['score']:.2f}")
+            
+            # Save updated goal data
             with open(goal_file, 'w') as f:
                 json.dump(goal_data, f, indent=2)
+            
+            # Get parent goal ID to update it if needed
+            parent_goal_id = goal_data.get("parent_goal")
+            if parent_goal_id and validation_record["score"] >= success_threshold:
+                # Import here to avoid circular imports
+                try:
+                    # Try to import the propagate_success_state_to_parent function
+                    from midpoint.goal_operations.goal_update import propagate_success_state_to_parent
+                    
+                    # Call the function to update the parent
+                    success = propagate_success_state_to_parent(goal_id)
+                    if success:
+                        logging.info(f"Successfully propagated success state from {goal_id} to parent {parent_goal_id}")
+                    else:
+                        logging.warning(f"Failed to propagate success state from {goal_id} to parent {parent_goal_id}")
+                except ImportError:
+                    # If import fails, try calling the CLI command directly
+                    logging.info(f"Attempting to update parent goal {parent_goal_id} via CLI command")
+                    try:
+                        import subprocess
+                        result = subprocess.run(
+                            ["goal", "update-parent", goal_id, "success"],
+                            capture_output=True,
+                            text=True
+                        )
+                        if result.returncode == 0:
+                            logging.info(f"Successfully updated parent goal {parent_goal_id} via CLI command")
+                        else:
+                            logging.warning(f"Failed to update parent goal {parent_goal_id} via CLI command: {result.stderr}")
+                    except Exception as e:
+                        logging.error(f"Failed to run update-parent command: {str(e)}")
+                except Exception as e:
+                    logging.error(f"Failed to update parent goal {parent_goal_id}: {str(e)}")
+                    
         except Exception as e:
             logging.error(f"Failed to update goal data: {e}")
     
