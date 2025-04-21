@@ -14,6 +14,17 @@ import traceback
 import re
 import datetime
 
+# Helper function to normalize task descriptions for comparison
+def normalize_task_description(text):
+    """Normalize a task description for consistent comparison."""
+    if not text or not isinstance(text, str):
+        return ""
+    # Convert to lowercase, remove extra whitespace, and strip trailing periods
+    normalized = text.lower().strip().rstrip('.')
+    # Remove any task ID prefixes (like "T1:" or "TEST1.1:")
+    normalized = re.sub(r'^[a-z0-9_.-]+:\s*', '', normalized)
+    return normalized
+
 # Early initialization of logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
@@ -542,6 +553,7 @@ Follow the OODA loop: Observe, Orient, Decide, Act.
    - Take into account the overall context of the repository
    - Take into account, if available, the descriptions of the PREVIOSULY FAILED ATTEMPTS to progress towards the goal. These are invaluable as lessons, and when creating new subtasks, we should be careful not to repeat the same mistakes.
 3. DECIDE:
+   - CRITICAL: Review the 'Completed Subgoals/Tasks' section in the user prompt if provided. Your 'next_state' MUST NOT duplicate any task listed there. Instead, propose the logical *next* step required *after* the completed ones.
    - CRITICAL: Make the FIRST subtask SIGNIFICANTLY SMALLER and more CONCRETE than the parent goal
    - The first subtask should be a specific, focused action - NOT a research/review task that's similar to the parent
    - Each decomposition should make progress - create subtasks that are ~10-30% of the parent goal's scope
@@ -747,6 +759,7 @@ You have access to these tools:
         
         # Add the user prompt as the final message
         messages.append({"role": "user", "content": user_prompt})
+        logging.debug(f"DEBUG: Final User Prompt being sent to LLM:\n------ START PROMPT ------\n{user_prompt}\n------ END PROMPT ------")
         
         # Add detailed logging of the complete prompt and context
         log_dir = Path(os.environ.get("LOG_DIR", "logs"))
@@ -824,71 +837,177 @@ You have access to these tools:
             
             # Parse the model's response
             try:
+                response_to_process = None
                 if isinstance(message, list):
-                    # If message is a list, get the last message's content
-                    content = message[-1].get('content', '')
-                else:
-                    # If message is a dict or object, get its content
-                    content = message.get('content') if isinstance(message, dict) else message.content
-                
-                # Log the raw response for debugging
-                logging.debug(f"Raw model response: {content}")
-                
-                # === START EDIT ===
-                # Log the raw response to the LLM log file
-                llm_logger.debug("LLM Raw Response:\n%s", content)
-                # === END EDIT ===
-
-                # Log the raw response in the prompt log file too
-                if 'prompt_log_file' in locals():
-                    with open(prompt_log_file, "a") as f:
-                        f.write("\n\n=== LLM RESPONSE ===\n")
-                        f.write(content)
-                        f.write("\n\n")
-
-                try:
-                    output_data = json.loads(content)
-                except json.JSONDecodeError:
-                    logging.error("Failed to parse model response as JSON")
-                    # Try to extract JSON from markdown code blocks if present
-                    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
-                    if json_match:
-                        try:
-                            output_data = json.loads(json_match.group(1))
-                        except json.JSONDecodeError:
-                            raise ValueError("Model response is not valid JSON")
+                    # Handle cases where the message might be a list (e.g., unexpected format)
+                    logging.warning(f"LLM response was a list. Attempting to process the last element: {message}")
+                    if message: # Check if list is not empty
+                        response_to_process = message[-1] 
                     else:
-                        raise ValueError("Model response is not valid JSON")
-                
-                # Log the parsed output data
+                         logging.error("LLM response was an empty list.")
+                         raise ValueError("LLM response was an empty list.")
+                else:
+                     # Assume message is the response object/string itself
+                     response_to_process = message
+
+                if response_to_process is None:
+                     logging.error("Could not determine a valid response object to process.")
+                     raise ValueError("Could not determine a valid response object to process.")
+
+                # Now, process the determined response_to_process
+                json_string_to_parse = None
+                if isinstance(response_to_process, dict):
+                    # If it's a dict, check if it has 'content' (like an assistant message)
+                    if 'content' in response_to_process and isinstance(response_to_process['content'], str):
+                        json_string_to_parse = response_to_process['content']
+                        logging.debug("Extracted JSON string from response object's 'content' field.")
+                    else:
+                        # Assume the dict itself IS the parsed data (less likely now but handle just in case)
+                        logging.warning("Response object is a dict but lacks a string 'content' field. Assuming dict IS the data.")
+                        output_data = response_to_process 
+                        json_string_to_parse = None # Already processed
+                elif isinstance(response_to_process, str):
+                    # If it's a string, assume it's raw JSON 
+                    json_string_to_parse = response_to_process
+                else:
+                    logging.error(f"Response object to process is of unexpected type: {type(response_to_process)}")
+                    raise ValueError(f"Response object has unexpected type: {type(response_to_process)}")
+
+                # Parse the JSON string if we identified one
+                if json_string_to_parse is not None:
+                    try:
+                        output_data = json.loads(json_string_to_parse)
+                    except json.JSONDecodeError as e:
+                        logging.error(f"Failed to parse JSON string: {e}")
+                        logging.error(f"JSON string content: {json_string_to_parse}")
+                        # Attempt to extract from markdown block as a fallback
+                        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', json_string_to_parse, re.DOTALL)
+                        if json_match:
+                            try:
+                                output_data = json.loads(json_match.group(1))
+                                logging.info("Successfully extracted JSON from markdown block.")
+                            except json.JSONDecodeError as e2:
+                                logging.error(f"Failed to parse extracted JSON from markdown: {e2}")
+                                raise ValueError(f"LLM response string was not valid JSON, even after markdown extraction: {e2}")
+                        else:
+                            raise ValueError(f"LLM response string was not valid JSON: {e}")
+                elif output_data is None:
+                    # This should only happen if the initial response was a dict without 'content' 
+                    # and we decided to treat the dict itself as data, but it was None initially?
+                    # Or if response_to_process was None. Add safety check.
+                    logging.error("Failed to obtain valid JSON data from the response.")
+                    raise ValueError("Could not parse or determine JSON data from the LLM response.")
+
                 logging.debug(f"Parsed output data: {json.dumps(output_data, indent=2)}")
                 
-            except Exception as e:
-                logging.error(f"Error processing model response: {str(e)}")
-                # === START EDIT ===
-                # Log the error to the LLM log file as well
-                llm_logger.error("Error processing model response: %s\nRaw response was: %s", str(e), content)
-                # === END EDIT ===
-
-                # Add the error to messages and try again
-                messages.append({
-                    "role": "user",
-                    "content": f"Your response was invalid: {str(e)}. Please provide a valid JSON response with these required fields: next_state, validation_criteria, reasoning, and relevant_context."
-                })
-                # Get a new response from the model
-                message, tool_calls = self.tool_processor.run_llm_with_tools(
-                    messages,
-                    model=self.model,
-                    validate_json_format=True,
-                    max_tokens=3000
-                )
-                # Process the new response
-                if isinstance(message, list):
-                    content = message[-1].get('content', '')
+                # --- New Logic to Determine Actual Next State ---
+                completed_tasks_metadata = context.metadata.get('completed_tasks', [])
+                completed_descriptions_normalized = {
+                    normalize_task_description(task.get('description', '')) 
+                    for task in completed_tasks_metadata
+                }
+                # Remove empty strings that might result from tasks without descriptions
+                completed_descriptions_normalized.discard("") 
+                
+                llm_all_subtasks = output_data.get('all_subtasks', [])
+                llm_proposed_next_state_desc = output_data.get('next_state', '')
+                
+                actual_next_state_desc = None
+                first_new_task_index = -1
+                
+                if not llm_all_subtasks:
+                     logging.warning("LLM did not provide any subtasks in 'all_subtasks'.")
                 else:
-                    content = message.get('content') if isinstance(message, dict) else message.content
-                output_data = json.loads(content)
-            
+                    for i, task_desc in enumerate(llm_all_subtasks):
+                        normalized_task_desc = normalize_task_description(task_desc)
+                        if normalized_task_desc and normalized_task_desc not in completed_descriptions_normalized:
+                            actual_next_state_desc = task_desc # Use original casing/wording
+                            first_new_task_index = i
+                            logging.info(f"Identified first non-completed task: '{actual_next_state_desc}' at index {i}")
+                            break # Found the first new task
+                            
+                if actual_next_state_desc is None:
+                    logging.error("LLM response analysis: All proposed subtasks in 'all_subtasks' appear to be already completed or the list was empty/invalid. Cannot determine a valid next state.")
+                    # Consider raising an error or returning a specific failure state
+                    raise ValueError("Failed to determine a valid next step. All proposed subtasks seem complete or list is invalid.")
+                    
+                # Compare LLM's proposal with the derived actual next state
+                normalized_llm_proposed = normalize_task_description(llm_proposed_next_state_desc)
+                normalized_actual_next = normalize_task_description(actual_next_state_desc)
+                
+                if normalized_llm_proposed in completed_descriptions_normalized:
+                     logging.warning(f"LLM Compliance Check: LLM proposed a completed task as next_state: '{llm_proposed_next_state_desc}'. Proceeding with derived next state.")
+                elif not llm_proposed_next_state_desc:
+                     logging.warning("LLM Compliance Check: LLM did not propose a 'next_state'. Proceeding with derived next state.")
+                elif normalized_llm_proposed != normalized_actual_next:
+                     logging.warning(f"LLM Compliance Check: LLM proposed next_state ('{llm_proposed_next_state_desc}') differs from derived first non-completed task ('{actual_next_state_desc}'). Using the derived task.")
+                else:
+                     logging.info(f"LLM Compliance Check: LLM proposed next_state matches the derived first non-completed task: '{actual_next_state_desc}'")
+
+                # Determine the actual further steps based on the derived next state
+                actual_further_steps = llm_all_subtasks[first_new_task_index + 1:] if first_new_task_index != -1 else []
+                # --- End New Logic ---
+
+                # Create the subgoal plan using the derived actual_next_state
+                plan = SubgoalPlan(
+                    reasoning=output_data.get('reasoning', ''),
+                    goal_completed=False, # Decomposition implies goal is not complete
+                    completion_summary=None,
+                    next_state=actual_next_state_desc, # Use the validated/derived next state
+                    validation_criteria=output_data.get('validation_criteria', []),
+                    further_steps=actual_further_steps, # Use the adjusted list
+                    relevant_context=output_data.get('relevant_context', {}),
+                    metadata={
+                        "raw_response": json.dumps(output_data), # Store the parsed dict as string
+                        "tool_usage": tool_usage,
+                        "all_subtasks": llm_all_subtasks # Store original list from LLM
+                    }
+                )
+
+                # Log the successful determination
+                logging.info(f"✅ Next state: {plan.next_state}")
+                logging.debug(f"Validation criteria:\n" + "\n".join([f"  {i+1}. {c}" for i, c in enumerate(plan.validation_criteria)]))
+                # Use model_dump() for Pydantic v2+ serialization
+                logging.debug(f"Final output details: {json.dumps(plan.model_dump(mode='json'), indent=2)}")
+                
+                # Save conversation to memory if enabled
+                if memory_hash and memory_repo_path:
+                    try:
+                        updated_memory_hash = self._save_conversation_to_memory(
+                            messages=messages,
+                            metadata={
+                                "goal_id": context.metadata.get('goal_id'), 
+                                "parent_goal": context.metadata.get('parent_goal'),
+                                "determined_next_state": plan.next_state,
+                                "llm_model": self.model,
+                                "reasoning": plan.reasoning
+                            },
+                            memory_hash=memory_hash,
+                            repo_path=memory_repo_path,
+                            goal_name=context.goal.description
+                        )
+                        if updated_memory_hash:
+                            logging.info(f"Updated memory hash: {updated_memory_hash[:8]}")
+                            # Update the plan's relevant context if needed (optional)
+                            if isinstance(plan.relevant_context, dict):
+                                plan.relevant_context['memory_hash'] = updated_memory_hash
+                            # If we save the plan to a file later, ensure this hash is included
+                            context.state.memory_hash = updated_memory_hash # Update context state as well
+                    except Exception as mem_e:
+                        logging.error(f"Failed to save conversation to memory: {mem_e}")
+                
+                # Return the created plan
+                return plan
+
+            except json.JSONDecodeError as e:
+                logging.error(f"Failed to parse JSON response from LLM: {e}")
+                logging.error(f"Raw response: {message}")
+                raise ValueError(f"LLM response was not valid JSON: {e}")
+            except Exception as e:
+                logging.error(f"An unexpected error occurred during response processing: {e}")
+                logging.exception("Traceback:") # Log the full traceback
+                raise
+
             # Check if the output has the required fields
             if "goal_completed" in output_data:
                 # For backward compatibility, ignore goal_completed=true and treat all responses as incomplete
@@ -946,7 +1065,44 @@ You have access to these tools:
                     }
                 )
             
-            # Validate the subgoal plan
+            # Validate the subgoal plan - preliminary check
+            # self._validate_subgoal(final_output) # Temporarily disable strict validation
+
+            # --- Add logic to check if LLM suggested an already completed task ---
+            if context.metadata.get('completed_tasks'):
+                completed_task_data = context.metadata['completed_tasks']
+                # Normalize completed task descriptions for comparison
+                normalize = lambda s: s.lower().strip().strip('.') if isinstance(s, str) else ""
+                completed_descriptions = {normalize(task.get('description', '')) for task in completed_task_data}
+                
+                llm_next_state_normalized = normalize(final_output.next_state)
+                
+                # Check if the LLM's proposed next_state matches a completed one
+                if llm_next_state_normalized in completed_descriptions:
+                    logging.warning(f"LLM proposed next_state '{final_output.next_state}' which matches a completed task. Finding next uncompleted task from all_subtasks.")
+                    
+                    found_next = False
+                    all_subtasks = final_output.metadata.get("all_subtasks", [])
+                    if all_subtasks:
+                        for potential_next_task in all_subtasks:
+                            potential_next_normalized = normalize(potential_next_task)
+                            if potential_next_normalized not in completed_descriptions:
+                                logging.info(f"Identified '{potential_next_task}' as the first uncompleted subtask.")
+                                # Override the next_state in the final_output object
+                                final_output.next_state = potential_next_task
+                                # We might need to re-evaluate validation criteria/reasoning here, 
+                                # but for now, just update the state description.
+                                # TODO: Consider asking LLM to refine plan based on this adjusted next_state.
+                                found_next = True
+                                break
+                    
+                    if not found_next:
+                        logging.error(f"LLM proposed a completed task ('{final_output.next_state}'), and ALL proposed subtasks seem to be completed or missing. Falling back to original LLM suggestion.")
+                else:
+                    logging.debug("LLM proposed next_state does not match any completed tasks. Proceeding as suggested.")
+            # --- End of check ---
+            
+            # Final validation after potential adjustment
             self._validate_subgoal(final_output)
             
             # Log tool usage at debug level
@@ -1076,15 +1232,27 @@ Memory State:
         # Add completed tasks information if available
         if hasattr(context, 'metadata') and context.metadata and 'completed_tasks' in context.metadata:
             completed_tasks = context.metadata['completed_tasks']
+            logging.debug(f"DEBUG: _create_user_prompt received completed_tasks: {json.dumps(completed_tasks)}")
             total_tasks = context.metadata.get('total_task_count', len(completed_tasks))
-            prompt += "\nCompleted Tasks:\n"
-            for i, task in enumerate(completed_tasks, 1):
-                if task.get('validation_criteria'):
-                    prompt += f"- Task {i}: {task.get('description', 'No description')}\n"
-                    # Only add validation criteria if available, not full details to save space
+            if completed_tasks: # Only add section if there are tasks
+                completed_tasks_prompt_section = "\nCompleted Subgoals/Tasks:\n"
+                for i, task in enumerate(completed_tasks, 1):
+                    # Try to get a specific ID, fall back to generic index
+                    task_id = task.get('task_id', task.get('goal_id', f'Task {i}')) 
+                    description = task.get('description', 'No description')
+                    # ALWAYS include the task, regardless of validation_criteria
+                    log_msg = f"- {task_id}: {description}\n"
+                    logging.debug(f"DEBUG: Adding to prompt: {log_msg.strip()}")
+                    completed_tasks_prompt_section += log_msg
+                    
+                # Add task completion status if total count is known
+                if total_tasks is not None:
+                    completed_tasks_prompt_section += f"\nTask Completion Status: {len(completed_tasks)}/{total_tasks} tasks completed\n"
+                else:
+                    completed_tasks_prompt_section += f"\nTask Completion Status: {len(completed_tasks)} tasks completed\n"
                 
-            # Add task completion status
-            prompt += f"\nTask Completion Status: {len(completed_tasks)}/{total_tasks} tasks completed\n"
+                logging.debug(f"DEBUG: Final completed tasks section for prompt: {completed_tasks_prompt_section}")
+                prompt += completed_tasks_prompt_section
         else:
             logging.info("No completed tasks found in metadata")
 
@@ -1100,11 +1268,11 @@ Development Approach:
 - For complex code changes, create tests before implementation
 
 You MUST provide a structured response in JSON format with these fields:
-- all_subtasks: A list of 3-5 clear subtasks needed to complete the goal
-- next_state: A clear description of the first subtask to tackle
-- validation_criteria: List of measurable criteria to verify this subtask has been reached
-- further_steps: List of the remaining subtasks needed after this one
-- reasoning: Explanation of why this subtask should be done first
+- all_subtasks: A list representing the **full sequence** of steps required, **starting with** representations of the tasks already listed as 'Completed Subgoals/Tasks' (if any), followed by the **newly proposed** subtasks needed to complete the goal.
+- next_state: A clear description of the **first *new* subtask** to tackle (i.e., the first item in `all_subtasks` that is *not* listed in the 'Completed Subgoals/Tasks' section of the input).
+- validation_criteria: List of measurable criteria to verify the `next_state` subtask has been reached.
+- further_steps: List of the remaining *newly proposed* subtasks needed after the `next_state`.
+- reasoning: Explanation of why the `next_state` subtask should be done first among the *new* tasks.
 - relevant_context: Object containing relevant information to pass to child goals
 
 IMPORTANT: Return ONLY raw JSON without any markdown formatting or code blocks. Do not wrap the JSON in ```json ... ``` or any other formatting.
@@ -1400,35 +1568,62 @@ def load_input_file(input_file: str, context: TaskContext) -> None:
             context.metadata.update(data["metadata"])
             logging.info(f"Loaded metadata from input file: {data['metadata']}")
             
-        # Extract completed tasks if available
-        if "completed_tasks" in data:
-            completed_tasks = data["completed_tasks"]
-            context.metadata["completed_tasks"] = completed_tasks
+        # Extract completed tasks/subgoals - Check for new format first, then fallback
+        completed_items = []
+        if "completed_subgoals" in data and isinstance(data["completed_subgoals"], list):
+            logging.debug("DEBUG: Found 'completed_subgoals' (new format) in input file.")
+            # Adapt the new format to the structure expected by the prompt generator
+            for item in data["completed_subgoals"]:
+                 if isinstance(item, dict):
+                    completed_items.append({
+                        "task_id": item.get("subgoal_id"), # Use subgoal_id as task_id
+                        "goal_id": item.get("subgoal_id"), # Keep goal_id as well for flexibility
+                        "description": item.get("description"),
+                        "timestamp": item.get("completion_time"),
+                        # Include validation status if needed later
+                        "validation_status": item.get("validation_status") 
+                    })
+            logging.info(f"Loaded {len(completed_items)} completed subgoals from input file (new format).")
             
-            # Log detailed information about completed tasks
-            logging.info(f"\n=== Completed Tasks Summary ===")
-            logging.info(f"Total completed tasks: {len(completed_tasks)}")
+        elif "completed_tasks" in data and isinstance(data["completed_tasks"], list):
+            # Fallback to old format
+            logging.debug("DEBUG: Found 'completed_tasks' (old format) in input file.")
+            completed_items = data["completed_tasks"]
+            logging.info(f"Loaded {len(completed_items)} completed tasks from input file (old format).")
+        
+        if completed_items:
+            context.metadata["completed_tasks"] = completed_items
+            logging.debug(f"DEBUG: Populated context.metadata[\'completed_tasks\']: {json.dumps(completed_items)}") 
             
-            for i, task in enumerate(completed_tasks, 1):
-                logging.info(f"\nTask {i}:")
+            # Log detailed information about completed tasks/subgoals
+            logging.info(f"\n=== Completed Items Summary ===")
+            logging.info(f"Total completed items: {len(completed_items)}")
+            
+            for i, task in enumerate(completed_items, 1):
+                task_id = task.get('task_id', task.get('goal_id', f'Item {i}'))
+                logging.info(f"\nItem {i} ({task_id}):")
                 logging.info(f"  Description: {task.get('description', 'No description')}")
                 
-                if task.get('validation_criteria'):
-                    logging.info("  Validation criteria:")
-                    for criterion in task['validation_criteria']:
-                        logging.info(f"    - {criterion}")
+                # Log validation score if available from new format
+                val_status = task.get('validation_status')
+                if val_status and isinstance(val_status, dict):
+                    score = val_status.get('last_score')
+                    if score is not None:
+                         logging.info(f"  Validation Score: {score:.2%}")
                 
-                if task.get('final_state'):
-                    logging.info(f"  Final state: {task.get('final_state', {}).get('description', 'No final state')}")
-                
-                # Log any additional task metadata
-                for key, value in task.items():
-                    if key not in ['description', 'validation_criteria', 'final_state']:
-                        logging.info(f"  {key}: {value}")
+                # Log final state hash if available
+                final_state = task.get('final_state')
+                if final_state and isinstance(final_state, dict):
+                    git_hash = final_state.get('git_hash')
+                    mem_hash = final_state.get('memory_hash')
+                    if git_hash: logging.info(f"  Final Git Hash: {git_hash[:8]}")
+                    if mem_hash: logging.info(f"  Final Memory Hash: {mem_hash[:8]}")
             
             logging.info("\n" + "=" * 50)
         else:
-            logging.info("No completed tasks found in input file")
+            logging.info("No completed tasks or subgoals found in input file")
+            # Ensure completed_tasks metadata is empty if nothing found
+            context.metadata["completed_tasks"] = [] 
             
         # Add memory information from current_state if available
         if "current_state" in data:
@@ -1561,6 +1756,9 @@ def decompose_goal(
         metadata={}
     )
     
+    # Log the received input_file argument
+    logging.debug(f"DEBUG: decompose_goal received input_file argument: '{input_file}'")
+    
     # Load input file if specified - this will override state with values from the file
     if input_file:
         load_input_file(input_file, context)
@@ -1607,6 +1805,7 @@ def decompose_goal(
         logging.error(f"Failed to get current git hash: {str(e)}")
     
     # Get current memory state if needed
+    current_memory_hash = None  # Initialize to None in case there's no memory repo
     if memory_repo_path:
         try:
             from .tools.git_tools import get_current_hash
@@ -1615,6 +1814,10 @@ def decompose_goal(
             context.memory_state.memory_hash = current_memory_hash
         except Exception as e:
             logging.error(f"Failed to get current memory hash: {str(e)}")
+            current_memory_hash = memory_hash  # Fallback to original hash
+    else:
+        # No memory repo path provided, use the memory hash from context if available
+        current_memory_hash = context.memory_state.memory_hash if hasattr(context.memory_state, "memory_hash") else None
     
     # Sanity check: Verify that the final git hash is a descendant of the initial git hash
     if initial_git_hash and updated_git_hash and initial_git_hash != updated_git_hash:

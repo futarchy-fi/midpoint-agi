@@ -1566,6 +1566,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
             goal=goal_data["description"],
             validation_criteria=goal_data.get("validation_criteria", []),
             parent_goal_id=goal_data.get("parent_goal", None),
+            input_file=str(goal_file), # Pass the goal file as input_file
             goal_id=goal_id,
             memory_hash=memory_hash,
             memory_repo_path=memory_repo_path,
@@ -2405,9 +2406,17 @@ def handle_solve_command(args):
                 # DECOMPOSE: Break down the goal into smaller subgoals
                 log_progress(f"Decomposing goal {current_goal_id}")
                 try:
+                    # Get the path to the current goal's JSON file
+                    goal_file_path = goal_path / f"{current_goal_id}.json"
+                    if not goal_file_path.exists():
+                        log_progress(f"ERROR: Goal file {goal_file_path} not found for decomposition.")
+                        break # Stop if file doesn't exist
+                        
                     decompose_result = agent_decompose_goal(
                         repo_path=os.getcwd(),
-                        goal=goal.description,
+                        goal=goal.description, 
+                        # Pass the goal file path as input_file
+                        input_file=str(goal_file_path),
                         goal_id=current_goal_id,
                         memory_hash=state.memory_hash,
                         memory_repo_path=state.memory_repository_path,
