@@ -12,7 +12,7 @@ from .goal_file_management import (
     create_new_goal, create_new_subgoal, create_new_task, list_goals, delete_goal, list_subgoals, mark_goal_complete
 )
 from .goal_git import (
-    go_back_commits, reset_to_commit, go_to_parent_goal, go_to_child, go_to_root_goal
+    go_back_commits, reset_to_commit
 )
 from .goal_visualization import (
     show_goal_status, show_goal_tree, show_goal_history, generate_graph, show_goal_diffs
@@ -53,18 +53,10 @@ def main_command(args):
         return go_back_commits(args.steps)
     elif args.command == "reset":
         return reset_to_commit(args.commit_id)
-    elif args.command == "up":
-        return go_to_parent_goal()
-    elif args.command == "down":
-        return go_to_child(args.subgoal_id)
-    elif args.command == "root":
-        return go_to_root_goal()
     elif args.command == "subs":
         return list_subgoals()
     elif args.command == "complete":
         return mark_goal_complete()
-    elif args.command == "merge":
-        return merge_subgoal(args.subgoal_id)
     elif args.command == "status":
         return show_goal_status()
     elif args.command == "tree":
@@ -135,10 +127,6 @@ def main():
     back_parser.add_argument("steps", nargs="?", type=int, default=1, help="Number of commits to go back")
     reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")
     reset_parser.add_argument("commit_id", help="Commit ID to reset to")
-    subparsers.add_parser("up", help="Go to parent goal branch")
-    down_parser = subparsers.add_parser("down", help="Go to specific subgoal or task branch")
-    down_parser.add_argument("subgoal_id", help="Subgoal or task ID to navigate to")
-    subparsers.add_parser("root", help="Go to top-level goal")
     subparsers.add_parser("subs", help="List available subgoals for current goal")
     subparsers.add_parser("complete", help="Mark current goal as complete")
     merge_parser = subparsers.add_parser("merge", help="Merge specific subgoal into current goal")
