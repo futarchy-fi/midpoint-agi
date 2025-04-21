@@ -1,0 +1,18 @@
+87:def list_goals():
+130:def list_subgoals(goal_id=None):
+185:def create_new_goal(description):
+280:def create_new_subgoal(parent_id, description):
+296:def create_new_task(parent_id, description):
+328:def mark_goal_complete(goal_id=None):
+375:def merge_subgoal(subgoal_id, testing=False):
+525:def show_goal_status():
+714:def show_goal_tree():
+847:def show_goal_history():
+922:def generate_graph():
+1043:def update_parent_goal_state(parent_goal_id, task_id, execution_result, final_state):
+1148:def get_child_tasks(parent_id):
+1175:def main_command(args):
+1238:def handle_solve_command(args):
+1939:def update_git_state(goal_id):
+2004:def main():
+2171:def delete_goal(goal_id):

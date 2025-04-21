@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Import command implementations from their new modules
 from .goal_file_management import (
-    create_new_goal, create_new_subgoal, create_new_task, list_goals, delete_goal, list_subgoals, mark_goal_complete
+    list_goals, list_subgoals, delete_goal
 )
 from .goal_git import (
     go_back_commits, reset_to_commit
@@ -20,10 +20,13 @@ from .goal_visualization import (
 from .goal_analysis import (
     analyze_goal, show_validation_history
 )
+from .goal_state import (
+    create_new_goal, create_new_subgoal, create_new_task, mark_goal_complete, 
+    merge_subgoal, update_parent_goal_state, update_git_state
+)
 # Import from goal_cli.py only if not yet refactored
 from .goal_decompose_command import decompose_existing_goal
 from .goal_revert import revert_goal
-# TODO: Move execute_task, merge_subgoal, handle_update_parent_command to their own modules
 from .goal_execute_command import execute_task
 
 def main_command(args):
@@ -57,6 +60,8 @@ def main_command(args):
         return list_subgoals()
     elif args.command == "complete":
         return mark_goal_complete()
+    elif args.command == "merge":
+        return merge_subgoal(args.subgoal_id)
     elif args.command == "status":
         return show_goal_status()
     elif args.command == "tree":
@@ -79,6 +84,20 @@ def main_command(args):
         return revert_goal(args.goal_id)
     else:
         return None
+
+def handle_update_parent_command(args):
+    """Handle the update-parent command to propagate success or failure to parent goal."""
+    from .goal_operations.goal_update import (
+        propagate_success_state_to_parent, propagate_failure_history_to_parent
+    )
+    
+    if args.outcome == 'success':
+        return propagate_success_state_to_parent(args.child_id)
+    elif args.outcome == 'failed':
+        return propagate_failure_history_to_parent(args.child_id)
+    else:
+        logging.error(f"Unknown outcome type: {args.outcome}")
+        return False
 
 def handle_solve_command(args):
     """
