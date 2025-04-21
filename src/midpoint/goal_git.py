@@ -3,6 +3,7 @@ import subprocess
 import logging
 import json
 from typing import Optional
+from pathlib import Path
 
 
 def get_current_hash(repo_path: Optional[str] = None) -> str:
@@ -231,3 +232,60 @@ def run_diff_command(repo_path: str, initial_hash: str, final_hash: str) -> Opti
     except Exception as e:
         logging.error(f"Unexpected error running git diff in {repo_path}: {e}")
         return f"Unexpected error during diff in {repo_path}: {e}"
+
+
+def find_top_level_branch(goal_id):
+    """Find the branch of the top-level goal by traversing up the goal hierarchy."""
+    goal_path = ensure_goal_dir()  # Use the local ensure_goal_dir function
+    
+    # Keep track of visited goals to prevent cycles
+    visited = set()
+    
+    while goal_id and goal_id not in visited:
+        visited.add(goal_id)
+        
+        # Check if this is a top-level goal (starts with G)
+        if goal_id.startswith('G'):
+            goal_file = goal_path / f"{goal_id}.json"
+            if goal_file.exists():
+                try:
+                    with open(goal_file, 'r') as f:
+                        goal_data = json.load(f)
+                        branch_name = goal_data.get('branch_name')
+                        if branch_name:
+                            return branch_name
+                        # If no branch name, generate one
+                        branch_name = f"goal-{goal_id}"
+                        goal_data['branch_name'] = branch_name
+                        with open(goal_file, 'w') as f:
+                            json.dump(goal_data, f, indent=2)
+                        return branch_name
+                except Exception as e:
+                    logging.error(f"Failed to read goal file: {e}")
+                    return None
+        
+        # Get parent goal ID
+        goal_file = goal_path / f"{goal_id}.json"
+        if not goal_file.exists():
+            return None
+            
+        try:
+            with open(goal_file, 'r') as f:
+                goal_data = json.load(f)
+                goal_id = goal_data.get("parent_goal", "")
+                if goal_id.endswith('.json'):
+                    goal_id = goal_id[:-5]  # Remove .json extension
+        except Exception as e:
+            logging.error(f"Failed to read goal file: {e}")
+            return None
+    
+    return None
+
+
+def ensure_goal_dir():
+    """Ensure the .goal directory exists."""
+    goal_path = Path('.goal')
+    if not goal_path.exists():
+        goal_path.mkdir()
+        logging.info(f"Created goal directory: .goal")
+    return goal_path

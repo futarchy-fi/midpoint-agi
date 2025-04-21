@@ -21,10 +21,10 @@ from .goal_analysis import (
     analyze_goal, show_validation_history
 )
 # Import from goal_cli.py only if not yet refactored
-from .goal_cli import (
-    decompose_existing_goal, execute_task, merge_subgoal, handle_update_parent_command, revert_goal
-)
-# TODO: Move decompose_existing_goal, execute_task, merge_subgoal, handle_update_parent_command, revert_goal to their own modules
+from .goal_decompose_command import decompose_existing_goal
+from .goal_revert import revert_goal
+# TODO: Move execute_task, merge_subgoal, handle_update_parent_command to their own modules
+from .goal_execute_command import execute_task
 
 def main_command(args):
     """Async entry point for CLI commands."""
