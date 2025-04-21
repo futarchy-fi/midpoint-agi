@@ -210,12 +210,6 @@ def main_command(args):
         return go_back_commits(args.steps)
     elif args.command == "reset":
         return reset_to_commit(args.commit_id)
-    elif args.command == "up":
-        return go_to_parent_goal()
-    elif args.command == "down":
-        return go_to_child(args.subgoal_id)
-    elif args.command == "root":
-        return go_to_root_goal()
     elif args.command == "subs":
         return list_subgoals()
     elif args.command == "complete":
@@ -1010,17 +1004,7 @@ def main():
     reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")
     reset_parser.add_argument("commit_id", help="Commit ID to reset to")
     
-    # Hierarchy Navigation Commands
-    # ---------------------------
-    # goal up
-    subparsers.add_parser("up", help="Go to parent goal branch")
-    
-    # goal down <subgoal-id>
-    down_parser = subparsers.add_parser("down", help="Go to specific subgoal or task branch")
-    down_parser.add_argument("subgoal_id", help="Subgoal or task ID to navigate to")
-    
-    # goal root
-    subparsers.add_parser("root", help="Go to top-level goal")
+    # Removed Hierarchy Navigation Commands
     
     # goal subs
     subparsers.add_parser("subs", help="List available subgoals for current goal")
