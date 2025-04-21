@@ -105,9 +105,9 @@ def handle_solve_command(args):
     in the .goal/ directory.
     (Implementation moved from goal_cli.py)
     """
-    # For now, import and delegate to the original implementation
-    from .goal_cli import handle_solve_command as orig_handle_solve_command
-    return orig_handle_solve_command(args)
+    # Import and delegate to the implementation in goal_solver.py
+    from .goal_solver import handle_solve_command as solver_handle_solve_command
+    return solver_handle_solve_command(args)
 
 def main():
     """Main CLI entry point."""
