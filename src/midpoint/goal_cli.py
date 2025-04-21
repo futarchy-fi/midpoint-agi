@@ -55,6 +55,9 @@ from .goal_git import (
     run_diff_command,
 )
 
+# Add import for goal file management functions
+from .goal_file_management import generate_goal_id, create_goal_file, list_goals, create_new_goal, create_new_subgoal, create_new_task, get_parent_goal_id, delete_goal, list_subgoals, load_goal_data, _get_children_details, mark_goal_complete, revert_goal
+
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
@@ -3279,44 +3282,6 @@ def show_validation_history(goal_id, debug=False, quiet=False):
     except Exception as e:
         logging.error(f"Failed to show validation history: {e}")
         return False
-
-
-def _get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
-    """Get details of direct children (subgoals and tasks) for a given parent ID."""
-    goal_path = Path(".goal")
-    children_details = []
-    try:
-        for file_path in goal_path.glob("*.json"):
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-            
-            # Check parent match (case-insensitive)
-            parent_match = False
-            file_parent = data.get("parent_goal", "")
-            if file_parent:
-                 if file_parent.upper() == parent_goal_id.upper() or \
-                   file_parent.upper() == f"{parent_goal_id.upper()}.json":
-                    parent_match = True
-
-            if parent_match:
-                child_info = {
-                    "goal_id": data.get("goal_id", "Unknown"),
-                    "description": data.get("description", "N/A"),
-                    "is_task": data.get("is_task", False),
-                    "complete": data.get("complete", False) or data.get("completed", False),
-                    # Add other relevant fields if needed, e.g., last validation score
-                    "validation_score": data.get("validation_status", {}).get("last_score")
-                }
-                children_details.append(child_info)
-                
-    except Exception as e:
-        logging.error(f"Error getting children details for {parent_goal_id}: {e}")
-        # Return potentially partial list or indicate error?
-        # For now, just return what we have.
-
-    # Sort by goal ID for consistent order
-    children_details.sort(key=lambda x: x["goal_id"])
-    return children_details
 
 
 def analyze_goal(goal_id, human_mode):
