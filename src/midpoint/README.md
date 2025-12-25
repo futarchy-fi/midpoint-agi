@@ -34,8 +34,7 @@ The code has been refactored to improve maintainability and make it easier to un
 
 1. **Goal Creation & Management**
    - `create_new_goal`: Creates a top-level goal with its own branch
-   - `create_new_subgoal`: Creates a subgoal under a parent goal
-   - `create_new_task`: Creates a task under a parent goal
+   - `create_new_child_goal`: Creates a child goal (subgoal or task) under a parent goal
    - `mark_goal_complete`: Marks a goal as complete
 
 2. **Goal Execution**

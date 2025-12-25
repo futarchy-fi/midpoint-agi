@@ -216,38 +216,46 @@ def create_new_goal(description):
                 logging.error(f"Failed to restore stashed changes: {e}")
                 # Don't return None here as the goal was created successfully
 
-def create_new_subgoal(parent_id, description):
-    """Create a new subgoal under a parent."""
+def create_new_child_goal(parent_id, description):
+    """
+    Create a new child goal (subgoal or task) under a parent.
+    
+    Note: The distinction between subgoal and task is determined later by the goal analyzer,
+    not at creation time. All child goals start as regular goals with is_task=False.
+    
+    Args:
+        parent_id: ID of the parent goal
+        description: Description of the child goal
+        
+    Returns:
+        ID of the newly created child goal, or None if creation failed
+    """
     parent_file = Path(GOAL_DIR) / f"{parent_id}.json"
     if not parent_file.exists():
         logging.error(f"Parent goal {parent_id} not found")
         return None
     
     # Generate new ID
-    subgoal_id = generate_goal_id(parent_id=parent_id) 
-    
-    # Create the goal file
-    create_goal_file(subgoal_id, description, parent_id)
-    logging.info(f"Created new subgoal {subgoal_id} under {parent_id}")
-    return subgoal_id
-
-def create_new_task(parent_id, description):
-    """Create a new task under a parent goal."""
-    parent_file = Path(GOAL_DIR) / f"{parent_id}.json"
-    if not parent_file.exists():
-        logging.error(f"Parent goal {parent_id} not found")
-        return None
-    
-    # Generate new ID
-    task_id = generate_goal_id(parent_id=parent_id)
+    child_id = generate_goal_id(parent_id=parent_id)
     
     # Create the goal file (it starts as a goal, analyzer determines if it's a task later)
-    goal_file_path = create_goal_file(task_id, description, parent_id)
+    goal_file_path = create_goal_file(child_id, description, parent_id)
     if not goal_file_path:
-        return None # Error creating file
+        return None  # Error creating file
 
-    logging.info(f"Created new goal node {task_id} (intended as task) under {parent_id}")
-    return task_id
+    logging.info(f"Created new child goal {child_id} under {parent_id}")
+    return child_id
+
+# Backward compatibility aliases (deprecated)
+def create_new_subgoal(parent_id, description):
+    """[DEPRECATED] Use create_new_child_goal() instead."""
+    logging.warning("create_new_subgoal() is deprecated. Use create_new_child_goal() instead.")
+    return create_new_child_goal(parent_id, description)
+
+def create_new_task(parent_id, description):
+    """[DEPRECATED] Use create_new_child_goal() instead."""
+    logging.warning("create_new_task() is deprecated. Use create_new_child_goal() instead.")
+    return create_new_child_goal(parent_id, description)
 
 def mark_goal_complete(goal_id=None):
     """Mark a goal as complete."""

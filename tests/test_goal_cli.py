@@ -13,7 +13,7 @@ from midpoint.goal_cli import (
     generate_goal_id,
     create_goal_file,
     create_new_goal,
-    create_new_subgoal,
+    create_new_child_goal,
     list_goals,
     execute_task
 )
@@ -196,7 +196,7 @@ def test_create_new_goal(goal_dir, capsys):
 
 
 def test_create_new_subgoal(goal_dir, capsys):
-    """Test creating a new subgoal."""
+    """Test creating a new child goal."""
     parent_id = "G1"
     description = "Test subgoal"
     
@@ -205,7 +205,7 @@ def test_create_new_subgoal(goal_dir, capsys):
     parent_file.write_text(json.dumps({"goal_id": parent_id, "description": "Parent goal"}))
     
     with patch('midpoint.goal_cli.generate_goal_id', return_value="S1"):
-        subgoal_id = create_new_subgoal(parent_id, description)
+        subgoal_id = create_new_child_goal(parent_id, description)
     
     # Check output
     captured = capsys.readouterr()
