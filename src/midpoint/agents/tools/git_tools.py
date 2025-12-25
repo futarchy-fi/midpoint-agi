@@ -360,13 +360,13 @@ def get_current_hash(repo_path: Optional[str] = None) -> str:
     """
     return get_current_hash_tool.execute(repo_path=repo_path or os.getcwd())
 
-def check_repo_state(repo_path: str) -> Dict[str, bool]:
+def check_repo_state(repo_path: Optional[str] = None) -> Dict[str, bool]:
     """Check the current state of the git repository."""
-    return check_repo_state_tool.execute(repo_path=repo_path)
+    return check_repo_state_tool.execute(repo_path=(repo_path or os.getcwd()))
 
-def get_current_branch(repo_path: str) -> str:
+def get_current_branch(repo_path: Optional[str] = None) -> str:
     """Get the current git branch name."""
-    return get_current_branch_tool.execute(repo_path=repo_path)
+    return get_current_branch_tool.execute(repo_path=(repo_path or os.getcwd()))
 
 def create_branch(repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
     """Create a new Git branch."""
