@@ -152,6 +152,148 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     logging.info("Logging configured")
     return log_file, task_summary_file, llm_responses_file
 
+
+class AnalysisPromptBuilder:
+    """
+    Builds prompts for goal analysis with section tracking and debugging support.
+    
+    This class helps structure prompts modularly, track what context is included,
+    and provide debugging information about what was sent to the LLM.
+    """
+    
+    def __init__(self, goal_id: str, logger):
+        """
+        Initialize the prompt builder.
+        
+        Args:
+            goal_id: The goal ID being analyzed
+            logger: Logger instance for debugging
+        """
+        self.goal_id = goal_id
+        self.logger = logger
+        self.sections = []  # List of section dicts with metadata
+        
+    def add_section(self, name: str, content: str, importance: str = "normal", source: str = "unknown"):
+        """
+        Add a section to the prompt.
+        
+        Args:
+            name: Section name (e.g., "Goal Details", "Failure History")
+            content: Section content (text)
+            importance: "critical", "important", or "normal"
+            source: Where this data came from (e.g., "goal_file", "memory", "attempt_journal")
+        """
+        if not content or not content.strip():
+            self.logger.debug(f"Skipping empty section: {name}")
+            return
+            
+        section = {
+            "name": name,
+            "content": content.strip(),
+            "size": len(content),
+            "importance": importance,
+            "source": source
+        }
+        self.sections.append(section)
+        self.logger.debug(f"Added section '{name}': {len(content)} chars (importance: {importance})")
+    
+    def build(self) -> Tuple[str, Dict[str, Any]]:
+        """
+        Build the final prompt and return it with metadata.
+        
+        Returns:
+            Tuple of (prompt_text, metadata_dict)
+            metadata_dict contains:
+                - sections: List of section metadata
+                - total_size: Total character count
+                - section_count: Number of sections
+                - importance_breakdown: Count of sections by importance
+        """
+        # Sort sections by importance (critical first, then important, then normal)
+        importance_order = {"critical": 0, "important": 1, "normal": 2}
+        sorted_sections = sorted(
+            self.sections,
+            key=lambda s: (importance_order.get(s["importance"], 3), s["name"])
+        )
+        
+        # Build the prompt
+        prompt_lines = [
+            f"Goal Analysis Request for Goal [{self.goal_id}]",
+            "=" * 60,
+            ""
+        ]
+        
+        # Add sections in order
+        for section in sorted_sections:
+            prompt_lines.append(section["content"])
+            prompt_lines.append("")  # Blank line between sections
+        
+        # Add final instructions
+        prompt_lines.append("=" * 60)
+        prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
+        prompt_lines.append("If necessary, use tools to observe the current state further.")
+        prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
+        prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
+        
+        final_prompt = "\n".join(prompt_lines)
+        
+        # Build metadata
+        importance_breakdown = {}
+        for section in self.sections:
+            imp = section["importance"]
+            importance_breakdown[imp] = importance_breakdown.get(imp, 0) + 1
+        
+        metadata = {
+            "sections": [
+                {
+                    "name": s["name"],
+                    "size": s["size"],
+                    "importance": s["importance"],
+                    "source": s["source"]
+                }
+                for s in sorted_sections
+            ],
+            "total_size": len(final_prompt),
+            "section_count": len(self.sections),
+            "importance_breakdown": importance_breakdown
+        }
+        
+        self.logger.debug(f"Built prompt: {len(final_prompt)} chars, {len(self.sections)} sections")
+        return final_prompt, metadata
+    
+    def get_context_summary(self) -> str:
+        """
+        Get a human-readable summary of what context was included.
+        
+        Returns:
+            Formatted string describing the context breakdown
+        """
+        lines = [f"Context Summary for Goal {self.goal_id}:"]
+        lines.append("-" * 60)
+        
+        total_size = sum(s["size"] for s in self.sections)
+        lines.append(f"Total context size: {total_size:,} characters")
+        lines.append(f"Number of sections: {len(self.sections)}")
+        lines.append("")
+        
+        # Group by importance
+        by_importance = {}
+        for section in self.sections:
+            imp = section["importance"]
+            if imp not in by_importance:
+                by_importance[imp] = []
+            by_importance[imp].append(section)
+        
+        for importance in ["critical", "important", "normal"]:
+            if importance in by_importance:
+                lines.append(f"{importance.upper()} Sections:")
+                for section in by_importance[importance]:
+                    lines.append(f"  - {section['name']}: {section['size']:,} chars (from {section['source']})")
+                lines.append("")
+        
+        return "\n".join(lines)
+
+
 class GoalAnalyzer:
     """
     Goal Analysis agent implementation.
@@ -368,7 +510,7 @@ Do not wrap it in markdown.
         # Pass necessary context elements directly
         try:
             log_with_timestamp("Creating analysis user prompt...", llm_logger)
-            user_prompt = self._create_analysis_user_prompt(
+            user_prompt, prompt_metadata = self._create_analysis_user_prompt(
                 context, 
                 goal_id, 
                 memory_hash, 
@@ -378,6 +520,10 @@ Do not wrap it in markdown.
             log_with_timestamp("==== FULL USER PROMPT ====", llm_logger)
             llm_logger.debug(user_prompt)
             log_with_timestamp("==== END USER PROMPT ====", llm_logger)
+            # Log context breakdown for debugging
+            log_with_timestamp("==== PROMPT METADATA ====", llm_logger)
+            llm_logger.debug(json.dumps(prompt_metadata, indent=2))
+            log_with_timestamp("==== END PROMPT METADATA ====", llm_logger)
         except ValueError as ve:
             error_msg = f"Failed to create analysis user prompt: {str(ve)}"
             logging.error(error_msg)
@@ -397,17 +543,25 @@ Do not wrap it in markdown.
                 "metadata": {"error_type": "unexpected_error", "details": str(e)}
             }
 
-        messages = [{"role": "system", "content": self._generate_system_prompt()}]
-        # Add memory retrieved in _create_analysis_user_prompt (how to pass it here?)
-        # Let's assume _create_analysis_user_prompt returns prompt string AND memory docs string
-        # For now, just add the prompt. Memory integration needs refinement.
-        # The prompt generation now handles adding memory context internally
+        # Use stored system prompt (generated once at initialization)
+        messages = [{"role": "system", "content": self.system_prompt}]
         messages.append({"role": "user", "content": user_prompt})
 
-        # Log the system prompt as well
-        log_with_timestamp("==== SYSTEM PROMPT ====", llm_logger)
-        llm_logger.debug(self._generate_system_prompt())
-        log_with_timestamp("==== END SYSTEM PROMPT ====", llm_logger)
+        # Log system prompt only once per session (check if already logged)
+        if not hasattr(self, '_system_prompt_logged'):
+            log_with_timestamp("==== SYSTEM PROMPT (logged once per session) ====", llm_logger)
+            llm_logger.debug(self.system_prompt)
+            log_with_timestamp("==== END SYSTEM PROMPT ====", llm_logger)
+            # Log system prompt hash for reference
+            import hashlib
+            system_prompt_hash = hashlib.md5(self.system_prompt.encode()).hexdigest()[:8]
+            log_with_timestamp(f"System prompt hash: {system_prompt_hash} (reference this in future logs)", llm_logger)
+            self._system_prompt_logged = True
+        else:
+            # Just reference the hash
+            import hashlib
+            system_prompt_hash = hashlib.md5(self.system_prompt.encode()).hexdigest()[:8]
+            log_with_timestamp(f"Using system prompt (hash: {system_prompt_hash}, see first log entry for full prompt)", llm_logger)
 
         tool_usage = []
         max_retries = 1 # Allow one retry on JSON parsing failure
@@ -736,21 +890,64 @@ Do not wrap it in markdown.
 
         return final_output # Return the dictionary
 
-    def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> str:
-        """Create the user prompt for the Goal Analyzer LLM."""
+    def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> Tuple[str, Dict[str, Any]]:
+        """
+        Create the user prompt for the Goal Analyzer LLM using PromptBuilder.
+        
+        Returns:
+            Tuple of (prompt_text, metadata_dict) for debugging
+        """
         llm_logger = logging.getLogger(LLM_LOGGER_NAME)
         llm_logger.debug(f"==== BUILDING ANALYSIS USER PROMPT ====")
         llm_logger.debug(f"Goal ID: {goal_id}")
         llm_logger.debug(f"Memory hash: {memory_hash[:8] if memory_hash else None}")
         llm_logger.debug(f"Memory repo path: {memory_repo_path}")
         
-        prompt_lines = []
-        goal_data = {}
-        children_details = []
-        memory_content = "No recent memory retrieved."
-
-        # --- 1. Load Goal Data ---
-        goal_path = Path(GOAL_DIR) # Assuming .goal dir exists
+        builder = AnalysisPromptBuilder(goal_id, llm_logger)
+        
+        # Load goal data first (needed for many sections)
+        goal_data = self._load_goal_data_for_prompt(goal_id, llm_logger)
+        if not goal_data:
+            builder.add_section(
+                "Error",
+                f"Error: Could not load goal file for {goal_id}",
+                importance="critical",
+                source="error"
+            )
+            prompt, metadata = builder.build()
+            return prompt, metadata
+        
+        # Get children details
+        children_details = self._get_children_details_for_prompt(goal_id, llm_logger)
+        
+        # Build each section using helper methods
+        self._build_goal_details_section(builder, goal_data, goal_id)
+        self._build_current_state_section(builder, goal_data)
+        self._build_failure_history_section(builder, goal_data, goal_id)  # CRITICAL - prioritize failures
+        self._build_children_status_section(builder, children_details)
+        self._build_validation_status_section(builder, goal_data)
+        self._build_history_section(builder, goal_data)
+        self._build_attempt_journal_section(builder, goal_id)
+        self._build_last_execution_section(builder, goal_data)
+        self._build_memory_context_section(builder, memory_hash, memory_repo_path, llm_logger)
+        self._build_final_instructions_section(builder, goal_data)
+        
+        # Build and return
+        prompt, metadata = builder.build()
+        
+        # Log context summary for debugging
+        llm_logger.debug(builder.get_context_summary())
+        llm_logger.debug(f"==== FINAL PROMPT STATS ====")
+        llm_logger.debug(f"Prompt length: {metadata['total_size']:,} characters")
+        llm_logger.debug(f"Section count: {metadata['section_count']}")
+        llm_logger.debug(f"Importance breakdown: {metadata['importance_breakdown']}")
+        llm_logger.debug(f"==== END PROMPT BUILDING ====")
+        
+        return prompt, metadata
+    
+    def _load_goal_data_for_prompt(self, goal_id: str, llm_logger) -> Optional[Dict[str, Any]]:
+        """Load goal data from file."""
+        goal_path = Path(GOAL_DIR)
         goal_file = goal_path / f"{goal_id}.json"
         if goal_file.exists():
             try:
@@ -758,350 +955,394 @@ Do not wrap it in markdown.
                     goal_data = json.load(f)
                 logging.info(f"Loaded goal data for {goal_id}")
                 llm_logger.debug(f"Loaded goal data from {goal_file}")
-                llm_logger.debug(f"Goal data: {json.dumps(goal_data, indent=2, default=str)[:1000]}...")
+                return goal_data
             except Exception as e:
                 error_msg = f"Failed to load goal file {goal_file}: {e}"
                 logging.error(error_msg)
                 llm_logger.error(error_msg)
-                prompt_lines.append(f"Error: Could not load goal file {goal_file}")
+                return None
         else:
             warning_msg = f"Goal file not found: {goal_file}"
             logging.warning(warning_msg)
             llm_logger.warning(warning_msg)
-            prompt_lines.append(f"Warning: Goal file {goal_file} not found.")
-
-        # --- 2. Get Children Details ---
+            return None
+    
+    def _get_children_details_for_prompt(self, goal_id: str, llm_logger) -> List[Dict[str, Any]]:
+        """Get children details for a goal."""
         try:
-            # Local function to get children details - avoid circular imports
-            def get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
-                """Get details of direct children (subgoals and tasks) for a given parent ID."""
-                llm_logger.debug(f"Looking for children of parent ID: {parent_goal_id}")
-                goal_path = Path(GOAL_DIR)
-                children_details = []
+            goal_path = Path(GOAL_DIR)
+            children_details = []
+            for file_path in goal_path.glob("*.json"):
                 try:
-                    for file_path in goal_path.glob("*.json"):
-                        with open(file_path, 'r') as f:
-                            data = json.load(f)
-                        
-                        # Check parent match (case-insensitive)
-                        parent_match = False
-                        file_parent = data.get("parent_goal", "")
-                        if file_parent:
-                            if file_parent.upper() == parent_goal_id.upper() or \
-                              file_parent.upper() == f"{parent_goal_id.upper()}.json":
-                                parent_match = True
-
-                        if parent_match:
-                            child_info = {
-                                "goal_id": data.get("goal_id", "Unknown"),
-                                "description": data.get("description", "N/A"),
-                                "is_task": data.get("is_task", False),
-                                "complete": data.get("complete", False) or data.get("completed", False),
-                                # Add other relevant fields if needed, e.g., last validation score
-                                "validation_score": data.get("validation_status", {}).get("last_score")
-                            }
-                            children_details.append(child_info)
-                            llm_logger.debug(f"Found child: {child_info['goal_id']} - {child_info['description'][:50]}...")
-                            
-                except Exception as e:
-                    error_msg = f"Error getting children details for {parent_goal_id}: {e}"
-                    logging.error(error_msg)
-                    llm_logger.error(error_msg)
-                    raise ValueError(f"Failed to get children details for {parent_goal_id}: {e}")
-
-                # Sort by goal ID for consistent order
-                children_details.sort(key=lambda x: x["goal_id"])
-                return children_details
-                
-            # Use the local function
-            children_details = get_children_details(goal_id)
-            
-            # Validate children_details is a valid list
-            if children_details is None:
-                raise ValueError(f"get_children_details returned None for goal {goal_id}")
-            if not isinstance(children_details, list):
-                raise ValueError(f"get_children_details returned non-list type: {type(children_details)}")
-                
+                    with open(file_path, 'r') as f:
+                        data = json.load(f)
+                    file_parent = data.get("parent_goal", "")
+                    if file_parent and (file_parent.upper() == goal_id.upper() or 
+                                       file_parent.upper() == f"{goal_id.upper()}.json"):
+                        children_details.append({
+                            "goal_id": data.get("goal_id", "Unknown"),
+                            "description": data.get("description", "N/A"),
+                            "is_task": data.get("is_task", False),
+                            "complete": data.get("complete", False) or data.get("completed", False),
+                            "validation_score": data.get("validation_status", {}).get("last_score")
+                        })
+                except Exception:
+                    continue
+            children_details.sort(key=lambda x: x["goal_id"])
             logging.info(f"Found {len(children_details)} children for goal {goal_id}")
-            llm_logger.debug(f"Found {len(children_details)} children for goal {goal_id}")
+            return children_details
         except Exception as e:
             error_msg = f"Failed to get children details for {goal_id}: {e}"
             logging.error(error_msg)
             llm_logger.error(error_msg)
-            prompt_lines.append("Error: Could not get children details.")
-            raise ValueError(f"Failed to get children details for goal {goal_id}: {e}")
-
-        # --- 3. Retrieve Recent Memory ---
-        if memory_hash and memory_repo_path:
-            try:
-                # Import here to avoid potential top-level import issues
-                from midpoint.agents.tools.memory_tools import retrieve_recent_memory
-                llm_logger.debug(f"Retrieving recent memory with hash={memory_hash[:8]} from {memory_repo_path}")
-                total_chars, memory_documents = retrieve_recent_memory(
-                    memory_hash=memory_hash,
-                    char_limit=10000, # Configurable?
-                    repo_path=memory_repo_path
-                )
-                if memory_documents:
-                    memory_context_lines = ["## Recent Memory Context"]
-                    for path, content, timestamp in memory_documents:
-                        filename = os.path.basename(path)
-                        ts_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-                        memory_context_lines.append(f"### Memory: {filename} ({ts_str})")
-                        # Limit content length per document shown to LLM
-                        max_len = 1000
-                        truncated_content = content[:max_len] + "..." if len(content) > max_len else content
-                        memory_context_lines.append(f"```\n{truncated_content}\n```") # Added missing newline
-                        llm_logger.debug(f"Added memory document: {filename} ({ts_str}) - {len(content)} chars")
-                    memory_content = "\n".join(memory_context_lines)
-                    logging.info(f"Retrieved {len(memory_documents)} memory documents ({total_chars} chars).")
-                    llm_logger.debug(f"Retrieved {len(memory_documents)} memory documents ({total_chars} chars).")
-                else:
-                    logging.info("No recent memory documents found.")
-                    llm_logger.debug("No recent memory documents found.")
-                    memory_content = "No recent memory documents found."
-
-            except ImportError:
-                 error_msg = "Could not import retrieve_recent_memory from midpoint.agents.tools.memory_tools."
-                 logging.error(error_msg)
-                 llm_logger.error(error_msg)
-                 memory_content = "Error: Could not retrieve memory context (import failed)."
-            except Exception as e:
-                error_msg = f"Error retrieving memory context: {str(e)}"
-                logging.error(error_msg)
-                llm_logger.error(error_msg)
-                memory_content = f"Error retrieving memory context: {str(e)}"
-        else:
-            warning_msg = "Memory hash or repo path missing, cannot retrieve memory context."
-            logging.warning(warning_msg)
-            llm_logger.warning(warning_msg)
-            memory_content = "Memory context unavailable (missing hash or path)."
-
-        # --- 4. Format Prompt ---
-        llm_logger.debug(f"Formatting final analysis prompt")
-        prompt_lines.append(f"Goal Analysis Request for Goal [{goal_id}]")
-        prompt_lines.append("="*20)
-
-        # Goal Details
-        prompt_lines.append("## Goal Details")
-        prompt_lines.append(f"ID: {goal_id}")
-        prompt_lines.append(f"Description ({goal_id}): {goal_data.get('description', 'N/A')}")
-        prompt_lines.append(f"Parent Goal ID: {goal_data.get('parent_goal', 'None')}")
-        prompt_lines.append(f"Type: {'Task' if goal_data.get('is_task') else 'Goal'}")
+            return []
+    
+    def _build_goal_details_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any], goal_id: str):
+        """Build the goal details section."""
+        lines = [
+            "## Goal Details",
+            f"ID: {goal_id}",
+            f"Description: {goal_data.get('description', 'N/A')}",
+            f"Parent Goal ID: {goal_data.get('parent_goal', 'None')}",
+            f"Type: {'Task' if goal_data.get('is_task') else 'Goal'}",
+            "Validation Criteria:"
+        ]
         val_criteria = goal_data.get('validation_criteria', [])
-        prompt_lines.append("Validation Criteria:")
         if val_criteria:
-             for i, crit in enumerate(val_criteria, 1): prompt_lines.append(f"  {i}. {crit}")
-        else: prompt_lines.append("  None")
-
-        # Current State
-        prompt_lines.append("\n## Current State")
+            for i, crit in enumerate(val_criteria, 1):
+                lines.append(f"  {i}. {crit}")
+        else:
+            lines.append("  None")
+        
+        builder.add_section(
+            "Goal Details",
+            "\n".join(lines),
+            importance="critical",
+            source="goal_file"
+        )
+    
+    def _build_current_state_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any]):
+        """Build the current state section."""
+        lines = [
+            "## Current State"
+        ]
         current_state = goal_data.get('current_state', {})
-        initial_state = goal_data.get('initial_state', {}) # For comparison
-        prompt_lines.append(f"Repository Path: {current_state.get('repository_path', 'N/A')}")
-        prompt_lines.append(f"Git Hash: {current_state.get('git_hash', 'N/A')}")
-        prompt_lines.append(f"Memory Hash: {current_state.get('memory_hash', 'N/A')}")
-        prompt_lines.append(f"Memory Repository Path: {current_state.get('memory_repository_path', 'N/A')}")
-        # Add comparison to initial state if helpful
+        initial_state = goal_data.get('initial_state', {})
+        lines.append(f"Repository Path: {current_state.get('repository_path', 'N/A')}")
+        lines.append(f"Git Hash: {current_state.get('git_hash', 'N/A')}")
+        lines.append(f"Memory Hash: {current_state.get('memory_hash', 'N/A')}")
+        lines.append(f"Memory Repository Path: {current_state.get('memory_repository_path', 'N/A')}")
         if initial_state.get('git_hash') != current_state.get('git_hash'):
-            prompt_lines.append(f"(Initial Git Hash: {initial_state.get('git_hash', 'N/A')})")
+            lines.append(f"(Initial Git Hash: {initial_state.get('git_hash', 'N/A')})")
         if initial_state.get('memory_hash') != current_state.get('memory_hash'):
-             prompt_lines.append(f"(Initial Memory Hash: {initial_state.get('memory_hash', 'N/A')})")
-
-        # Children Status
-        prompt_lines.append("\n## Children Status")
+            lines.append(f"(Initial Memory Hash: {initial_state.get('memory_hash', 'N/A')})")
+        
+        builder.add_section(
+            "Current State",
+            "\n".join(lines),
+            importance="important",
+            source="goal_file"
+        )
+    
+    def _build_failure_history_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any], goal_id: str):
+        """Build the failure history section - CRITICAL for progress-oriented analysis."""
+        failed_attempts = goal_data.get('failed_attempts_history', [])
+        
+        if not failed_attempts:
+            builder.add_section(
+                "Failure History",
+                "## Failure History\nNo failed attempts recorded for this goal.",
+                importance="critical",
+                source="goal_file"
+            )
+            return
+        
+        lines = [
+            "## Failure History",
+            f"⚠️ CRITICAL: This goal has {len(failed_attempts)} failed attempt(s).",
+            "Review these failures carefully to avoid repeating the same mistakes.",
+            ""
+        ]
+        
+        # Show most recent failures in detail (last 5), summarize older ones
+        recent_failures = list(reversed(failed_attempts[-5:]))
+        older_failures = failed_attempts[:-5] if len(failed_attempts) > 5 else []
+        
+        if older_failures:
+            lines.append(f"Note: {len(older_failures)} older failure(s) exist (summarized below).")
+            lines.append("")
+        
+        # Recent failures in detail
+        for attempt in recent_failures:
+            ts = attempt.get('failure_timestamp', 'N/A')
+            reason = attempt.get('failure_reason', 'No reason provided')
+            failed_id = attempt.get('failed_child_goal_id') or attempt.get('attempted_goal_id') or "UnknownID"
+            description = attempt.get('failed_child_description', 'No description provided')
+            criteria = attempt.get('failed_child_validation_criteria', [])
+            criteria_summary = f"{len(criteria)} defined" if isinstance(criteria, list) else "Unknown"
+            
+            lines.append(f"### Recent Failure: {failed_id} (at {ts})")
+            lines.append(f"Description: {description}")
+            lines.append(f"Validation Criteria: {criteria_summary}")
+            lines.append(f"Failure Reason: {reason[:2000]}")  # Keep more detail for recent failures
+            lines.append("")
+        
+        # Summarize older failures
+        if older_failures:
+            lines.append(f"### Older Failures Summary ({len(older_failures)} total):")
+            # Group by failure pattern if possible
+            for attempt in reversed(older_failures[-10:]):  # Show last 10 of older ones
+                failed_id = attempt.get('failed_child_goal_id') or attempt.get('attempted_goal_id') or "UnknownID"
+                reason = attempt.get('failure_reason', 'No reason provided')
+                lines.append(f"- {failed_id}: {reason[:150]}...")  # Truncated for older failures
+            if len(older_failures) > 10:
+                lines.append(f"  ... ({len(older_failures) - 10} more older failures)")
+        
+        builder.add_section(
+            "Failure History",
+            "\n".join(lines),
+            importance="critical",
+            source="goal_file"
+        )
+    
+    def _build_children_status_section(self, builder: AnalysisPromptBuilder, children_details: List[Dict[str, Any]]):
+        """Build the children status section."""
+        lines = ["## Children Status"]
         if children_details:
             for child in children_details:
                 status = "Complete" if child.get('complete') else "Incomplete"
                 val_score = child.get('validation_score')
                 score_str = f" (Validation: {val_score:.1%})" if val_score is not None else ""
-                prompt_lines.append(f"- {child.get('goal_id')}: {child.get('description', 'N/A')} [{status}{score_str}]")
+                lines.append(f"- {child.get('goal_id')}: {child.get('description', 'N/A')} [{status}{score_str}]")
         else:
-            prompt_lines.append("No children found.")
-
-        # History
-        prompt_lines.append("\n## History for this Goal")
+            lines.append("No children found.")
+        
+        builder.add_section(
+            "Children Status",
+            "\n".join(lines),
+            importance="important",
+            source="goal_file"
+        )
+    
+    def _build_validation_status_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any]):
+        """Build the validation status section."""
+        lines = ["## Validation Status"]
+        validation_status = goal_data.get('validation_status')
+        if validation_status and isinstance(validation_status, dict):
+            lines.append(f"Last Validated: {validation_status.get('last_validated', 'Unknown')}")
+            score = validation_status.get('last_score')
+            if score is not None:
+                score_pct = score * 100
+                lines.append(f"Validation Score: {score_pct:.1f}% (Threshold: {goal_data.get('success_threshold', 80):.1f}%)")
+            else:
+                lines.append("Validation Score: Not available")
+            lines.append(f"Validated By: {validation_status.get('last_validated_by', 'Unknown')}")
+            lines.append(f"Git Hash at Validation: {validation_status.get('last_git_hash', 'Unknown')}")
+            reasoning = validation_status.get('reasoning')
+            if reasoning:
+                lines.append(f"Validation Reasoning: {reasoning}")
+            criteria_results = validation_status.get('criteria_results')
+            if criteria_results and isinstance(criteria_results, list):
+                lines.append("\nDetailed Validation Criteria Results:")
+                for i, result in enumerate(criteria_results, 1):
+                    passed = result.get('passed', False)
+                    status_icon = "✅" if passed else "❌"
+                    criterion = result.get('criterion', f"Criterion {i}")
+                    lines.append(f"  {status_icon} {criterion}")
+                    if not passed:
+                        reasoning = result.get('reasoning')
+                        if reasoning:
+                            lines.append(f"    Reason for failure: {reasoning}")
+                        evidence = result.get('evidence')
+                        if evidence and isinstance(evidence, list):
+                            lines.append(f"    Evidence:")
+                            for item in evidence:
+                                lines.append(f"      - {item}")
+            else:
+                lines.append("No detailed validation criteria results available.")
+        else:
+            lines.append("No validation results available for this goal.")
+        
+        builder.add_section(
+            "Validation Status",
+            "\n".join(lines),
+            importance="important",
+            source="goal_file"
+        )
+    
+    def _build_history_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any]):
+        """Build the history section (completed tasks, merged subgoals)."""
+        lines = ["## History for this Goal"]
         completed_tasks = goal_data.get('completed_tasks', [])
         merged_subgoals = goal_data.get('merged_subgoals', [])
-        failed_attempts = goal_data.get('failed_attempts_history', []) # Load failed attempts history here
-
+        
         if completed_tasks:
-            prompt_lines.append(f"Completed Tasks ({len(completed_tasks)}):")
-            for task in completed_tasks[:5]: # Limit history shown
-                prompt_lines.append(f"- {task.get('task_id')}: {task.get('description', 'N/A')} (at {task.get('timestamp')})")
-            if len(completed_tasks) > 5: prompt_lines.append("  ...")
-        else: prompt_lines.append("No completed tasks recorded.")
-
-        if merged_subgoals:
-            prompt_lines.append(f"Merged Subgoals ({len(merged_subgoals)}):")
-            for merge in merged_subgoals[:5]: # Limit history shown
-                 prompt_lines.append(f"- {merge.get('subgoal_id')} (at {merge.get('merge_time')})")
-            if len(merged_subgoals) > 5: prompt_lines.append("  ...")
-        else: prompt_lines.append("No subgoals merged.")
-
-        # Now this check is safe
-        if failed_attempts:
-            prompt_lines.append(f"Failed Attempts History ({len(failed_attempts)}):")
-            # Display the most recent failures first
-            for attempt in reversed(failed_attempts[-50:]): # Show last 5 failures
-                ts = attempt.get('failure_timestamp', 'N/A')
-                reason = attempt.get('failure_reason', 'No reason provided')
-                
-                # Determine the ID of the failed attempt
-                failed_id = attempt.get('failed_child_goal_id') or attempt.get('attempted_goal_id') or "UnknownID"
-                
-                # Extract description and criteria (new fields)
-                description = attempt.get('failed_child_description', 'No description provided')
-                criteria = attempt.get('failed_child_validation_criteria', [])
-                criteria_summary = f"{len(criteria)} defined" if isinstance(criteria, list) else "Unknown criteria format"
-
-                # Format the output lines
-                prompt_lines.append(f"- Failure Record for {failed_id} at {ts}:")
-                prompt_lines.append(f"    Description: {description}")
-                prompt_lines.append(f"    Criteria: {criteria_summary}")
-                prompt_lines.append(f"    Reason: {reason[:1000]}...")
-                
-            if len(failed_attempts) > 50: 
-                prompt_lines.append("  ... (more past failures exist)")
+            lines.append(f"Completed Tasks ({len(completed_tasks)}):")
+            for task in completed_tasks[:5]:
+                lines.append(f"- {task.get('task_id')}: {task.get('description', 'N/A')} (at {task.get('timestamp')})")
+            if len(completed_tasks) > 5:
+                lines.append("  ...")
         else:
-            prompt_lines.append("No failed attempts recorded for this goal.")
-
-        # Attempt journal written under `.goal/<id>/attempts/`
+            lines.append("No completed tasks recorded.")
+        
+        if merged_subgoals:
+            lines.append(f"Merged Subgoals ({len(merged_subgoals)}):")
+            for merge in merged_subgoals[:5]:
+                lines.append(f"- {merge.get('subgoal_id')} (at {merge.get('merge_time')})")
+            if len(merged_subgoals) > 5:
+                lines.append("  ...")
+        else:
+            lines.append("No subgoals merged.")
+        
+        builder.add_section(
+            "History",
+            "\n".join(lines),
+            importance="normal",
+            source="goal_file"
+        )
+    
+    def _build_attempt_journal_section(self, builder: AnalysisPromptBuilder, goal_id: str):
+        """Build the attempt journal section."""
         attempts = self._load_attempt_journal(goal_id=goal_id, max_attempts=5)
-        prompt_lines.append("\n## Attempt Journal (from .goal/<id>/attempts/)")
+        lines = ["## Attempt Journal (from .goal/<id>/attempts/)"]
         if attempts:
-            prompt_lines.append(f"Recent attempts ({len(attempts)} shown, newest last):")
+            lines.append(f"Recent attempts ({len(attempts)} shown, newest last):")
             for a in attempts:
                 attempt_id = a.get("attempt_id", "unknown")
                 outcome = a.get("outcome", {}) if isinstance(a.get("outcome"), dict) else {}
                 diagnostics = a.get("diagnostics", {}) if isinstance(a.get("diagnostics"), dict) else {}
                 artifacts = a.get("artifacts", {}) if isinstance(a.get("artifacts"), dict) else {}
-
                 success = outcome.get("success", "Unknown")
                 summary = outcome.get("summary") or outcome.get("error_message") or ""
                 duration = a.get("duration_seconds")
                 tool_counts = diagnostics.get("tool_call_counts")
-
                 header = f"- Attempt {attempt_id}: success={success}"
                 if isinstance(duration, (int, float)):
                     header += f", duration={duration:.1f}s"
-                prompt_lines.append(header)
+                lines.append(header)
                 if summary:
-                    prompt_lines.append(f"    Summary: {str(summary)[:500]}")
+                    lines.append(f"    Summary: {str(summary)[:500]}")
                 if isinstance(tool_counts, dict) and tool_counts:
-                    prompt_lines.append(f"    Tool call counts: {tool_counts}")
-
-                # If the attempt embedded a transcript, extract the most salient tool errors (if any).
+                    lines.append(f"    Tool call counts: {tool_counts}")
                 mem_tx = artifacts.get("memory_transcript")
                 if isinstance(mem_tx, dict):
                     tx = mem_tx.get("content") or ""
                     errs = self._extract_error_lines(tx, limit=3)
                     if errs:
-                        prompt_lines.append("    Tool errors (from transcript):")
+                        lines.append("    Tool errors (from transcript):")
                         for e in errs:
-                            prompt_lines.append(f"      - {e}")
+                            lines.append(f"      - {e}")
                     if mem_tx.get("truncated"):
-                        prompt_lines.append("    Note: embedded transcript was truncated in the attempt journal.")
+                        lines.append("    Note: embedded transcript was truncated in the attempt journal.")
         else:
-            prompt_lines.append("No attempt journal entries found.")
-
-        # Last Execution Status from goal data
-        prompt_lines.append("\n## Last Execution Status")
+            lines.append("No attempt journal entries found.")
+        
+        builder.add_section(
+            "Attempt Journal",
+            "\n".join(lines),
+            importance="normal",
+            source="attempt_journal"
+        )
+    
+    def _build_last_execution_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any]):
+        """Build the last execution status section."""
+        lines = ["## Last Execution Status"]
         last_execution = goal_data.get("last_execution")
         if last_execution and isinstance(last_execution, dict):
-            timestamp = last_execution.get("timestamp", "N/A")
-            success = last_execution.get("success", "Unknown")
-            summary = last_execution.get("summary", "No summary provided.")
-            prompt_lines.append(f"Timestamp: {timestamp}")
-            prompt_lines.append(f"Success: {success}")
-            prompt_lines.append(f"Summary: {summary}")
+            lines.append(f"Timestamp: {last_execution.get('timestamp', 'N/A')}")
+            lines.append(f"Success: {last_execution.get('success', 'Unknown')}")
+            lines.append(f"Summary: {last_execution.get('summary', 'No summary provided.')}")
         else:
-            prompt_lines.append("No specific last execution status recorded.")
-
-        # Validation Status - Add detailed validation information for better analysis
-        prompt_lines.append("\n## Validation Status")
-        validation_status = goal_data.get('validation_status')
-        if validation_status and isinstance(validation_status, dict):
-            prompt_lines.append(f"Last Validated: {validation_status.get('last_validated', 'Unknown')}")
-            
-            # Get score and format as percentage
-            score = validation_status.get('last_score')
-            if score is not None:
-                score_pct = score * 100  # Convert to percentage
-                prompt_lines.append(f"Validation Score: {score_pct:.1f}% (Threshold: {goal_data.get('success_threshold', 80):.1f}%)")
-            else:
-                prompt_lines.append("Validation Score: Not available")
-                
-            prompt_lines.append(f"Validated By: {validation_status.get('last_validated_by', 'Unknown')}")
-            prompt_lines.append(f"Git Hash at Validation: {validation_status.get('last_git_hash', 'Unknown')}")
-            
-            # Include overall reasoning
-            reasoning = validation_status.get('reasoning')
-            if reasoning:
-                prompt_lines.append(f"Validation Reasoning: {reasoning}")
-            
-            # Include detailed criteria results
-            criteria_results = validation_status.get('criteria_results')
-            if criteria_results and isinstance(criteria_results, list):
-                prompt_lines.append("\nDetailed Validation Criteria Results:")
-                for i, result in enumerate(criteria_results, 1):
-                    passed = result.get('passed', False)
-                    status_icon = "✅" if passed else "❌"
-                    criterion = result.get('criterion', f"Criterion {i}")
-                    prompt_lines.append(f"  {status_icon} {criterion}")
-                    
-                    # For failed criteria, show reasoning and evidence
-                    if not passed:
-                        reasoning = result.get('reasoning')
-                        if reasoning:
-                            prompt_lines.append(f"    Reason for failure: {reasoning}")
-                        
-                        evidence = result.get('evidence')
-                        if evidence and isinstance(evidence, list):
-                            prompt_lines.append(f"    Evidence:")
-                            for item in evidence:
-                                prompt_lines.append(f"      - {item}")
-            else:
-                prompt_lines.append("No detailed validation criteria results available.")
-        else:
-            prompt_lines.append("No validation results available for this goal.")
-
-        # --- 5. Code Inspection ---
-        llm_logger.debug("Performing code inspection for relevant files")
-        prompt_lines.append("\n## Code Inspection")
-        prompt_lines.append("Automatic code inspection is disabled. Use available tools (e.g., read_file, search_code) if you need to inspect files.")
-
-        # Memory Context
-        prompt_lines.append("\n" + memory_content)
-
-        # Final Instruction
-        prompt_lines.append("\n" + "="*20)
-        prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
-        prompt_lines.append("If necessary, use tools to observe the current state further.")
-        prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
+            lines.append("No specific last execution status recorded.")
         
-        # Add specific instructions for handling failed validations
+        builder.add_section(
+            "Last Execution Status",
+            "\n".join(lines),
+            importance="normal",
+            source="goal_file"
+        )
+    
+    def _build_memory_context_section(self, builder: AnalysisPromptBuilder, memory_hash: str, memory_repo_path: str, llm_logger):
+        """Build the memory context section."""
+        if not memory_hash or not memory_repo_path:
+            builder.add_section(
+                "Memory Context",
+                "## Recent Memory Context\nMemory context unavailable (missing hash or path).",
+                importance="normal",
+                source="memory"
+            )
+            return
+        
+        try:
+            from midpoint.agents.tools.memory_tools import retrieve_recent_memory
+            llm_logger.debug(f"Retrieving recent memory with hash={memory_hash[:8]} from {memory_repo_path}")
+            total_chars, memory_documents = retrieve_recent_memory(
+                memory_hash=memory_hash,
+                char_limit=10000,
+                repo_path=memory_repo_path
+            )
+            if memory_documents:
+                lines = ["## Recent Memory Context"]
+                for path, content, timestamp in memory_documents:
+                    filename = os.path.basename(path)
+                    ts_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                    lines.append(f"### Memory: {filename} ({ts_str})")
+                    max_len = 1000
+                    truncated_content = content[:max_len] + "..." if len(content) > max_len else content
+                    lines.append(f"```\n{truncated_content}\n```")
+                logging.info(f"Retrieved {len(memory_documents)} memory documents ({total_chars} chars).")
+                builder.add_section(
+                    "Memory Context",
+                    "\n".join(lines),
+                    importance="normal",
+                    source="memory"
+                )
+            else:
+                builder.add_section(
+                    "Memory Context",
+                    "## Recent Memory Context\nNo recent memory documents found.",
+                    importance="normal",
+                    source="memory"
+                )
+        except Exception as e:
+            error_msg = f"Error retrieving memory context: {str(e)}"
+            logging.error(error_msg)
+            llm_logger.error(error_msg)
+            builder.add_section(
+                "Memory Context",
+                f"## Recent Memory Context\nError retrieving memory context: {str(e)}",
+                importance="normal",
+                source="memory"
+            )
+    
+    def _build_final_instructions_section(self, builder: AnalysisPromptBuilder, goal_data: Dict[str, Any]):
+        """Build the final instructions section with conditional validation failure instructions."""
+        lines = []
         validation_status = goal_data.get('validation_status', {})
         validation_score = validation_status.get('last_score')
         success_threshold = goal_data.get('success_threshold', 0.8)
         
         if validation_score is not None and validation_score < success_threshold:
-            prompt_lines.append("\nIMPORTANT VALIDATION FAILURE INSTRUCTIONS:")
-            prompt_lines.append("This goal has FAILED VALIDATION with a score below the success threshold.")
-            prompt_lines.append("Review the detailed Validation Status section above.")
-            prompt_lines.append("Focus specifically on the failed criteria and their reasoning to understand what needs to be fixed.")
-            prompt_lines.append("If the issues are specific and straightforward to fix, recommend 'execute' with a clear justification of what needs to be fixed.")
-            prompt_lines.append("If the validation failure indicates fundamental flaws requiring a new approach, recommend 'decompose' with justification.")
+            lines.extend([
+                "## IMPORTANT VALIDATION FAILURE INSTRUCTIONS",
+                "This goal has FAILED VALIDATION with a score below the success threshold.",
+                "Review the detailed Validation Status section above.",
+                "Focus specifically on the failed criteria and their reasoning to understand what needs to be fixed.",
+                "If the issues are specific and straightforward to fix, recommend 'execute' with a clear justification of what needs to be fixed.",
+                "If the validation failure indicates fundamental flaws requiring a new approach, recommend 'decompose' with justification."
+            ])
         
-        prompt_lines.append("\nFor goals with no children, carefully consider if `execute` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps.")
-        prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
-
-        final_prompt = "\n".join(prompt_lines)
-        llm_logger.debug(f"==== FINAL PROMPT STATS ====")
-        llm_logger.debug(f"Prompt length: {len(final_prompt)} characters, ~{len(prompt_lines)} lines")
-        llm_logger.debug(f"==== END PROMPT BUILDING ====")
+        lines.extend([
+            "For goals with no children, carefully consider if `execute` might be suitable if the goal represents a single, concrete action, even if it involves multiple small steps."
+        ])
         
-        return final_prompt
+        if lines:
+            builder.add_section(
+                "Final Instructions",
+                "\n".join(lines),
+                importance="critical",
+                source="instructions"
+            )
 
     def _serialize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI message objects to serializable dictionaries."""
