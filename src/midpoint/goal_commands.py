@@ -35,7 +35,7 @@ def main_command(args):
     if args.command == "decompose":
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
-        return execute_task(args.task_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+        return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
     elif args.command == "solve":
         return handle_solve_command(args)
     elif args.command == "validate":
@@ -130,8 +130,8 @@ def main():
     decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
     decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
-    execute_parser = subparsers.add_parser("execute", help="Execute a task using the TaskExecutor")
-    execute_parser.add_argument("task_id", help="Task ID to execute")
+    execute_parser = subparsers.add_parser("execute", help="Execute a goal/task node using the TaskExecutor")
+    execute_parser.add_argument("node_id", help="Node ID to execute (e.g., G1, S1, T1)")
     execute_parser.add_argument("--debug", action="store_true", help="Show debug output")
     execute_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
