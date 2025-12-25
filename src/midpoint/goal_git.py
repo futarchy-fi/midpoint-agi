@@ -50,21 +50,19 @@ def get_current_branch():
 
 def get_goal_id_from_branch(branch_name):
     """Extract goal ID from branch name."""
-    # Branch naming convention: goal-G1-abcdef, goal-S1-abcdef, or goal-T1-abcdef
+    # Branch naming convention: goal-G1-abcdef or goal-S1-abcdef
     parts = branch_name.split('-')
     
     # Check if it's a goal branch
     if len(parts) < 2 or parts[0] != "goal":
         return None
     
-    # Check for valid goal/subgoal/task ID
+    # Check for valid goal/subgoal ID
     if len(parts) >= 2:
-        # Check if it's a valid ID
+        # Check if it's a valid ID (G or S prefix only)
         if parts[1].startswith('G') and parts[1][1:].isdigit():
             return parts[1]
         if parts[1].startswith('S') and parts[1][1:].isdigit():
-            return parts[1]
-        if parts[1].startswith('T') and parts[1][1:].isdigit():
             return parts[1]
     
     return None

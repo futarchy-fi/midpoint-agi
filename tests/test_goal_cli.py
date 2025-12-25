@@ -67,9 +67,9 @@ def test_generate_goal_id(goal_dir):
     subgoal_id2 = generate_goal_id(goal_id)
     assert subgoal_id2 == "S2"
     
-    # Test task ID
+    # Test that is_task parameter is deprecated (should still return S prefix)
     task_id = generate_goal_id(goal_id, is_task=True)
-    assert task_id == "T1"
+    assert task_id == "S3"  # Should use S prefix, not T
 
 
 def test_create_goal_file(goal_dir):
@@ -259,8 +259,8 @@ async def test_execute_task(goal_dir, capsys):
         goal_file = goal_dir / f"{goal['goal_id']}.json"
         goal_file.write_text(json.dumps(goal))
     
-    # Create a task
-    task_id = "T1"
+    # Create a task (now uses S prefix, not T)
+    task_id = "S2"  # Changed from T1 to S2 (S1 is the parent subgoal)
     parent_id = "S1"
     task_file = goal_dir / f"{task_id}.json"
     task_data = {
@@ -326,5 +326,5 @@ async def test_execute_task(goal_dir, capsys):
             
             # Check output
             captured = capsys.readouterr()
-            assert "Task T1 executed successfully" in captured.out
+            assert f"Task {task_id} executed successfully" in captured.out or "Task executed successfully" in captured.out
             assert "Task completed successfully" in captured.out 

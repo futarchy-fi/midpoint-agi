@@ -93,7 +93,7 @@ def main():
     decompose_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     decompose_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser = subparsers.add_parser("execute", help="Execute a goal/task node using the TaskExecutor")
-    execute_parser.add_argument("node_id", help="Node ID to execute (e.g., G1, S1, T1)")
+    execute_parser.add_argument("node_id", help="Node ID to execute (e.g., G1, S1)")
     execute_parser.add_argument("--debug", action="store_true", help="Show debug output")
     execute_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
