@@ -9,6 +9,7 @@ import re
 import asyncio
 import logging
 import platform
+import subprocess
 from typing import List, Dict, Any, Optional
 
 from .base import Tool
