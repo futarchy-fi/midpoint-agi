@@ -245,7 +245,7 @@ class EditFileTool(Tool):
             "required": ["file_path", "content"]
         }
     
-    async def execute(self, file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
+    def execute(self, file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
         """Edit the contents of a file."""
         try:
             # Normalize path
