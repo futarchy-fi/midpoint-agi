@@ -90,6 +90,8 @@ class CheckRepoStateTool(Tool):
     
     def execute(self, repo_path: str) -> Dict[str, bool]:
         """Check the current state of the repository."""
+        if not repo_path:
+            repo_path = os.getcwd()
         repo_path = Path(repo_path)
         if not repo_path.exists():
             raise ValueError(f"Repository path does not exist: {repo_path}")
@@ -153,6 +155,8 @@ class GetCurrentBranchTool(Tool):
     
     def execute(self, repo_path: str) -> str:
         """Get the current branch name."""
+        if not repo_path:
+            repo_path = os.getcwd()
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -199,6 +203,8 @@ class CreateBranchTool(Tool):
     
     def execute(self, repo_path: str, branch_name: str, from_branch: Optional[str] = None) -> Dict[str, Any]:
         """Create a new Git branch."""
+        if not repo_path:
+            repo_path = os.getcwd()
         if not os.path.exists(repo_path):
             raise ValueError(f"Repository path does not exist: {repo_path}")
         
@@ -278,6 +284,8 @@ class CreateCommitTool(Tool):
     
     def execute(self, repo_path: str, message: str, add_all: bool = True) -> Dict[str, Any]:
         """Create a Git commit."""
+        if not repo_path:
+            repo_path = os.getcwd()
         if not os.path.exists(repo_path):
             raise ValueError(f"Repository path does not exist: {repo_path}")
         
@@ -307,14 +315,16 @@ class CreateCommitTool(Tool):
             )
             
             if result.returncode != 0:
-                error_msg = result.stderr.decode().strip()
-                if "nothing to commit" in error_msg:
+                stderr = result.stderr.decode(errors="replace").strip()
+                stdout = result.stdout.decode(errors="replace").strip()
+                combined = stderr or stdout or f"git commit failed (exit={result.returncode})"
+                if "nothing to commit" in combined.lower():
                     return {
                         "success": False,
                         "error": "Nothing to commit",
                         "hash": None
                     }
-                raise ValueError(f"Failed to create commit: {error_msg}")
+                raise ValueError(f"Failed to create commit: {combined}")
             
             # Get the commit hash
             hash_result = subprocess.run(

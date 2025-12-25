@@ -245,7 +245,7 @@ class EditFileTool(Tool):
             "required": ["file_path", "content"]
         }
     
-    async def execute(self, file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
+    def execute(self, file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
         """Edit the contents of a file."""
         try:
             # Normalize path
@@ -293,15 +293,15 @@ ToolRegistry.register_tool(list_directory_tool)
 ToolRegistry.register_tool(read_file_tool)
 ToolRegistry.register_tool(edit_file_tool)
 
-# Export async functions for external use
-async def list_directory(path: str, pattern: str = "*", recursive: bool = False) -> Dict[str, Any]:
+# Export functions for external use
+def list_directory(path: str, pattern: str = "*", recursive: bool = False) -> Dict[str, Any]:
     """List contents of a directory."""
-    return await list_directory_tool.execute(path=path, pattern=pattern, recursive=recursive)
+    return list_directory_tool.execute(path=path, pattern=pattern, recursive=recursive)
 
-async def read_file(file_path: str, start_line: int = 0, max_lines: int = 100) -> Dict[str, Any]:
+def read_file(file_path: str, start_line: int = 0, max_lines: int = 100) -> Dict[str, Any]:
     """Read the contents of a file."""
-    return await read_file_tool.execute(file_path=file_path, start_line=start_line, max_lines=max_lines)
+    return read_file_tool.execute(file_path=file_path, start_line=start_line, max_lines=max_lines)
 
-async def edit_file(file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
+def edit_file(file_path: str, content: str, create_dirs: bool = True) -> Dict[str, Any]:
     """Edit the contents of a file."""
-    return await edit_file_tool.execute(file_path=file_path, content=content, create_dirs=create_dirs) 
+    return edit_file_tool.execute(file_path=file_path, content=content, create_dirs=create_dirs)
