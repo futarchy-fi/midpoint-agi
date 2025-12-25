@@ -974,6 +974,24 @@ Do not wrap it in markdown.
             prompt_lines.append(f"Timestamp: {timestamp}")
             prompt_lines.append(f"Success: {success}")
             prompt_lines.append(f"Summary: {summary}")
+            # If present, include structured failure context to help the analyzer decide
+            # between retry vs decompose vs fix-tooling.
+            failure_context = last_execution.get("failure_context")
+            if isinstance(failure_context, dict):
+                fm = failure_context.get("failure_mode")
+                parse_err = failure_context.get("parse_error")
+                tool_counts = failure_context.get("tool_call_counts")
+                tool_errors = failure_context.get("tool_errors")
+                if fm:
+                    prompt_lines.append(f"Failure mode: {fm}")
+                if parse_err:
+                    prompt_lines.append(f"Parse/error detail: {parse_err}")
+                if isinstance(tool_counts, dict) and tool_counts:
+                    prompt_lines.append(f"Tool call counts: {tool_counts}")
+                if isinstance(tool_errors, list) and tool_errors:
+                    prompt_lines.append("Recent tool errors:")
+                    for err in tool_errors[:5]:
+                        prompt_lines.append(f"- {err}")
         else:
             prompt_lines.append("No specific last execution status recorded.")
 
