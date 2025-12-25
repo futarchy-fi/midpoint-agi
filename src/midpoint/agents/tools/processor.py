@@ -380,7 +380,9 @@ class ToolProcessor:
                         tools=ToolRegistry.get_tool_schemas(),
                         tool_choice="auto",
                         temperature=temperature,
-                        max_tokens=max_tokens
+                        # Newer model families (e.g. gpt-5-*) require `max_completion_tokens`.
+                        # We standardize on that parameter across all agent paths.
+                        max_completion_tokens=max_tokens
                     )
                 except Exception as e:
                     logging.error(f"Error in LLM API call: {str(e)}")
