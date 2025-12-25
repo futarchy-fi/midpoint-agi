@@ -141,7 +141,7 @@ def execute_task(
         executor = TaskExecutor()
         execution_result = executor.execute_task(context, task_data["description"])
 
-        # --- Prepare the data for last_execution_result field ---
+        # --- Prepare the data for last_execution field ---
         last_execution_data = {
             "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
             "success": execution_result.success,
@@ -155,10 +155,7 @@ def execute_task(
         last_execution_data = {k: v for k, v in last_execution_data.items() if v is not None}
 
         # --- Update task_data regardless of success/failure ---
-        # Persist both the newer `last_execution_result` and the legacy `last_execution`
-        # field so other parts of the system (analyzer, status UI, update-parent) can
-        # incorporate failures into subsequent decisions.
-        task_data["last_execution_result"] = last_execution_data
+        # Canonical field used across the codebase.
         task_data["last_execution"] = last_execution_data
 
         if execution_result.success:
@@ -169,7 +166,7 @@ def execute_task(
             task_data["complete"] = True
             task_data["completion_time"] = last_execution_data["timestamp"]
 
-            # Save updated task data (now only updates complete, completion_time, and last_execution_result)
+            # Save updated task data (now only updates complete, completion_time, and last_execution)
             try:
                 with open(task_file, 'w') as f:
                     json.dump(task_data, f, indent=2)
@@ -194,7 +191,7 @@ def execute_task(
             if "completion_time" in task_data:
                 del task_data["completion_time"] # Remove previous completion time if it exists
             
-            # Save updated task data with failure status and last_execution_result
+            # Save updated task data with failure status and last_execution
             try:
                 with open(task_file, 'w') as f:
                     json.dump(task_data, f, indent=2)
