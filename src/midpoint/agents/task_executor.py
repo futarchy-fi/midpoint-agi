@@ -654,7 +654,9 @@ Memory Hash: {context.state.memory_hash}"""
             final_assistant_message = next((msg for msg in reversed(final_messages) if isinstance(msg, dict) and msg.get("role") == "assistant"), None)
             
             if final_assistant_message:
-                final_content = final_assistant_message.get('content', '')
+                # If the assistant produced tool calls, OpenAI may return content=None.
+                # Treat that as "no final response" rather than crashing json.loads(None).
+                final_content = final_assistant_message.get("content") or ""
             else:
                  # Handle case where no final assistant message content is found
                  logger.warning("No final assistant message content found in the conversation history.")
@@ -668,7 +670,7 @@ Memory Hash: {context.state.memory_hash}"""
             try:
                 output_data = json.loads(final_content)
                 logger.debug("Successfully parsed final response as JSON.")
-            except json.JSONDecodeError as json_err:
+            except (TypeError, json.JSONDecodeError) as json_err:
                 logger.warning(f"Failed to parse final response as JSON: {json_err}. Trying markdown extraction...")
                 # Try to extract JSON from markdown code blocks if present (similar to GoalDecomposer)
                 json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', final_content, re.DOTALL)
