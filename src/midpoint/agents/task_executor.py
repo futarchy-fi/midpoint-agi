@@ -140,13 +140,11 @@ class TaskExecutor:
             agent_config = get_agent_config("task_executor")
             self.model = agent_config["model"]
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         else:
             self.model = model
-            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            # Use defaults from config for max_tokens if model is explicitly provided
             agent_config = get_agent_config("task_executor")
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         
         # Initialize tool registry and processor
         self.tool_registry = ToolRegistry()
@@ -591,7 +589,6 @@ Memory Hash: {context.state.memory_hash}"""
                 model=self.model,
                 validate_json_format=True,
                 max_tokens=self.max_tokens,
-                temperature=self.temperature
             )
             
             # === POPULATE conversation_buffer FROM final_messages ===

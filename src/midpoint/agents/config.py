@@ -49,10 +49,10 @@ def _load_llm_config() -> Dict[str, Any]:
         # Return defaults if config file doesn't exist
         return {
             "agents": {
-                "task_executor": {"model": "gpt-4o-mini", "max_tokens": 3000, "temperature": 0.1},
-                "goal_decomposer": {"model": "gpt-4o-mini", "max_tokens": 3000, "temperature": 0.1},
-                "goal_analyzer": {"model": "gpt-4o-mini", "max_tokens": 1000, "temperature": 0.1},
-                "goal_validator": {"model": "gpt-4o-mini", "max_tokens": 2000, "temperature": 0.1},
+                "task_executor": {"model": "gpt-4o-mini", "max_tokens": 3000},
+                "goal_decomposer": {"model": "gpt-4o-mini", "max_tokens": 3000},
+                "goal_analyzer": {"model": "gpt-4o-mini", "max_tokens": 1000},
+                "goal_validator": {"model": "gpt-4o-mini", "max_tokens": 2000},
             }
         }
     
@@ -67,7 +67,7 @@ def get_agent_config(agent_name: str) -> Dict[str, Any]:
         agent_name: Name of the agent (e.g., "task_executor", "goal_decomposer")
         
     Returns:
-        Dictionary with model, max_tokens, and temperature for the agent
+        Dictionary with model and max_tokens for the agent
     """
     config = _load_llm_config()
     agents_config = config.get("agents", {})
@@ -77,5 +77,4 @@ def get_agent_config(agent_name: str) -> Dict[str, Any]:
     return {
         "model": agent_config.get("model", "gpt-4o-mini"),
         "max_tokens": agent_config.get("max_tokens", 2000),
-        "temperature": agent_config.get("temperature", 0.1)
     } 

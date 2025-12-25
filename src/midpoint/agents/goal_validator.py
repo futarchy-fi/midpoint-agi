@@ -106,13 +106,11 @@ class GoalValidator:
             agent_config = get_agent_config("goal_validator")
             self.model = agent_config["model"]
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         else:
             self.model = model
-            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            # Use defaults from config for max_tokens if model is explicitly provided
             agent_config = get_agent_config("goal_validator")
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         
         # Initialize tool processor
         self.tool_processor = ToolProcessor(self.client)
@@ -717,7 +715,6 @@ class GoalValidator:
             messages=messages,
             model=self.model,
             max_tokens=self.max_tokens,
-            temperature=self.temperature
         )
         
         # Store the complete conversation including tools for context saving

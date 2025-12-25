@@ -361,13 +361,11 @@ class GoalDecomposer:
             agent_config = get_agent_config("goal_decomposer")
             self.model = agent_config["model"]
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         else:
             self.model = model
-            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            # Use defaults from config for max_tokens if model is explicitly provided
             agent_config = get_agent_config("goal_decomposer")
             self.max_tokens = agent_config["max_tokens"]
-            self.temperature = agent_config["temperature"]
         
         self.max_history_entries = max_history_entries
         
@@ -841,7 +839,6 @@ You have access to these tools:
                 model=self.model,
                 validate_json_format=True,
                 max_tokens=self.max_tokens,
-                temperature=self.temperature
             )
             
             # Process tool calls and update tool usage
