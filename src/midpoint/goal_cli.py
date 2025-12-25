@@ -43,6 +43,186 @@ logging.basicConfig(
 GOAL_DIR = ".goal"
 VISUALIZATION_DIR = f"{GOAL_DIR}/visualization"
 
+# ---------------------------------------------------------------------------
+# Navigation helpers (kept for backward compatibility + tests)
+# ---------------------------------------------------------------------------
+
+def get_parent_goal_id(goal_id: str) -> str | None:
+    """
+    Return the parent goal id for `goal_id`, or:
+    - "" if the goal exists and has no parent
+    - None if the goal file does not exist / can't be read
+
+    Note: tests patch `GOAL_DIR`, so we must use it (not hard-code ".goal").
+    """
+    try:
+        goal_file = Path(GOAL_DIR) / f"{goal_id}.json"
+        if not goal_file.exists():
+            return None
+        with open(goal_file, "r") as f:
+            data = json.load(f)
+        return data.get("parent_goal", "")
+    except Exception:
+        return None
+
+
+def go_back_commits(steps: int = 1) -> bool:
+    """Go back N commits on current branch (simple wrapper used by tests)."""
+    if steps < 1:
+        logging.error("Number of steps must be at least 1")
+        return False
+    try:
+        subprocess.run(
+            ["git", "reset", "--hard", f"HEAD~{steps}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to go back commits: {e}")
+        return False
+
+
+def reset_to_commit(commit_id: str) -> bool:
+    """Reset to a specific commit (simple wrapper used by tests)."""
+    try:
+        subprocess.run(
+            ["git", "reset", "--hard", commit_id],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to reset to commit: {e}")
+        return False
+
+
+def go_to_parent_goal() -> bool:
+    """Checkout the parent goal branch of the current goal branch."""
+    try:
+        current_branch = get_current_branch()
+        goal_id = get_goal_id_from_branch(current_branch) if current_branch else None
+        if not goal_id:
+            logging.error("Not on a goal branch")
+            return False
+
+        parent_id = get_parent_goal_id(goal_id)
+        if parent_id is None:
+            logging.error(f"Could not determine parent for goal {goal_id}")
+            return False
+        if parent_id == "":
+            logging.info("Already at a root goal (no parent)")
+            return False
+
+        parent_branch = find_branch_for_goal(parent_id)
+        if not parent_branch:
+            logging.error(f"No branch found for parent goal {parent_id}")
+            return False
+
+        subprocess.run(
+            ["git", "checkout", parent_branch],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to checkout parent goal: {e}")
+        return False
+
+
+def go_to_child(child_goal_id: str) -> bool:
+    """Checkout the branch for a child goal/task."""
+    try:
+        child_branch = find_branch_for_goal(child_goal_id)
+        if not child_branch:
+            logging.error(f"No branch found for child {child_goal_id}")
+            return False
+        subprocess.run(
+            ["git", "checkout", child_branch],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to checkout child goal: {e}")
+        return False
+
+
+def go_to_root_goal() -> bool:
+    """Walk up parents until reaching the root goal, then checkout its branch."""
+    current_branch = get_current_branch()
+    goal_id = get_goal_id_from_branch(current_branch) if current_branch else None
+    if not goal_id:
+        logging.error("Not on a goal branch")
+        return False
+
+    # Walk up until parent is empty.
+    while True:
+        parent_id = get_parent_goal_id(goal_id)
+        if parent_id is None:
+            logging.error(f"Could not determine parent for goal {goal_id}")
+            return False
+        if parent_id == "":
+            break
+        goal_id = parent_id
+
+    root_branch = find_branch_for_goal(goal_id)
+    if not root_branch:
+        logging.error(f"No branch found for root goal {goal_id}")
+        return False
+
+    try:
+        subprocess.run(
+            ["git", "checkout", root_branch],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to checkout root goal: {e}")
+        return False
+
+
+def list_subgoals() -> list[str]:
+    """
+    List direct child goals/tasks of the current goal.
+
+    Returns list of child goal IDs. Prints a short human-readable list (used by tests).
+    """
+    current_branch = get_current_branch()
+    goal_id = get_goal_id_from_branch(current_branch) if current_branch else None
+    if not goal_id:
+        print("Not on a goal branch.")
+        return []
+
+    goal_path = Path(GOAL_DIR)
+    children: list[str] = []
+    if not goal_path.exists():
+        print(f"No goal directory found at {goal_path}")
+        return []
+
+    for file_path in goal_path.glob("*.json"):
+        try:
+            with open(file_path, "r") as f:
+                data = json.load(f)
+            if (data.get("parent_goal") or "") == goal_id:
+                child_id = data.get("goal_id")
+                if child_id:
+                    children.append(child_id)
+        except Exception:
+            continue
+
+    children.sort()
+    print(f"Children of {goal_id}:")
+    for cid in children:
+        print(f"- {cid}")
+    return children
+
 # Import command implementations from their modules
 from .goal_file_management import (
     generate_goal_id,

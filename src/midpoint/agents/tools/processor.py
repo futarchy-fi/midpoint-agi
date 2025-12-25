@@ -6,29 +6,15 @@ This module provides a processor for handling LLM tool calls and executing the a
 
 import json
 import logging
-import os
-from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 from openai import OpenAI
 
 from midpoint.agents.tools.registry import ToolRegistry
+from midpoint.utils.llm_logging import ensure_llm_logger_configured, LLM_LOGGER_NAME
 
-# Add a dedicated logger for LLM responses
-llm_logger = logging.getLogger("llm_responses")
-llm_logger.setLevel(logging.DEBUG)
-
-# Ensure we have a logs directory
-if not os.path.exists("logs"):
-    os.makedirs("logs")
-
-# Create a file handler for LLM responses
-llm_log_filename = f"logs/llm_responses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-llm_file_handler = logging.FileHandler(llm_log_filename)
-llm_file_handler.setLevel(logging.DEBUG)
-llm_file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-llm_file_handler.setFormatter(llm_file_formatter)
-llm_logger.addHandler(llm_file_handler)
+# Dedicated logger for LLM responses (configured lazily; no import-time side effects)
+llm_logger = logging.getLogger(LLM_LOGGER_NAME)
 
 class ToolProcessor:
     """Handles LLM tool calls and executes appropriate tools."""
@@ -346,6 +332,11 @@ class ToolProcessor:
             - message_history: Complete list of all messages (system, user, assistant, tool results)
             - tool_usage: List of tool calls and their results
         """
+        # Ensure we have a correctly configured LLM logger rooted at `{repo_root}/logs`.
+        ensure_llm_logger_configured()
+        llm_logger.debug("=== run_llm_with_tools start ===")
+        llm_logger.debug(f"Model: {model}, max_tokens: {max_tokens}, validate_json_format: {validate_json_format}")
+        llm_logger.debug(f"Incoming messages: {len(messages)}")
         current_messages = messages.copy()
         tool_usage = []
         
@@ -372,6 +363,7 @@ class ToolProcessor:
                 
                 # Call the LLM
                 try:
+                    llm_logger.debug("Calling OpenAI chat.completions.create(...)")
                     response = self.client.chat.completions.create(
                         model=model,
                         messages=current_messages,
@@ -383,6 +375,7 @@ class ToolProcessor:
                     )
                 except Exception as e:
                     logging.error(f"Error in LLM API call: {str(e)}")
+                    llm_logger.exception("LLM API call failed.")
                     raise
                 
                 # Get the assistant's message
@@ -508,7 +501,7 @@ class ToolProcessor:
                 logging.error(f"Error in LLM tool processing: {str(e)}")
                 
                 # Log the exception details to the dedicated LLM log file
-                llm_logger.error(f"Error processing LLM response: {str(e)}")
+                llm_logger.exception("Error processing LLM response.")
                 
                 # For JSONDecodeError, log more details about the error
                 if isinstance(e, json.JSONDecodeError):
@@ -549,6 +542,7 @@ class ToolProcessor:
                     # For other types of errors, re-raise
                     raise
         
+        llm_logger.debug("=== run_llm_with_tools end ===")
         return current_messages, tool_usage
         
     def _extract_json_from_response(self, content: str) -> Optional[str]:
