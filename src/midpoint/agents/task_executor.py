@@ -461,6 +461,8 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
                 # Return a preview result
                 return ExecutionResult(
                     success=True,
+                    branch_name=context.state.branch_name,
+                    git_hash=context.state.git_hash,
                     summary="Preview mode: Prompt built but LLM not called",
                     suggested_validation_steps=[],
                     final_state=context.state,
