@@ -3,6 +3,7 @@ import json
 import logging
 import datetime
 import subprocess
+import shutil
 from pathlib import Path
 from .constants import GOAL_DIR
 
@@ -118,6 +119,16 @@ def delete_goal(goal_id):
         # Delete the goal file
         goal_file.unlink()
         print(f"Deleted goal file: {goal_file}")
+        
+        # Delete the goal's directory (contains attempts folder and any other goal-specific data)
+        goal_dir = goal_path / goal_id
+        if goal_dir.exists() and goal_dir.is_dir():
+            try:
+                shutil.rmtree(goal_dir)
+                print(f"Deleted goal directory: {goal_dir}")
+            except Exception as e:
+                logging.warning(f"Failed to delete goal directory {goal_dir}: {e}")
+                print(f"Warning: Failed to delete goal directory {goal_dir}. It might need manual deletion.")
         
         # If there's an associated branch, delete it
         if branch_name:
