@@ -119,7 +119,7 @@ from midpoint.agents.tools import (
     web_scrape,
     retrieve_memory_documents,
 )
-from midpoint.agents.config import get_openai_api_key
+from midpoint.agents.config import get_openai_api_key, get_agent_config
 from midpoint.utils.logging import log_manager
 from dotenv import load_dotenv
 import subprocess
@@ -346,16 +346,29 @@ class GoalDecomposer:
     provides validation criteria for that state.
     """
     
-    def __init__(self, model: str = "gpt-4o-mini", max_history_entries: int = 5):
+    def __init__(self, model: str = None, max_history_entries: int = 5):
         """
         Initialize the goal decomposer.
         
         Args:
-            model: The model to use for generation
+            model: The model to use for generation (defaults to config if not provided)
             max_history_entries: Maximum number of history entries to consider
         """
         self.logger = logging.getLogger('GoalDecomposer')
-        self.model = model
+        
+        # Load agent config from llm_config.json if model not provided
+        if model is None:
+            agent_config = get_agent_config("goal_decomposer")
+            self.model = agent_config["model"]
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        else:
+            self.model = model
+            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            agent_config = get_agent_config("goal_decomposer")
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        
         self.max_history_entries = max_history_entries
         
         # Get API key from config
@@ -827,7 +840,8 @@ You have access to these tools:
                 messages,
                 model=self.model,
                 validate_json_format=True,
-                max_tokens=3000
+                max_tokens=self.max_tokens,
+                temperature=self.temperature
             )
             
             # Process tool calls and update tool usage

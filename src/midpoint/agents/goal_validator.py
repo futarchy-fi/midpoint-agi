@@ -29,7 +29,7 @@ from .tools import (
 )
 from .tools.processor import ToolProcessor
 from .tools.registry import ToolRegistry
-from .config import get_openai_api_key
+from .config import get_openai_api_key, get_agent_config
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class GoalValidator:
     4. Identifies specific areas for improvement
     """
     
-    def __init__(self, model: str = "gpt-4o-mini"):
+    def __init__(self, model: str = None):
         """Initialize the GoalValidator agent."""
         # Initialize OpenAI client with API key from config
         api_key = get_openai_api_key()
@@ -101,8 +101,18 @@ class GoalValidator:
         # Initialize OpenAI client
         self.client = OpenAI(api_key=api_key)
         
-        # Store the model name
-        self.model = model
+        # Load agent config from llm_config.json if model not provided
+        if model is None:
+            agent_config = get_agent_config("goal_validator")
+            self.model = agent_config["model"]
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        else:
+            self.model = model
+            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            agent_config = get_agent_config("goal_validator")
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
         
         # Initialize tool processor
         self.tool_processor = ToolProcessor(self.client)
@@ -705,7 +715,9 @@ class GoalValidator:
         # Call async tool processor directly, relies on caller's loop
         response, tool_calls = self.tool_processor.run_llm_with_tools(
             messages=messages,
-            model=self.model
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature
         )
         
         # Store the complete conversation including tools for context saving

@@ -70,7 +70,7 @@ from .tools import (
     retrieve_memory_documents, # Might be redundant if memory_tools import worked
     run_terminal_cmd
 )
-from .config import get_openai_api_key
+from .config import get_openai_api_key, get_agent_config
 # from .utils.logging import log_manager # Commented out if not used
 from dotenv import load_dotenv
 import subprocess
@@ -193,16 +193,29 @@ class GoalAnalyzer:
     action (e.g., decompose, create task, mark complete, give up).
     """
     
-    def __init__(self, model: str = "gpt-4o-mini", max_history_entries: int = 5):
+    def __init__(self, model: str = None, max_history_entries: int = 5):
         """
         Initialize the goal analyzer.
         
         Args:
-            model: The model to use for generation
+            model: The model to use for generation (defaults to config if not provided)
             max_history_entries: Maximum number of history entries to consider
         """
         self.logger = logging.getLogger('GoalAnalyzer')
-        self.model = model
+        
+        # Load agent config from llm_config.json if model not provided
+        if model is None:
+            agent_config = get_agent_config("goal_analyzer")
+            self.model = agent_config["model"]
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        else:
+            self.model = model
+            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            agent_config = get_agent_config("goal_analyzer")
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        
         self.max_history_entries = max_history_entries
         # Re-add ToolProcessor initialization here
         api_key = get_openai_api_key() # Assuming this is available
@@ -419,7 +432,8 @@ Do not wrap it in markdown.
                 message, tool_calls = self.tool_processor.run_llm_with_tools(
                     messages, model=self.model,
                     validate_json_format=True, # Expecting JSON output
-                    max_tokens=1000 # Analysis output should be shorter
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature
                 )
                 log_with_timestamp("Received response from LLM", llm_logger)
 

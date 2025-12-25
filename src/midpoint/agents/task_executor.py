@@ -29,7 +29,7 @@ from .tools.code_tools import search_code
 from .tools.web_tools import web_search, web_scrape
 from .tools.terminal_tools import run_terminal_cmd
 from .tools.memory_tools import store_memory_document, retrieve_memory_documents
-from .config import get_openai_api_key
+from .config import get_openai_api_key, get_agent_config
 from openai import OpenAI
 
 # Set up logging
@@ -117,8 +117,13 @@ class TaskExecutor:
     5. Changes are committed if valid
     """
     
-    def __init__(self):
-        """Initialize the TaskExecutor agent."""
+    def __init__(self, model: str = None):
+        """
+        Initialize the TaskExecutor agent.
+        
+        Args:
+            model: The model to use for generation (defaults to config if not provided)
+        """
         logger.info("Initializing TaskExecutor")
         # Initialize OpenAI client with API key from config
         api_key = get_openai_api_key()
@@ -129,6 +134,19 @@ class TaskExecutor:
             
         # Initialize OpenAI client
         self.client = OpenAI(api_key=api_key)
+        
+        # Load agent config from llm_config.json if model not provided
+        if model is None:
+            agent_config = get_agent_config("task_executor")
+            self.model = agent_config["model"]
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
+        else:
+            self.model = model
+            # Use defaults from config for max_tokens and temperature if model is explicitly provided
+            agent_config = get_agent_config("task_executor")
+            self.max_tokens = agent_config["max_tokens"]
+            self.temperature = agent_config["temperature"]
         
         # Initialize tool registry and processor
         self.tool_registry = ToolRegistry()
@@ -570,9 +588,10 @@ Memory Hash: {context.state.memory_hash}"""
             # Get the task execution plan from the model
             final_messages, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages,
-                model="gpt-4o-mini",
+                model=self.model,
                 validate_json_format=True,
-                max_tokens=3000
+                max_tokens=self.max_tokens,
+                temperature=self.temperature
             )
             
             # === POPULATE conversation_buffer FROM final_messages ===
