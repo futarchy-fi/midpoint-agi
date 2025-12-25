@@ -159,6 +159,9 @@ class TaskExecutor:
         
         # Initialize conversation buffer for memory storage
         self.conversation_buffer = []
+        # Capture the last memory document write result for this executor run.
+        # This is used by the caller (CLI) to record an attempt journal entry in `.goal/`.
+        self.last_memory_store_result: Optional[Dict[str, Any]] = None
         
         logger.info("TaskExecutor initialized successfully")
 
@@ -168,6 +171,7 @@ class TaskExecutor:
         """
         if not context.state.memory_repository_path or not context.state.memory_hash:
             logger.info("No memory repo or hash available, skipping _save_interaction_to_memory")
+            self.last_memory_store_result = None
             return
 
         try:
@@ -267,6 +271,7 @@ class TaskExecutor:
                 logger.info(f"Successfully saved task execution conversation to memory: {result.get('document_path', 'unknown')}", extra={'memory': True})
             else:
                 logger.error(f"Failed to save conversation to memory: {result.get('error', 'Unknown error')}")
+            self.last_memory_store_result = result
             
         except Exception as e:
             logger.error(f"Failed to store conversation to memory: {str(e)}")
@@ -274,6 +279,7 @@ class TaskExecutor:
             logger.info(f"  Repository path: {context.state.memory_repository_path}")
             logger.info(f"  Memory hash: {context.state.memory_hash[:8] if context.state.memory_hash else 'None'}")
             logger.info(f"  Task: {context.goal.description}")
+            self.last_memory_store_result = {"success": False, "error": str(e)}
 
     def _generate_system_prompt(self) -> str:
         """
@@ -361,6 +367,8 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
             ExecutionResult containing the execution outcome
         """
         try:
+            # Reset per-run memory write info
+            self.last_memory_store_result = None
             # Use provided task description if available, otherwise use goal description
             task = task_description or context.goal.description
             
@@ -477,6 +485,9 @@ Memory Hash: {context.state.memory_hash}"""
             # Return the result using the PARSED success status and include error message if failed
             # Populate the new summary and validation_steps fields
             result_metadata = {"tool_usage": tool_usage_list}
+            if self.last_memory_store_result:
+                # Store as-is; callers decide how to persist/use it (e.g., attempt journal).
+                result_metadata["memory_store_result"] = self.last_memory_store_result
             return ExecutionResult(
                 success=execution_success,
                 summary=summary, # Pass the summary from LLM
