@@ -4,6 +4,7 @@ import logging
 import json
 from typing import Optional
 from pathlib import Path
+from .constants import GOAL_DIR
 
 
 def get_current_hash(repo_path: Optional[str] = None) -> str:
@@ -282,8 +283,8 @@ def find_top_level_branch(goal_id):
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
-    goal_path = Path('.goal')
+    goal_path = Path(GOAL_DIR)
     if not goal_path.exists():
         goal_path.mkdir()
-        logging.info(f"Created goal directory: .goal")
+        logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path

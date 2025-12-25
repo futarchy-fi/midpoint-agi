@@ -2,46 +2,43 @@
 Command-line interface for goal management.
 """
 
-import os
-import json
+# Standard library imports
 import argparse
+import json
 import logging
-import datetime
 import subprocess
-import asyncio
-import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Union, Set, Callable
-import sys
-import time
-import tempfile
-import shutil
 
-# Local imports (ensure correct relative paths)
-from .agents.models import Goal, SubgoalPlan, TaskContext, ExecutionResult, MemoryState, State
-from .agents.goal_decomposer import decompose_goal as agent_decompose_goal
-from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
-from .agents.tools.git_tools import get_current_hash, get_current_branch, get_repository_diff
-from .agents.tools.memory_tools import get_memory_diff
-
-# Import validator for automated validation
-from .agents.goal_validator import GoalValidator
-
-# Import the new Goal Analyzer agent function
-from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
-
-# Import the new parent update functions
-from .goal_operations.goal_update import propagate_success_state_to_parent, propagate_failure_history_to_parent
+# Local imports
+from .constants import GOAL_DIR, VISUALIZATION_DIR
+from .goal_file_management import (
+    delete_goal,
+    ensure_goal_dir,
+)
+from .goal_git import (
+    find_branch_for_goal,
+    get_current_branch,
+    get_goal_id_from_branch,
+)
+from .goal_state import (
+    create_new_goal,
+    mark_goal_complete,
+    merge_subgoal,
+)
+from .goal_visualization import (
+    show_goal_diffs,
+    show_goal_status,
+    show_goal_tree,
+)
+from .goal_decompose_command import decompose_existing_goal
+from .goal_execute_command import execute_task
+from .goal_revert import revert_goal
 
 # Configure basic logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s: %(message)s"
 )
-
-# Constants
-GOAL_DIR = ".goal"
-VISUALIZATION_DIR = f"{GOAL_DIR}/visualization"
 
 # ---------------------------------------------------------------------------
 # Navigation helpers (kept for backward compatibility + tests)
@@ -223,38 +220,6 @@ def list_subgoals() -> list[str]:
         print(f"- {cid}")
     return children
 
-# Import command implementations from their modules
-from .goal_file_management import (
-    generate_goal_id,
-    ensure_goal_dir
-)
-
-from .goal_git import (
-    get_current_hash,
-    get_current_branch,
-    get_goal_id_from_branch,
-    find_branch_for_goal
-)
-
-from .goal_state import (
-    ensure_goal_dir,
-    create_goal_file,
-    create_new_goal,
-    mark_goal_complete,
-    merge_subgoal
-)
-
-from .goal_visualization import (
-    show_goal_status,
-    show_goal_tree,
-    show_goal_diffs
-)
-
-# Import commands for goal management
-from .goal_decompose_command import decompose_existing_goal
-from .goal_execute_command import execute_task
-from .goal_revert import revert_goal
-from .goal_file_management import delete_goal
 
 def analyze_goal(goal_id, human_mode=False):
     """Analyze a goal to determine next actions using the goal analyzer agent."""

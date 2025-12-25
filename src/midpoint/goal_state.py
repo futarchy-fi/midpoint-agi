@@ -19,9 +19,7 @@ from .goal_git import (
 
 # Import file management functions
 from .goal_file_management import generate_goal_id
-
-# Constants
-GOAL_DIR = ".goal"
+from .constants import GOAL_DIR
 
 def _get_git_repo_root(fallback_path: Optional[str] = None) -> str:
     """Return the git repository root (top-level) for the current working directory.

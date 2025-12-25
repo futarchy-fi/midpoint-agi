@@ -8,9 +8,7 @@ import datetime
 import subprocess
 from pathlib import Path
 
-# Constants
-GOAL_DIR = ".goal"
-VISUALIZATION_DIR = f"{GOAL_DIR}/visualization"
+from .constants import GOAL_DIR, VISUALIZATION_DIR
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""

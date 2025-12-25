@@ -81,6 +81,7 @@ load_dotenv()
 # Centralized log path + LLM logger configuration
 from midpoint.utils.log_paths import get_logs_dir
 from midpoint.utils.llm_logging import configure_llm_responses_logger, LLM_LOGGER_NAME
+from midpoint.constants import GOAL_DIR
 
 # Global variables to store log file paths
 log_file = None 
@@ -284,7 +285,7 @@ Do not wrap it in markdown.
         Load the most recent attempt journal entries from `.goal/<goal_id>/attempts/*.json`.
         These are append-only execution traces written by `goal execute`.
         """
-        attempt_dir = Path(".goal") / goal_id / "attempts"
+        attempt_dir = Path(GOAL_DIR) / goal_id / "attempts"
         if not attempt_dir.exists():
             return []
         files = sorted(attempt_dir.glob("*.json"))
@@ -489,7 +490,7 @@ Do not wrap it in markdown.
                         log_with_timestamp(f"Goal analyzer recommended stopping: {action}", llm_logger)
                         
                         # Load the goal file to get parent information
-                        goal_path = Path(".goal")
+                        goal_path = Path(GOAL_DIR)
                         goal_file = goal_path / f"{goal_id}.json"
                         if goal_file.exists():
                             with open(goal_file, 'r') as f:
@@ -603,7 +604,7 @@ Do not wrap it in markdown.
                             logging.error(f"DEBUG: Failed to verify file: {e}")
                     else:
                         # For non-stop actions, update the goal file with the analysis result
-                        goal_path = Path(".goal")
+                        goal_path = Path(GOAL_DIR)
                         goal_file = goal_path / f"{goal_id}.json"
                         if goal_file.exists():
                             try:
@@ -749,7 +750,7 @@ Do not wrap it in markdown.
         memory_content = "No recent memory retrieved."
 
         # --- 1. Load Goal Data ---
-        goal_path = Path(".goal") # Assuming .goal dir exists
+        goal_path = Path(GOAL_DIR) # Assuming .goal dir exists
         goal_file = goal_path / f"{goal_id}.json"
         if goal_file.exists():
             try:
@@ -775,7 +776,7 @@ Do not wrap it in markdown.
             def get_children_details(parent_goal_id: str) -> List[Dict[str, Any]]:
                 """Get details of direct children (subgoals and tasks) for a given parent ID."""
                 llm_logger.debug(f"Looking for children of parent ID: {parent_goal_id}")
-                goal_path = Path(".goal")
+                goal_path = Path(GOAL_DIR)
                 children_details = []
                 try:
                     for file_path in goal_path.glob("*.json"):

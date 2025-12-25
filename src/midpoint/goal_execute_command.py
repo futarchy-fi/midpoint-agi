@@ -12,13 +12,14 @@ from typing import Any, Dict, Optional
 from .agents.task_executor import TaskExecutor, configure_logging as configure_executor_logging
 from .agents.models import TaskContext, State, Goal, MemoryState
 from .goal_git import get_current_branch, find_top_level_branch
+from .constants import GOAL_DIR
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
-    goal_path = Path('.goal')
+    goal_path = Path(GOAL_DIR)
     if not goal_path.exists():
         goal_path.mkdir()
-        logging.info(f"Created goal directory: .goal")
+        logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
 
 

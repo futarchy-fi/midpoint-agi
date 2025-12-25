@@ -19,6 +19,7 @@ import datetime
 from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
 from midpoint.agents.goal_validator import GoalValidator
 from midpoint.agents.models import Goal, ExecutionResult, ValidationResult
+from midpoint.constants import GOAL_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -30,10 +31,10 @@ logger = logging.getLogger('goal_validator_cli')
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
-    goal_path = Path(".goal")
+    goal_path = Path(GOAL_DIR)
     if not goal_path.exists():
         goal_path.mkdir()
-        logging.info(f"Created goal directory: .goal")
+        logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
 
 

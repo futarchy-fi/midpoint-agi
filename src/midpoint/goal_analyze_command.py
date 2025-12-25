@@ -16,14 +16,15 @@ from pathlib import Path
 
 from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
 from .goal_git import get_current_branch, find_top_level_branch
+from .constants import GOAL_DIR
 
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
-    goal_path = Path(".goal")
+    goal_path = Path(GOAL_DIR)
     if not goal_path.exists():
         goal_path.mkdir()
-        logging.info("Created goal directory: .goal")
+        logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
 
 

@@ -123,6 +123,7 @@ from midpoint.agents.config import get_openai_api_key, get_agent_config
 from midpoint.utils.logging import log_manager
 from midpoint.utils.log_paths import get_logs_dir
 from midpoint.utils.llm_logging import configure_llm_responses_logger
+from midpoint.constants import GOAL_DIR
 from dotenv import load_dotenv
 import subprocess
 import time
@@ -675,7 +676,7 @@ You have access to these tools:
         goal_id = context.metadata.get('goal_id')
         analysis_justification = None
         if goal_id:
-            goal_file_path = Path(".goal") / f"{goal_id}.json"
+            goal_file_path = Path(GOAL_DIR) / f"{goal_id}.json"
             if goal_file_path.exists():
                 try:
                     with open(goal_file_path, 'r') as f:

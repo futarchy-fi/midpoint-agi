@@ -14,9 +14,8 @@ from .goal_file_management import (
 from .goal_visualization import (
     show_goal_status, show_goal_tree, show_goal_diffs
 )
-from .goal_analysis import (
-    analyze_goal, show_validation_history
-)
+# Import analysis functions from goal_cli.py (these should eventually be moved to a dedicated module)
+from .goal_cli import analyze_goal, show_validation_history
 from .goal_state import (
     create_new_goal, mark_goal_complete, 
     merge_subgoal, update_parent_goal_state, update_git_state

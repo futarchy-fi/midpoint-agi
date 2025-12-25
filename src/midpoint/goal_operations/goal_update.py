@@ -5,8 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-# --- Constants ---
-GOAL_DIR = ".goal"
+from ..constants import GOAL_DIR
 
 # --- Helper Functions (Consider moving to a shared utils module later) ---
 

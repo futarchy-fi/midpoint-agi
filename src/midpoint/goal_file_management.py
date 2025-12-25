@@ -4,13 +4,14 @@ import logging
 import datetime
 import subprocess
 from pathlib import Path
+from .constants import GOAL_DIR
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
-    goal_path = Path('.goal')
+    goal_path = Path(GOAL_DIR)
     if not goal_path.exists():
         goal_path.mkdir()
-        logging.info(f"Created goal directory: .goal")
+        logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
 
 def generate_goal_id(parent_id=None, is_task=False):
