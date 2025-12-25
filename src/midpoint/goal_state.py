@@ -8,6 +8,7 @@ import datetime
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+import os
 
 # Import git-related functions
 from .goal_git import (
@@ -21,6 +22,25 @@ from .goal_file_management import generate_goal_id
 
 # Constants
 GOAL_DIR = ".goal"
+
+def _get_git_repo_root(fallback_path: Optional[str] = None) -> str:
+    """Return the git repository root (top-level) for the current working directory.
+
+    Falls back to `fallback_path` (or `os.getcwd()`) if the current directory is not inside
+    a git repository or git is unavailable.
+    """
+    fallback = fallback_path or os.getcwd()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        repo_root = result.stdout.strip()
+        return repo_root or fallback
+    except Exception:
+        return fallback
 
 def ensure_goal_dir():
     """Ensure the .goal directory exists."""
@@ -60,7 +80,6 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
     # Try to get memory state (optional)
     memory_hash = None
     # Use ~/.midpoint/memory as default if MEMORY_REPO_PATH not set
-    import os
     memory_repo_path = os.environ.get("MEMORY_REPO_PATH")
     if not memory_repo_path:
         # Expand ~ to user's home directory
@@ -76,9 +95,12 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
             logging.warning(f"Could not get initial memory hash: {e}")
             # Still use the path even if we can't get the hash
     
+    # Record the repo root rather than the current subdirectory.
+    repo_root = _get_git_repo_root()
+
     initial_state_data = {
         "git_hash": current_hash,
-        "repository_path": os.getcwd(),
+        "repository_path": repo_root,
         "description": "Initial state before processing goal",
         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         "memory_hash": memory_hash,

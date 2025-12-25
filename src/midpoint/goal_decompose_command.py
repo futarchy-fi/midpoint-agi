@@ -219,7 +219,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                     "further_steps": result.get("further_steps", []),
                     "initial_state": {
                         "git_hash": result["git_hash"],
-                        "repository_path": os.getcwd(),
+                        "repository_path": goal_data.get("current_state", {}).get("repository_path", os.getcwd()),
                         "description": "Initial state before executing subgoal",
                         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                         "memory_hash": updated_memory_hash,
@@ -227,7 +227,7 @@ def decompose_existing_goal(goal_id, debug=False, quiet=False, bypass_validation
                     },
                     "current_state": {
                         "git_hash": result["git_hash"],
-                        "repository_path": os.getcwd(),
+                        "repository_path": goal_data.get("current_state", {}).get("repository_path", os.getcwd()),
                         "description": "Initial state before executing subgoal",
                         "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
                         "memory_hash": updated_memory_hash,
