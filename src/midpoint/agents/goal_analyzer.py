@@ -78,6 +78,10 @@ import time # Added time import for fallback
 
 load_dotenv()
 
+# Centralized log path + LLM logger configuration
+from midpoint.utils.log_paths import get_logs_dir
+from midpoint.utils.llm_logging import configure_llm_responses_logger, LLM_LOGGER_NAME
+
 # Global variables to store log file paths
 log_file = None 
 task_summary_file = None
@@ -95,9 +99,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     # Access global variables
     global log_file, task_summary_file, llm_responses_file
     
-    # Ensure log_dir_path is a Path object
-    log_dir = Path(log_dir_path)
-    log_dir.mkdir(exist_ok=True)
+    # Always log to absolute `{repo_root}/logs` (independent of CWD).
+    log_dir = get_logs_dir()
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"goal_analyzer_{timestamp}.log"
     task_summary_file = log_dir / f"task_summary_{timestamp}.log"
@@ -141,45 +144,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         f.write("=" * 50 + "\n\n")
         f.flush()  # Force immediate write
     
-    # Configure the dedicated LLM interactions logger
-    llm_logger = logging.getLogger('llm_interactions')
-    llm_logger.setLevel(logging.DEBUG)  # Capture all LLM interaction details
-    
-    # Remove any existing handlers
-    for handler in llm_logger.handlers[:]:
-        llm_logger.removeHandler(handler)
-    
-    # Create file handler specifically for LLM responses with immediate flush
-    llm_file_handler = logging.FileHandler(llm_responses_file)
-    llm_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    llm_file_handler.setLevel(logging.DEBUG)
-    
-    # Enable immediate flushing of log messages for more reliable logging
-    class ImmediateFlushingHandler(logging.FileHandler):
-        def emit(self, record):
-            super().emit(record)
-            self.flush()
-    
-    # Replace with immediate flushing handler
-    llm_immediate_handler = ImmediateFlushingHandler(llm_responses_file)
-    llm_immediate_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    llm_immediate_handler.setLevel(logging.DEBUG)
-    
-    # Add the handler to the LLM logger ONLY
-    llm_logger.addHandler(llm_immediate_handler)
-    
-    # Prevent LLM logs from propagating to the root logger's handlers
-    llm_logger.propagate = False
-    
-    # Write an initial message to verify the file is writable
-    try:
-        with open(llm_responses_file, "a") as f:
-            f.write("LLM Responses Log initialized at " + timestamp + "\n")
-            f.flush()  # Force immediate write
-    except Exception as e:
-        logging.error(f"Error writing to LLM responses file: {e}")
-    
-    # Test log message directly to the LLM logger
+    # Configure the dedicated LLM responses logger (single source of truth).
+    llm_logger, _ = configure_llm_responses_logger(log_file=llm_responses_file, timestamp=timestamp)
     llm_logger.debug("LLM logger initialized")
     
     logging.info("Logging configured")
@@ -323,16 +289,13 @@ Do not wrap it in markdown.
             log_file, task_summary_file, llm_responses_file = configure_logging(debug, quiet)
             
         # Create dedicated LLM logger - ensure we're always using the same logger instance
-        llm_logger = logging.getLogger('llm_interactions')
+        llm_logger = logging.getLogger(LLM_LOGGER_NAME)
         
         # Ensure handler is set up even if configure_logging wasn't called
         # This is important because sometimes the analyze_goal_state might be called 
         # without setting up logging first
         if not llm_logger.handlers and llm_responses_file:
-            handler = logging.FileHandler(llm_responses_file)
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-            llm_logger.handlers = [handler]
-            llm_logger.propagate = False
+            configure_llm_responses_logger(log_file=llm_responses_file)
         
         # Force a test log message to verify the logger is working
         log_with_timestamp("========== STARTING GOAL ANALYSIS ==========", llm_logger)
@@ -736,7 +699,7 @@ Do not wrap it in markdown.
 
     def _create_analysis_user_prompt(self, context: TaskContext, goal_id: str, memory_hash: str, memory_repo_path: str) -> str:
         """Create the user prompt for the Goal Analyzer LLM."""
-        llm_logger = logging.getLogger('llm_interactions')
+        llm_logger = logging.getLogger(LLM_LOGGER_NAME)
         llm_logger.debug(f"==== BUILDING ANALYSIS USER PROMPT ====")
         llm_logger.debug(f"Goal ID: {goal_id}")
         llm_logger.debug(f"Memory hash: {memory_hash[:8] if memory_hash else None}")
@@ -1172,7 +1135,7 @@ def analyze_goal(
     logging.info(f"Analyzing goal: {goal}")
     
     # Additional test message to LLM logger
-    llm_logger = logging.getLogger('llm_interactions')
+    llm_logger = logging.getLogger(LLM_LOGGER_NAME)
     llm_logger.debug(f"Goal analysis initiated for: {goal}")
     llm_logger.debug(f"Using log files: {log_file}, {task_summary_file}, {llm_responses_file}")
 

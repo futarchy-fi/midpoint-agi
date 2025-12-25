@@ -121,6 +121,8 @@ from midpoint.agents.tools import (
 )
 from midpoint.agents.config import get_openai_api_key, get_agent_config
 from midpoint.utils.logging import log_manager
+from midpoint.utils.log_paths import get_logs_dir
+from midpoint.utils.llm_logging import configure_llm_responses_logger
 from dotenv import load_dotenv
 import subprocess
 import time
@@ -137,9 +139,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         quiet: Whether to only show warnings and the final result
         log_dir_path: Directory to store log files
     """
-    # Create log directory if it doesn't exist
-    log_dir = Path(log_dir_path)
-    log_dir.mkdir(exist_ok=True)
+    # Always log to absolute `{repo_root}/logs` (independent of CWD).
+    log_dir = get_logs_dir()
     
     # Create a unique log file name with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -181,22 +182,8 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
         f.write(f"Task Summary Log - {timestamp}\n")
         f.write("=" * 50 + "\n\n")
     
-    # === START EDIT ===
-    # Configure the dedicated LLM interactions logger
-    llm_logger = logging.getLogger('llm_interactions')
-    llm_logger.setLevel(logging.DEBUG)  # Capture all LLM interaction details
-    
-    # Create file handler specifically for LLM responses
-    llm_file_handler = logging.FileHandler(llm_responses_file)
-    llm_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    llm_file_handler.setLevel(logging.DEBUG)
-    
-    # Add the handler to the LLM logger ONLY
-    llm_logger.addHandler(llm_file_handler)
-    
-    # Prevent LLM logs from propagating to the root logger's handlers (console, main log file)
-    llm_logger.propagate = False
-    # === END EDIT ===
+    # Configure the dedicated LLM responses logger (single source of truth).
+    configure_llm_responses_logger(log_file=llm_responses_file, timestamp=timestamp)
     
     # Set up a filter for console output to make it more concise
     class ConsoleFormatFilter(logging.Filter):
@@ -773,8 +760,8 @@ You have access to these tools:
         logging.debug(f"DEBUG: Final User Prompt being sent to LLM:\n------ START PROMPT ------\n{user_prompt}\n------ END PROMPT ------")
         
         # Add detailed logging of the complete prompt and context
-        log_dir = Path(os.environ.get("LOG_DIR", "logs"))
-        log_dir.mkdir(exist_ok=True)
+        # Always use absolute `{repo_root}/logs` for prompt logging as well.
+        log_dir = get_logs_dir()
         
         # Create a unique filename for this prompt logging
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -821,9 +808,8 @@ You have access to these tools:
         tool_usage = []
         
         try:
-            # === START EDIT ===
-            # Get the dedicated LLM logger
-            llm_logger = logging.getLogger('llm_interactions')
+            # Get the dedicated LLM logger (configured by configure_logging())
+            llm_logger = logging.getLogger('llm_responses')
             
             # Log the request messages to the LLM log file
             try:
@@ -831,8 +817,6 @@ You have access to these tools:
                 llm_logger.debug("LLM Request:\n%s", json.dumps(serialized_request, indent=2))
             except Exception as log_e:
                 llm_logger.error("Failed to serialize request messages for logging: %s", str(log_e))
-            # === END EDIT ===
-
             # Get the next step from the model
             message, tool_calls = self.tool_processor.run_llm_with_tools(
                 messages,
