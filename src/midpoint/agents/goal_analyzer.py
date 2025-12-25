@@ -1150,31 +1150,6 @@ Do not wrap it in markdown.
         
         return serialized
 
-    def create_top_goal_file(self, context: TaskContext, logs_dir="logs") -> str:
-        """
-        [DEPRECATED] Create a subgoal file for a top-level goal.
-        Args:
-            context: The current task context containing the goal
-            logs_dir: Directory to store the goal file
-            
-        Returns:
-            The filename of the created subgoal file
-            
-        NOTE: This method is maintained for backward compatibility and testing.
-        In production, goal files should be managed by goal_cli.py.
-        """
-        logging.warning("Using GoalAnalyzer.create_top_goal_file which is deprecated. Goal files should be created by goal_cli.py")
-        # Simplified implementation for stub
-        goal_id = self.generate_goal_id(logs_dir=logs_dir)
-        filename = f"{goal_id}.json"
-        file_path = Path(logs_dir) / filename
-        try:
-            with open(file_path, 'w') as f:
-                 json.dump({"goal_id": goal_id, "description": context.goal.description}, f)
-            return filename
-        except Exception as e:
-             logging.error(f"Stub create_top_goal_file failed: {e}")
-             return "error.json"
 
 # Other helper functions (validate_repository_state, list_subgoal_files, load_input_file, is_git_ancestor)
 # remain the same for now.

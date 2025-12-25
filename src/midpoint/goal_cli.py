@@ -233,12 +233,7 @@ from .goal_git import (
     get_current_hash,
     get_current_branch,
     get_goal_id_from_branch,
-    find_branch_for_goal,
-    get_recent_commits,
-    go_back_commits,
-    reset_to_commit,
-    run_diff_command,
-    find_top_level_branch
+    find_branch_for_goal
 )
 
 from .goal_state import (
@@ -246,18 +241,12 @@ from .goal_state import (
     create_goal_file,
     create_new_goal,
     mark_goal_complete,
-    merge_subgoal,
-    get_child_tasks,
-    update_parent_goal_state,
-    update_git_state
+    merge_subgoal
 )
 
 from .goal_visualization import (
-    ensure_visualization_dir,
     show_goal_status,
     show_goal_tree,
-    show_goal_history,
-    generate_graph,
     show_goal_diffs
 )
 
@@ -265,7 +254,7 @@ from .goal_visualization import (
 from .goal_decompose_command import decompose_existing_goal
 from .goal_execute_command import execute_task
 from .goal_revert import revert_goal
-from .goal_file_operations import delete_goal
+from .goal_file_management import delete_goal
 
 def analyze_goal(goal_id, human_mode=False):
     """Analyze a goal to determine next actions using the goal analyzer agent."""

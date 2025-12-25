@@ -246,17 +246,6 @@ def create_new_child_goal(parent_id, description):
     logging.info(f"Created new child goal {child_id} under {parent_id}")
     return child_id
 
-# Backward compatibility aliases (deprecated)
-def create_new_subgoal(parent_id, description):
-    """[DEPRECATED] Use create_new_child_goal() instead."""
-    logging.warning("create_new_subgoal() is deprecated. Use create_new_child_goal() instead.")
-    return create_new_child_goal(parent_id, description)
-
-def create_new_task(parent_id, description):
-    """[DEPRECATED] Use create_new_child_goal() instead."""
-    logging.warning("create_new_task() is deprecated. Use create_new_child_goal() instead.")
-    return create_new_child_goal(parent_id, description)
-
 def mark_goal_complete(goal_id=None):
     """Mark a goal as complete."""
     # If no goal ID provided, use the current branch
