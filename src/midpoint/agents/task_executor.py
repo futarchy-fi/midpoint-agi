@@ -558,34 +558,37 @@ Memory Hash: {context.state.memory_hash}"""
         # Reset conversation buffer for this new execution
         self.conversation_buffer = []
         
-        # Add memory context as separate messages if available
+        # Add ONLY the most recent prior task-execution transcript (not general "recent memory").
         if memory_hash and memory_repo_path:
             try:
-                # Use the new memory retrieval function
-                from midpoint.agents.tools.memory_tools import retrieve_recent_memory
-                
-                # Get approximately 10000 characters of recent memory
-                total_chars, memory_documents = retrieve_recent_memory(
+                task_name = context.goal.description
+                category = None
+                if task_name:
+                    safe_task_name = re.sub(r"[^a-zA-Z0-9_-]", "_", task_name)[:50]
+                    category = f"task_execution_{safe_task_name}"
+
+                result = retrieve_memory_documents(
+                    category=category,
+                    limit=1,
+                    memory_repo_path=memory_repo_path,
                     memory_hash=memory_hash,
-                    char_limit=10000,
-                    repo_path=memory_repo_path
                 )
-                
-                if memory_documents:
-                    # Add each memory document as a separate message
-                    for path, content, timestamp in memory_documents:
-                        filename = os.path.basename(path)
-                        timestamp_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        messages.append({
-                            "role": "system",
-                            "content": f"Memory document from {filename} ({timestamp_str}):\n{content}"
-                        })
-                    
-                    # Log memory context stats
-                    logger.info(f"Added {len(memory_documents)} memory documents to conversation")
+                documents = result.get("documents") if isinstance(result, dict) else None
+                if documents and isinstance(documents, list):
+                    doc = documents[0]
+                    # Use the full content for the single latest document
+                    full = doc.get("full_content") if isinstance(doc, dict) else None
+                    path = doc.get("path") if isinstance(doc, dict) else "unknown"
+                    if full:
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": f"Most recent prior task execution transcript ({path}):\n{full}",
+                            }
+                        )
+                        logger.info("Added latest prior task execution transcript to conversation")
             except Exception as e:
-                logger.error(f"Error retrieving memory context: {str(e)}")
+                logger.error(f"Error retrieving latest prior task execution transcript: {str(e)}")
         
         # Add the user prompt as the final message
         messages.append({"role": "user", "content": user_prompt})
