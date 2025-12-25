@@ -177,19 +177,33 @@ def execute_task(
             logging.error(f"Failed to checkout branch {top_level_branch}: {e}")
             return False
         
-        # Get memory state from task data
-        memory_state = None
-        if "initial_state" in task_data:
-            initial_state = task_data["initial_state"]
-            if "memory_hash" in initial_state and "memory_repository_path" in initial_state:
-                memory_state = MemoryState(
-                    memory_hash=initial_state["memory_hash"],
-                    repository_path=initial_state["memory_repository_path"]
-                )
-                if initial_state["memory_hash"]:
-                    logging.info(f"Using memory state from task file - hash: {initial_state['memory_hash'][:8]}")
-                else:
-                    logging.info("Memory hash is None in task file")
+        # Get memory state from task data - memory is required
+        if "initial_state" not in task_data:
+            raise RuntimeError(f"Goal {node_id} is missing initial_state. Cannot execute without memory state.")
+        
+        initial_state = task_data["initial_state"]
+        memory_repo_path = initial_state.get("memory_repository_path")
+        memory_hash = initial_state.get("memory_hash")
+        
+        # Memory hash is required - fail if missing
+        if not memory_hash:
+            raise RuntimeError(
+                f"Goal {node_id} has no memory_hash in initial_state. "
+                f"Memory initialization is required. Please recreate the goal or initialize memory manually."
+            )
+        
+        if not memory_repo_path:
+            raise RuntimeError(
+                f"Goal {node_id} has no memory_repository_path in initial_state. "
+                f"Memory repository path is required."
+            )
+        
+        # Create memory state
+        memory_state = MemoryState(
+            memory_hash=memory_hash,
+            repository_path=memory_repo_path
+        )
+        logging.info(f"Using memory state from task file - hash: {memory_hash[:8]}")
         
         # Create task context
         context = TaskContext(
@@ -198,8 +212,8 @@ def execute_task(
                 repository_path=task_data["initial_state"]["repository_path"],
                 description=task_data["initial_state"]["description"],
                 branch_name=top_level_branch,
-                memory_hash=task_data["initial_state"].get("memory_hash"),
-                memory_repository_path=task_data["initial_state"].get("memory_repository_path")
+                memory_hash=memory_hash,  # Use the initialized memory_hash
+                memory_repository_path=memory_repo_path  # Use the determined memory_repo_path
             ),
             goal=Goal(
                 description=task_data["description"],

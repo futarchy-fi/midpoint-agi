@@ -76,7 +76,6 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         return None
     
     # Initialize memory state for this goal (each goal should start with empty memory)
-    memory_hash = None
     # Use ~/.midpoint/memory as default if MEMORY_REPO_PATH not set
     memory_repo_path = os.environ.get("MEMORY_REPO_PATH")
     if not memory_repo_path:
@@ -86,12 +85,18 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         # Create directory if it doesn't exist
         os.makedirs(memory_repo_path, exist_ok=True)
     
-    if memory_repo_path and os.path.exists(memory_repo_path):
-        try:
-            memory_hash = _ensure_memory_repo_initialized(memory_repo_path, goal_id)
-        except Exception as e:
-            logging.warning(f"Could not initialize memory state: {e}")
-            # Still use the path even if we can't get the hash
+    # ALWAYS initialize memory - this should never fail
+    if not memory_repo_path or not os.path.exists(memory_repo_path):
+        raise ValueError(f"Memory repository path does not exist and could not be created: {memory_repo_path}")
+    
+    try:
+        memory_hash = _ensure_memory_repo_initialized(memory_repo_path, goal_id)
+        if not memory_hash:
+            raise ValueError(f"Memory initialization returned None for goal {goal_id}")
+        logging.info(f"Successfully initialized memory for goal {goal_id}: {memory_hash[:8]}")
+    except Exception as e:
+        logging.error(f"CRITICAL: Could not initialize memory state for goal {goal_id}: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to initialize memory repository for goal {goal_id}. Memory is required.") from e
     
     # Record the repo root rather than the current subdirectory.
     repo_root = _get_git_repo_root()
