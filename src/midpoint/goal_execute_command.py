@@ -56,6 +56,45 @@ def _write_attempt_record(goal_path: Path, node_id: str, record: Dict[str, Any])
         return None
 
 
+def _read_memory_document_at_commit(
+    memory_repo_path: Optional[str],
+    memory_commit: Optional[str],
+    document_path: Optional[str],
+    *,
+    char_limit: int = 1_000_000,
+) -> Optional[Dict[str, Any]]:
+    """
+    Read a memory document at a specific commit using `git show <commit>:<path>`.
+
+    Returns a dict containing the embedded transcript content and truncation metadata.
+    If any required inputs are missing or the read fails, returns None.
+    """
+    if not memory_repo_path or not memory_commit or not document_path:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{memory_commit}:{document_path}"],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        content = result.stdout or ""
+        truncated = False
+        if char_limit is not None and len(content) > char_limit:
+            content = content[:char_limit]
+            truncated = True
+        return {
+            "content": content,
+            "truncated": truncated,
+            "included_chars": len(content),
+        }
+    except Exception as e:
+        logging.warning(f"Failed to read memory transcript at {memory_commit}:{document_path}: {e}")
+        return None
+
+
 def execute_task(
     node_id,
     debug=False,
@@ -197,7 +236,6 @@ def execute_task(
             last_tool_calls = last_tool_calls[-10:]
 
             mem_store = meta.get("memory_store_result") if isinstance(meta, dict) else None
-            mem_doc_path = mem_store.get("document_path") if isinstance(mem_store, dict) else None
             mem_store_compact = None
             if isinstance(mem_store, dict):
                 mem_store_compact = {
@@ -205,6 +243,26 @@ def execute_task(
                     "document_path": mem_store.get("document_path"),
                     "error": mem_store.get("error"),
                 }
+            # Normalize memory document path + commit for embedding transcript.
+            mem_doc_path = None
+            mem_doc_commit = None
+            if isinstance(mem_store_compact, dict):
+                doc = mem_store_compact.get("document_path")
+                if isinstance(doc, dict):
+                    mem_doc_path = doc.get("path")
+                    mem_doc_commit = doc.get("memory_hash")
+                elif isinstance(doc, str):
+                    mem_doc_path = doc
+                    mem_doc_commit = (
+                        (execution_result.final_state.memory_hash if execution_result.final_state else None)
+                        or task_data.get("initial_state", {}).get("memory_hash")
+                    )
+
+            embedded_transcript = _read_memory_document_at_commit(
+                task_data.get("initial_state", {}).get("memory_repository_path"),
+                mem_doc_commit,
+                mem_doc_path,
+            )
 
             attempt_record = {
                 "attempt_id": attempt_started_ts,
@@ -233,8 +291,9 @@ def execute_task(
                     "last_tool_calls": last_tool_calls,
                 },
                 "artifacts": {
-                    "memory_document_path": mem_doc_path,
-                    "memory_store_result": mem_store_compact,
+                    # Embed the attempt transcript directly so we don't depend on pointers
+                    # into the memory repo (which may be GC'd/rewritten later).
+                    "memory_transcript": embedded_transcript,
                 },
             }
 
