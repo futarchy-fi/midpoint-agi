@@ -1,7 +1,11 @@
 {
   "models": {
-    "default": "gpt-4o",
+    "default": "gpt-5-mini",
     "versions": [
+      "gpt-5-mini",
+      "gpt-5",
+      "gpt-5.1",
+      "gpt-5.2",
       "gpt-4o",
       "gpt-4o-2024-05-13",
       "gpt-4o-mini"
@@ -9,22 +13,22 @@
   },
   "agents": {
     "task_executor": {
-      "model": "gpt-4o-mini",
+      "model": "gpt-5-mini",
       "max_tokens": 3000,
       "temperature": 0.1
     },
     "goal_decomposer": {
-      "model": "gpt-4o-mini",
+      "model": "gpt-5-mini",
       "max_tokens": 3000,
       "temperature": 0.1
     },
     "goal_analyzer": {
-      "model": "gpt-4o-mini",
+      "model": "gpt-5-mini",
       "max_tokens": 1000,
       "temperature": 0.1
     },
     "goal_validator": {
-      "model": "gpt-4o-mini",
+      "model": "gpt-5-mini",
       "max_tokens": 2000,
       "temperature": 0.1
     }
