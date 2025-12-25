@@ -21,14 +21,18 @@ def ensure_goal_dir():
     return goal_path
 
 
-def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
-    """Execute a task using the TaskExecutor."""
-    # Get the task file path
+def execute_task(node_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
+    """Execute a goal/task node using the TaskExecutor.
+
+    This intentionally allows executing `G*`/`S*`/`T*` nodes directly, without
+    requiring an extra "task node" wrapper.
+    """
+    # Get the node file path
     goal_path = ensure_goal_dir()
-    task_file = goal_path / f"{task_id}.json"
+    task_file = goal_path / f"{node_id}.json"
     
     if not task_file.exists():
-        logging.error(f"Task {task_id} not found")
+        logging.error(f"Goal/task node {node_id} not found")
         return False
     
     # Load the task data
@@ -36,13 +40,13 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
         with open(task_file, 'r') as f:
             task_data = json.load(f)
     except Exception as e:
-        logging.error(f"Failed to read task file: {e}")
+        logging.error(f"Failed to read node file: {e}")
         return False
     
     # Find the top-level goal's branch
-    top_level_branch = find_top_level_branch(task_id)
+    top_level_branch = find_top_level_branch(node_id)
     if not top_level_branch:
-        logging.error(f"Failed to find top-level goal branch for {task_id}")
+        logging.error(f"Failed to find top-level goal branch for {node_id}")
         return False
     
     # Save current branch and check for changes
@@ -68,7 +72,7 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
     if has_changes:
         try:
             subprocess.run(
-                ["git", "stash", "push", "-m", f"Stashing changes before executing task {task_id}"],
+                ["git", "stash", "push", "-m", f"Stashing changes before executing node {node_id}"],
                 check=True,
                 capture_output=True,
                 text=True
@@ -148,7 +152,7 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
         task_data["last_execution_result"] = last_execution_data
 
         if execution_result.success:
-            logging.info(f"Task {task_id} execution reported success.")
+            logging.info(f"Node {node_id} execution reported success.")
             
             # Still mark task as completed conceptually upon successful execution report
             # (Though actual merging/acceptance is separate)
@@ -159,12 +163,12 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
             try:
                 with open(task_file, 'w') as f:
                     json.dump(task_data, f, indent=2)
-                logging.info(f"Saved updated task data for {task_id} (Success)")
+                logging.info(f"Saved updated node data for {node_id} (Success)")
             except Exception as e:
-                logging.error(f"Failed to save successful task data for {task_id}: {e}")
+                logging.error(f"Failed to save successful node data for {node_id}: {e}")
                 # Even if save fails, we proceed to return True as execution succeeded
 
-            print(f"\nTask {task_id} executed successfully.")
+            print(f"\nNode {node_id} executed successfully.")
             print(f"Summary: {execution_result.summary}")
             if execution_result.suggested_validation_steps:
                  print("Suggested Validation Steps:")
@@ -172,8 +176,8 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
                      print(f"- {step}")
             return True
         else:
-            logging.warning(f"Task {task_id} execution reported failure.")
-            print(f"Failed to execute task {task_id}: {execution_result.summary or execution_result.error_message}", file=sys.stderr)
+            logging.warning(f"Node {node_id} execution reported failure.")
+            print(f"Failed to execute node {node_id}: {execution_result.summary or execution_result.error_message}", file=sys.stderr)
 
             # Update task data to reflect failure - keep current_state as it was before this failed attempt
             task_data["complete"] = False
@@ -189,9 +193,9 @@ def execute_task(task_id, debug=False, quiet=False, bypass_validation=False, no_
             try:
                 with open(task_file, 'w') as f:
                     json.dump(task_data, f, indent=2)
-                logging.info(f"Saved updated task data for {task_id} (Failure)")
+                logging.info(f"Saved updated node data for {node_id} (Failure)")
             except Exception as e:
-                logging.error(f"Failed to save failed task data for {task_id}: {e}")
+                logging.error(f"Failed to save failed node data for {node_id}: {e}")
             return False
             
     finally:
