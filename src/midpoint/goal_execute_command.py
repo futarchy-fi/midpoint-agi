@@ -28,7 +28,6 @@ def execute_task(
     bypass_validation=False,
     no_commit=False,
     memory_repo=None,
-    reanalyze_on_failure: bool = False,
 ):
     """Execute a goal/task node using the TaskExecutor.
 
@@ -202,14 +201,6 @@ def execute_task(
                 logging.info(f"Saved updated node data for {node_id} (Failure)")
             except Exception as e:
                 logging.error(f"Failed to save failed node data for {node_id}: {e}")
-            # Optionally re-run analysis now that failure context is persisted.
-            if reanalyze_on_failure:
-                try:
-                    from .goal_analyze_command import analyze_existing_goal
-                    print(f"\nRe-analyzing {node_id} after failed execution...")
-                    analyze_existing_goal(node_id, debug=debug, quiet=quiet, bypass_validation=bypass_validation)
-                except Exception as e:
-                    logging.error(f"Failed to re-analyze {node_id} after execution failure: {e}")
             return False
             
     finally:
