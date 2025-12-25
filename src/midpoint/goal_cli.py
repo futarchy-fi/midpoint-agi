@@ -221,7 +221,7 @@ def list_subgoals() -> list[str]:
     return children
 
 
-def analyze_goal(goal_id, human_mode=False):
+def analyze_goal(goal_id, human_mode=False, preview=False):
     """Analyze a goal to determine next actions using the goal analyzer agent."""
     # Ensure goal directory exists
     goal_path = ensure_goal_dir()
@@ -233,7 +233,7 @@ def analyze_goal(goal_id, human_mode=False):
     
     # Delegate to a command module (parallel to decompose/execute/validate).
     from .goal_analyze_command import analyze_existing_goal
-    return analyze_existing_goal(goal_id, debug=bool(human_mode))
+    return analyze_existing_goal(goal_id, debug=bool(human_mode), preview=preview)
 
 def show_validation_history(goal_id, debug=False, quiet=False):
     """Show validation history for a specific goal."""
@@ -334,7 +334,7 @@ def main_command(args):
     elif args.command == "validate-history":
         return show_validation_history(args.goal_id, args.debug, args.quiet)
     elif args.command == "analyze":
-        return analyze_goal(args.goal_id, args.human)
+        return analyze_goal(args.goal_id, args.human, getattr(args, 'preview', False))
     elif args.command == "diff":
         # Use the show_code and show_memory flags if available, otherwise use defaults
         show_code = getattr(args, 'code', True) or getattr(args, 'complete', False) or not (getattr(args, 'memory', False) or getattr(args, 'complete', False))
@@ -430,6 +430,7 @@ simple remaining work, "mark_complete", "update_parent", or "give_up" in special
                                    """)
     analyze_parser.add_argument("goal_id", help="ID of the goal to analyze")
     analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
+    analyze_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
     
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser(

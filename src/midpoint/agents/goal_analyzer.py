@@ -460,8 +460,20 @@ Do not wrap it in markdown.
                     break
         return out
 
-    def analyze_goal_state(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
-        """Analyze the current state of the goal and suggest the next action."""
+    def analyze_goal_state(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False, preview_only: bool = False) -> Dict[str, Any]:
+        """
+        Analyze the current state of the goal and suggest the next action.
+        
+        Args:
+            context: Task context with goal and state information
+            setup_logging: Whether to configure logging
+            debug: Enable debug logging
+            quiet: Only show warnings and final result
+            preview_only: If True, only build and display the prompt without calling LLM
+        
+        Returns:
+            Dict with action, justification, and strategic_guidance (or preview info if preview_only=True)
+        """
         # Global variables to ensure we're using the same log files throughout
         global log_file, task_summary_file, llm_responses_file
         
@@ -562,6 +574,43 @@ Do not wrap it in markdown.
             import hashlib
             system_prompt_hash = hashlib.md5(self.system_prompt.encode()).hexdigest()[:8]
             log_with_timestamp(f"Using system prompt (hash: {system_prompt_hash}, see first log entry for full prompt)", llm_logger)
+        
+        # Preview mode: return early without calling LLM
+        if preview_only:
+            log_with_timestamp("========== PREVIEW MODE: Prompt built, not calling LLM ==========", llm_logger)
+            logging.info("Preview mode: Prompt built successfully. Not calling LLM.")
+            if not quiet:
+                print("\n" + "=" * 80)
+                print("PREVIEW MODE - Prompt Preview")
+                print("=" * 80)
+                print(f"\nSystem Prompt ({len(self.system_prompt)} chars):")
+                print("-" * 80)
+                print(self.system_prompt)
+                print("-" * 80)
+                print(f"\nUser Prompt ({len(user_prompt)} chars):")
+                print("-" * 80)
+                print(user_prompt)
+                print("-" * 80)
+                print(f"\nContext Summary:")
+                print("-" * 80)
+                print(f"Total prompt size: {len(self.system_prompt) + len(user_prompt):,} characters")
+                print(f"Section breakdown: {prompt_metadata.get('section_count', 0)} sections")
+                print(f"Importance: {prompt_metadata.get('importance_breakdown', {})}")
+                print("=" * 80)
+                print("\nTo actually run the analysis, remove --preview flag")
+                print("=" * 80 + "\n")
+            
+            return {
+                "action": "preview",
+                "justification": "Preview mode: Prompt built but LLM not called",
+                "metadata": {
+                    "preview_mode": True,
+                    "system_prompt_size": len(self.system_prompt),
+                    "user_prompt_size": len(user_prompt),
+                    "total_size": len(self.system_prompt) + len(user_prompt),
+                    "prompt_metadata": prompt_metadata
+                }
+            }
 
         tool_usage = []
         max_retries = 1 # Allow one retry on JSON parsing failure
@@ -1418,7 +1467,7 @@ def analyze_goal(
     parent_goal_id: str = None, goal_id: str = None, memory_hash: str = None,
     memory_repo_path: str = None, debug: bool = False, quiet: bool = False,
     bypass_validation: bool = False, logs_dir: str = "logs",
-    input_file: Optional[str] = None
+    input_file: Optional[str] = None, preview_only: bool = False
 ) -> Dict[str, Any]:
     """Analyze a goal's state using the GoalAnalyzer agent."""
     # Access global variables
@@ -1517,7 +1566,22 @@ def analyze_goal(
     analyzer = GoalAnalyzer()
     # Pass the potentially updated memory_repo_path to the analyzer instance method
     # Make sure we're passing setup_logging=False here since we already configured logging
-    analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=False, debug=debug, quiet=quiet)
+    analysis_result_dict = analyzer.analyze_goal_state(context, setup_logging=False, debug=debug, quiet=quiet, preview_only=preview_only)
+    
+    # If preview mode, return early with preview result
+    if preview_only:
+        return {
+            "success": True,
+            "action": "preview",
+            "justification": "Preview mode: Prompt built but LLM not called",
+            "strategic_guidance": "N/A (preview mode)",
+            "metadata": analysis_result_dict.get("metadata", {}),
+            "git_hash": current_git_hash,
+            "initial_git_hash": current_git_hash,
+            "memory_hash": memory_hash,
+            "memory_repository_path": memory_repo_path,
+            "goal_id": final_goal_id
+        }
 
     # Get updated hashes after analysis
     from .tools.git_tools import get_current_hash 

@@ -28,7 +28,7 @@ def ensure_goal_dir():
     return goal_path
 
 
-def analyze_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False):
+def analyze_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=False, preview=False):
     """Analyze an existing goal using the GoalAnalyzer agent."""
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
@@ -120,7 +120,12 @@ def analyze_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=F
             bypass_validation=bypass_validation,
             logs_dir="logs",
             input_file=None,
+            preview_only=preview,
         )
+
+        # In preview mode, don't persist to goal file, just return
+        if preview:
+            return True
 
         if not isinstance(analysis, dict) or not analysis.get("success", False):
             logging.error(f"Analysis failed: {analysis}")
