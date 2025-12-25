@@ -159,6 +159,9 @@ class TaskExecutor:
         
         # Initialize conversation buffer for memory storage
         self.conversation_buffer = []
+        # Store details about the last memory write for this executor instance
+        # (used to persist deterministic pointers into `.goal/<id>.json`).
+        self.last_memory_save_result: Optional[Dict[str, Any]] = None
         
         logger.info("TaskExecutor initialized successfully")
 
@@ -168,7 +171,8 @@ class TaskExecutor:
         """
         if not context.state.memory_repository_path or not context.state.memory_hash:
             logger.info("No memory repo or hash available, skipping _save_interaction_to_memory")
-            return
+            self.last_memory_save_result = None
+            return None
 
         try:
             # Get repository path and memory hash
@@ -264,9 +268,12 @@ class TaskExecutor:
             )
             
             if result.get("success", False):
-                logger.info(f"Successfully saved task execution conversation to memory: {result.get('document_path', 'unknown')}", extra={'memory': True})
+                doc_path = result.get("document_path") or result.get("path") or "unknown"
+                logger.info(f"Successfully saved task execution conversation to memory: {doc_path}", extra={'memory': True})
             else:
                 logger.error(f"Failed to save conversation to memory: {result.get('error', 'Unknown error')}")
+            self.last_memory_save_result = result
+            return result
             
         except Exception as e:
             logger.error(f"Failed to store conversation to memory: {str(e)}")
@@ -274,6 +281,8 @@ class TaskExecutor:
             logger.info(f"  Repository path: {context.state.memory_repository_path}")
             logger.info(f"  Memory hash: {context.state.memory_hash[:8] if context.state.memory_hash else 'None'}")
             logger.info(f"  Task: {context.goal.description}")
+            self.last_memory_save_result = {"success": False, "error": str(e)}
+            return self.last_memory_save_result
 
     def _generate_system_prompt(self) -> str:
         """
@@ -361,6 +370,8 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
             ExecutionResult containing the execution outcome
         """
         try:
+            # Reset last memory write info for this run
+            self.last_memory_save_result = None
             # Use provided task description if available, otherwise use goal description
             task = task_description or context.goal.description
             
@@ -484,6 +495,8 @@ Memory Hash: {context.state.memory_hash}"""
             # Return the result using the PARSED success status and include error message if failed
             # Populate the new summary and validation_steps fields
             result_metadata = {"tool_usage": tool_usage_list}
+            if self.last_memory_save_result:
+                result_metadata["memory_save_result"] = self.last_memory_save_result
             if not execution_success:
                 # Count tools and capture the last few calls (helps explain tool-loop failures).
                 tool_call_counts: Dict[str, int] = {}
@@ -735,9 +748,12 @@ Memory Hash: {context.state.memory_hash}"""
                 return final_content, tool_usage
             else:
                 # Handle failure (JSON invalid or missing fields)
-                error_reason = "LLM response missing required fields or invalid JSON"
-                if not output_data:
-                    error_reason = "Failed to parse LLM response as valid JSON"
+                if not final_content or not str(final_content).strip():
+                    error_reason = "No final assistant response content (model likely got stuck in tool calls or hit the tool-iteration limit)."
+                else:
+                    error_reason = "LLM response missing required fields or invalid JSON"
+                    if not output_data:
+                        error_reason = "Failed to parse LLM response as valid JSON"
                 logger.error(f"Task failed: {error_reason}. Final content was: {final_content[:500]}...")
                 default_response = {
                     "summary": error_reason,

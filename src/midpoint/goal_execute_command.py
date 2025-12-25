@@ -134,13 +134,8 @@ def execute_task(
             memory_state=memory_state
         )
         
-        # Configure logging (capture path so failures can reference the log file)
-        log_file_path = None
-        try:
-            log_file_path = str(configure_executor_logging(debug, quiet))
-        except Exception:
-            # Logging should never block execution
-            log_file_path = None
+        # Configure logging (logs are a local debug artifact; not part of deterministic goal state)
+        configure_executor_logging(debug, quiet)
         
         # Create and run the executor
         executor = TaskExecutor()
@@ -155,13 +150,19 @@ def execute_task(
             "final_git_hash": execution_result.final_state.git_hash if execution_result.final_state else None,
             "final_memory_hash": execution_result.final_state.memory_hash if execution_result.final_state else None,
             "error_message": execution_result.error_message,
-            "log_file": log_file_path,
         }
 
         # Add compact failure context for follow-up analysis / decomposition decisions.
         # Keep this small and structured to avoid bloating `.goal/<id>.json`.
         if not execution_result.success:
             meta = execution_result.metadata or {}
+            mem = meta.get("memory_save_result") if isinstance(meta, dict) else None
+            if isinstance(mem, dict):
+                # Persist a deterministic pointer into the memory repo (part of state via memory hash).
+                last_execution_data["memory_document"] = {
+                    "success": mem.get("success"),
+                    "document_path": mem.get("document_path") or mem.get("path"),
+                }
             last_execution_data["failure_context"] = {
                 "failure_mode": meta.get("failure_mode"),
                 "parse_error": meta.get("parse_error"),
