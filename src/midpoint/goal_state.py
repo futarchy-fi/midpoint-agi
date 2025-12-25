@@ -75,7 +75,7 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         logging.error(f"Failed to get initial git state: {e}")
         return None
     
-    # Try to get memory state (optional)
+    # Initialize memory state for this goal (each goal should start with empty memory)
     memory_hash = None
     # Use ~/.midpoint/memory as default if MEMORY_REPO_PATH not set
     memory_repo_path = os.environ.get("MEMORY_REPO_PATH")
@@ -85,12 +85,59 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         logging.info(f"MEMORY_REPO_PATH not set, using default: {memory_repo_path}")
         # Create directory if it doesn't exist
         os.makedirs(memory_repo_path, exist_ok=True)
-        
+    
     if memory_repo_path and os.path.exists(memory_repo_path):
         try:
-            memory_hash = get_current_hash(memory_repo_path)
+            # Check if it's a git repository
+            git_dir = Path(memory_repo_path) / ".git"
+            if not git_dir.exists():
+                # Initialize git repository if it doesn't exist
+                subprocess.run(
+                    ["git", "init"],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                # Create basic structure
+                for directory in ["documents", "metadata", "general_memory"]:
+                    dir_path = Path(memory_repo_path) / directory
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                # Create initial commit
+                subprocess.run(
+                    ["git", "add", "."],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", "Initialize memory repository"],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+            
+            # Create a new empty commit for this goal to start with clean memory
+            # This ensures each goal has its own memory state without old documents
+            try:
+                # Create an empty commit (using --allow-empty)
+                subprocess.run(
+                    ["git", "commit", "--allow-empty", "-m", f"Initialize memory for goal {goal_id}"],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                # Get the new commit hash
+                memory_hash = get_current_hash(memory_repo_path)
+                logging.info(f"Initialized empty memory state for goal {goal_id}: {memory_hash[:8]}")
+            except subprocess.CalledProcessError as e:
+                # If commit fails (e.g., no changes), try to get current hash
+                logging.warning(f"Could not create empty memory commit: {e}")
+                try:
+                    memory_hash = get_current_hash(memory_repo_path)
+                except Exception as e2:
+                    logging.warning(f"Could not get initial memory hash: {e2}")
         except Exception as e:
-            logging.warning(f"Could not get initial memory hash: {e}")
+            logging.warning(f"Could not initialize memory state: {e}")
             # Still use the path even if we can't get the hash
     
     # Record the repo root rather than the current subdirectory.
