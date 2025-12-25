@@ -36,8 +36,6 @@ def main_command(args):
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
         return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
-    elif args.command == "solve":
-        return handle_solve_command(args)
     elif args.command == "validate":
         from .validation import handle_validate_goal
         return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
@@ -99,16 +97,6 @@ def handle_update_parent_command(args):
         logging.error(f"Unknown outcome type: {args.outcome}")
         return False
 
-def handle_solve_command(args):
-    """
-    Automate the process of analyzing, decomposing, and executing tasks defined
-    in the .goal/ directory.
-    (Implementation moved from goal_cli.py)
-    """
-    # Import and delegate to the implementation in goal_solver.py
-    from .goal_solver import handle_solve_command as solver_handle_solve_command
-    return solver_handle_solve_command(args)
-
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="Goal branch management commands")
@@ -137,11 +125,6 @@ def main():
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
-    solve_parser = subparsers.add_parser("solve", help="Automatically analyze, decompose, and execute tasks for a goal")
-    solve_parser.add_argument("goal_id", help="Goal ID to solve")
-    solve_parser.add_argument("--debug", action="store_true", help="Show debug output")
-    solve_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
-    solve_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     back_parser = subparsers.add_parser("back", help="Go back N commits on current goal branch")
     back_parser.add_argument("steps", nargs="?", type=int, default=1, help="Number of commits to go back")
     reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")

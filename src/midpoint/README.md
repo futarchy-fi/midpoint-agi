@@ -40,8 +40,7 @@ The code has been refactored to improve maintainability and make it easier to un
 
 2. **Goal Execution**
    - `decompose_existing_goal`: Breaks down a goal into subgoals and tasks
-   - `execute_task`: Executes a specific task 
-   - `handle_solve_command`: Automated process for decomposing and executing goals
+   - `execute_task`: Executes a specific task
 
 3. **Visualization & Status**
    - `show_goal_status`: Shows status of all goals

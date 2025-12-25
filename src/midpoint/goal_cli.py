@@ -362,9 +362,6 @@ def main_command(args):
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
         return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
-    elif args.command == "solve":
-        from .goal_solver import handle_solve_command
-        return handle_solve_command(args)
     elif args.command == "validate":
         from .validation import handle_validate_goal
         return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
