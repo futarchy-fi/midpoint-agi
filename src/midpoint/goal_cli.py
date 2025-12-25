@@ -313,7 +313,7 @@ def main_command(args):
     if args.command == "decompose":
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
-        return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+        return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo, getattr(args, 'preview', False))
     elif args.command == "validate":
         from .validation import handle_validate_goal
         return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
@@ -376,6 +376,7 @@ def main():
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
+    execute_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
     
     # Result Incorporation Commands
     # ----------------------------

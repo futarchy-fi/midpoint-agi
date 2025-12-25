@@ -30,6 +30,7 @@ from .tools.web_tools import web_search, web_scrape
 from .tools.terminal_tools import run_terminal_cmd
 from .tools.memory_tools import store_memory_document, retrieve_memory_documents
 from .config import get_openai_api_key, get_agent_config
+from .prompt_builder import TaskExecutionPromptBuilder
 from openai import OpenAI
 
 # Set up logging
@@ -344,7 +345,7 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
         
         return system_prompt
 
-    def execute_task(self, context: TaskContext, task_description: Optional[str] = None) -> ExecutionResult:
+    def execute_task(self, context: TaskContext, task_description: Optional[str] = None, preview_only: bool = False) -> ExecutionResult:
         """
         Execute a task using LLM-driven decision making.
         
@@ -387,19 +388,84 @@ For exploratory or study tasks, focus on analyzing the codebase and documenting 
                 if context.state.memory_hash:
                     logger.info(f"Initial memory hash: {context.state.memory_hash[:8]}")
             
-            # Create the user prompt for the LLM
-            user_prompt = f"""Task: {task}
-
-Repository Path: {context.state.repository_path}
-Branch: {context.state.branch_name}
-Git Hash: {context.state.git_hash}"""
-
-            # Add memory information to prompt if available
-            if context.memory_state:
-                user_prompt += f"""
-
-Memory Repository: {context.state.memory_repository_path}
-Memory Hash: {context.state.memory_hash}"""
+            # Get task/goal ID for prompt builder
+            task_id = context.metadata.get("goal_id", "unknown") if hasattr(context, 'metadata') and context.metadata else "unknown"
+            
+            # Create the user prompt using TaskExecutionPromptBuilder
+            builder = TaskExecutionPromptBuilder(task_id, logger)
+            
+            # Build task section
+            builder.add_section(
+                "Task",
+                f"Task: {task}",
+                importance="critical",
+                source="context"
+            )
+            
+            # Build repository state section
+            state_lines = [
+                "## Repository State",
+                f"Repository Path: {context.state.repository_path}",
+                f"Branch: {context.state.branch_name}",
+                f"Git Hash: {context.state.git_hash}"
+            ]
+            builder.add_section(
+                "Repository State",
+                "\n".join(state_lines),
+                importance="important",
+                source="context"
+            )
+            
+            # Add memory information if available
+            if context.memory_state or context.state.memory_repository_path:
+                memory_lines = ["## Memory State"]
+                if context.memory_state:
+                    memory_lines.append(f"Memory Repository: {context.memory_state.repository_path}")
+                    memory_lines.append(f"Memory Hash: {context.memory_state.memory_hash}")
+                elif context.state.memory_repository_path:
+                    memory_lines.append(f"Memory Repository: {context.state.memory_repository_path}")
+                    memory_lines.append(f"Memory Hash: {context.state.memory_hash}")
+                builder.add_section(
+                    "Memory State",
+                    "\n".join(memory_lines),
+                    importance="normal",
+                    source="context"
+                )
+            
+            # Build the prompt
+            user_prompt, prompt_metadata = builder.build()
+            
+            # Preview mode: return early without calling LLM
+            if preview_only:
+                logger.info("Preview mode: Prompt built successfully. Not calling LLM.")
+                print("\n" + "=" * 80)
+                print("PREVIEW MODE - Prompt Preview")
+                print("=" * 80)
+                print(f"\nSystem Prompt ({len(self.system_prompt)} chars):")
+                print("-" * 80)
+                print(self.system_prompt)
+                print("-" * 80)
+                print(f"\nUser Prompt ({len(user_prompt)} chars):")
+                print("-" * 80)
+                print(user_prompt)
+                print("-" * 80)
+                print(f"\nContext Summary:")
+                print("-" * 80)
+                print(f"Total prompt size: {len(self.system_prompt) + len(user_prompt):,} characters")
+                print(f"Section breakdown: {prompt_metadata.get('section_count', 0)} sections")
+                print(f"Importance: {prompt_metadata.get('importance_breakdown', {})}")
+                print("=" * 80)
+                print("\nTo actually run the execution, remove --preview flag")
+                print("=" * 80 + "\n")
+                
+                # Return a preview result
+                return ExecutionResult(
+                    success=True,
+                    summary="Preview mode: Prompt built but LLM not called",
+                    suggested_validation_steps=[],
+                    final_state=context.state,
+                    metadata={"preview_mode": True, "prompt_metadata": prompt_metadata}
+                )
             
             # Execute the task
             result_json_str, tool_usage_list = self._execute_task_with_llm(user_prompt, context)

@@ -103,6 +103,7 @@ def execute_task(
     bypass_validation=False,
     no_commit=False,
     memory_repo=None,
+    preview=False,
 ):
     """Execute a goal/task node using the TaskExecutor.
 
@@ -206,7 +207,8 @@ def execute_task(
             ),
             iteration=0,
             execution_history=[],
-            memory_state=memory_state
+            memory_state=memory_state,
+            metadata={"goal_id": node_id}  # Add goal_id to metadata for prompt builder
         )
         
         # Configure logging
@@ -217,7 +219,11 @@ def execute_task(
         
         # Create and run the executor
         executor = TaskExecutor()
-        execution_result = executor.execute_task(context, task_data["description"])
+        execution_result = executor.execute_task(context, task_data["description"], preview_only=preview)
+        
+        # In preview mode, don't persist attempt record, just return
+        if preview:
+            return True
         attempt_ended_at = datetime.datetime.now()
         attempt_ended_ts = attempt_ended_at.strftime("%Y%m%d_%H%M%S")
 

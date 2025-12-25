@@ -82,6 +82,7 @@ load_dotenv()
 from midpoint.utils.log_paths import get_logs_dir
 from midpoint.utils.llm_logging import configure_llm_responses_logger, LLM_LOGGER_NAME
 from midpoint.constants import GOAL_DIR
+from .prompt_builder import PromptBuilder
 
 # Global variables to store log file paths
 log_file = None 
@@ -153,113 +154,29 @@ def configure_logging(debug=False, quiet=False, log_dir_path="logs"):
     return log_file, task_summary_file, llm_responses_file
 
 
-class AnalysisPromptBuilder:
+class AnalysisPromptBuilder(PromptBuilder):
     """
     Builds prompts for goal analysis with section tracking and debugging support.
     
-    This class helps structure prompts modularly, track what context is included,
-    and provide debugging information about what was sent to the LLM.
+    Inherits from PromptBuilder and customizes header and final instructions for analysis.
     """
     
     def __init__(self, goal_id: str, logger):
         """
-        Initialize the prompt builder.
+        Initialize the analysis prompt builder.
         
         Args:
             goal_id: The goal ID being analyzed
             logger: Logger instance for debugging
         """
-        self.goal_id = goal_id
-        self.logger = logger
-        self.sections = []  # List of section dicts with metadata
-        
-    def add_section(self, name: str, content: str, importance: str = "normal", source: str = "unknown"):
-        """
-        Add a section to the prompt.
-        
-        Args:
-            name: Section name (e.g., "Goal Details", "Failure History")
-            content: Section content (text)
-            importance: "critical", "important", or "normal"
-            source: Where this data came from (e.g., "goal_file", "memory", "attempt_journal")
-        """
-        if not content or not content.strip():
-            self.logger.debug(f"Skipping empty section: {name}")
-            return
-            
-        section = {
-            "name": name,
-            "content": content.strip(),
-            "size": len(content),
-            "importance": importance,
-            "source": source
-        }
-        self.sections.append(section)
-        self.logger.debug(f"Added section '{name}': {len(content)} chars (importance: {importance})")
-    
-    def build(self) -> Tuple[str, Dict[str, Any]]:
-        """
-        Build the final prompt and return it with metadata.
-        
-        Returns:
-            Tuple of (prompt_text, metadata_dict)
-            metadata_dict contains:
-                - sections: List of section metadata
-                - total_size: Total character count
-                - section_count: Number of sections
-                - importance_breakdown: Count of sections by importance
-        """
-        # Sort sections by importance (critical first, then important, then normal)
-        importance_order = {"critical": 0, "important": 1, "normal": 2}
-        sorted_sections = sorted(
-            self.sections,
-            key=lambda s: (importance_order.get(s["importance"], 3), s["name"])
-        )
-        
-        # Build the prompt
-        prompt_lines = [
-            f"Goal Analysis Request for Goal [{self.goal_id}]",
-            "=" * 60,
-            ""
+        header = f"Goal Analysis Request for Goal [{goal_id}]"
+        final_instructions = [
+            "Based on ALL the context above, analyze the goal's status.",
+            "If necessary, use tools to observe the current state further.",
+            "IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.",
+            "Then, provide your suggested next action and a DETAILED justification in the required JSON format."
         ]
-        
-        # Add sections in order
-        for section in sorted_sections:
-            prompt_lines.append(section["content"])
-            prompt_lines.append("")  # Blank line between sections
-        
-        # Add final instructions
-        prompt_lines.append("=" * 60)
-        prompt_lines.append("Based on ALL the context above, analyze the goal's status.")
-        prompt_lines.append("If necessary, use tools to observe the current state further.")
-        prompt_lines.append("IMPORTANT: For validation or completion decisions, verify that code implementation correctly meets requirements.")
-        prompt_lines.append("Then, provide your suggested next action and a DETAILED justification in the required JSON format.")
-        
-        final_prompt = "\n".join(prompt_lines)
-        
-        # Build metadata
-        importance_breakdown = {}
-        for section in self.sections:
-            imp = section["importance"]
-            importance_breakdown[imp] = importance_breakdown.get(imp, 0) + 1
-        
-        metadata = {
-            "sections": [
-                {
-                    "name": s["name"],
-                    "size": s["size"],
-                    "importance": s["importance"],
-                    "source": s["source"]
-                }
-                for s in sorted_sections
-            ],
-            "total_size": len(final_prompt),
-            "section_count": len(self.sections),
-            "importance_breakdown": importance_breakdown
-        }
-        
-        self.logger.debug(f"Built prompt: {len(final_prompt)} chars, {len(self.sections)} sections")
-        return final_prompt, metadata
+        super().__init__(goal_id, logger, header=header, final_instructions="\n".join(final_instructions))
     
     def get_context_summary(self) -> str:
         """
