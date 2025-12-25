@@ -134,13 +134,8 @@ def execute_task(
             memory_state=memory_state
         )
         
-        # Configure logging (capture path so failures can reference the log file)
-        log_file_path = None
-        try:
-            log_file_path = str(configure_executor_logging(debug, quiet))
-        except Exception:
-            # Logging should never block execution
-            log_file_path = None
+        # Configure logging
+        configure_executor_logging(debug, quiet)
         
         # Create and run the executor
         executor = TaskExecutor()
@@ -154,22 +149,8 @@ def execute_task(
             "suggested_validation_steps": execution_result.suggested_validation_steps,
             "final_git_hash": execution_result.final_state.git_hash if execution_result.final_state else None,
             "final_memory_hash": execution_result.final_state.memory_hash if execution_result.final_state else None,
-            "error_message": execution_result.error_message,
-            "log_file": log_file_path,
+            "error_message": execution_result.error_message
         }
-
-        # Add compact failure context for follow-up analysis / decomposition decisions.
-        # Keep this small and structured to avoid bloating `.goal/<id>.json`.
-        if not execution_result.success:
-            meta = execution_result.metadata or {}
-            last_execution_data["failure_context"] = {
-                "failure_mode": meta.get("failure_mode"),
-                "parse_error": meta.get("parse_error"),
-                "final_response_preview": meta.get("final_response_preview"),
-                "tool_call_counts": meta.get("tool_call_counts"),
-                "last_tool_calls": meta.get("last_tool_calls"),
-                "tool_errors": meta.get("tool_errors"),
-            }
         # Remove null fields for cleaner output
         last_execution_data = {k: v for k, v in last_execution_data.items() if v is not None}
 

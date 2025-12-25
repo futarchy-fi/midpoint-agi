@@ -429,17 +429,10 @@ Memory Hash: {context.state.memory_hash}"""
             except json.JSONDecodeError as parse_error:
                 logger.error(f"Failed to parse final result JSON from _execute_task_with_llm: {parse_error}")
                 logger.error(f"Result string was: {result_json_str}")
-                # Make this failure actionable for follow-up analysis.
-                # Commonly, `result_json_str` is empty because the model only produced tool calls
-                # and never emitted the required final JSON response.
-                if not result_json_str or not str(result_json_str).strip():
-                    summary = "LLM did not produce a final JSON response (likely hit tool-iteration limit or got stuck in tool calls)."
-                    error_message = "No final JSON response from LLM"
-                else:
-                    summary = "Failed to parse LLM response as valid JSON."
-                    error_message = f"Invalid JSON response from LLM: {parse_error}"
+                summary = "Failed to parse LLM response JSON."
+                error_message = summary # Use parse failure as error message
                 execution_success = False # Ensure failure if JSON is bad
-                validation_steps = ["Decompose the goal into smaller steps and re-run execution", "Inspect the task executor log file for tool errors and loops"]
+                validation_steps = ["Failed to parse LLM response"] # Indicate failure reason
             except Exception as e:
                 # Catch other potential errors during parsing/processing result_data
                 logger.error(f"Error processing LLM result data: {e}", exc_info=True)
@@ -484,37 +477,6 @@ Memory Hash: {context.state.memory_hash}"""
             # Return the result using the PARSED success status and include error message if failed
             # Populate the new summary and validation_steps fields
             result_metadata = {"tool_usage": tool_usage_list}
-            if not execution_success:
-                # Count tools and capture the last few calls (helps explain tool-loop failures).
-                tool_call_counts: Dict[str, int] = {}
-                last_tool_calls: List[Dict[str, Any]] = []
-                for entry in tool_usage_list or []:
-                    if isinstance(entry, dict):
-                        tool_name = entry.get("tool")
-                        if tool_name:
-                            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-                            last_tool_calls.append({"tool": tool_name, "args": entry.get("args", {})})
-                last_tool_calls = last_tool_calls[-5:]
-
-                # Extract recent tool error strings from the conversation buffer.
-                tool_errors: List[str] = []
-                for msg in (self.conversation_buffer or []):
-                    if isinstance(msg, dict) and msg.get("role") == "tool":
-                        content = msg.get("content") or ""
-                        if isinstance(content, str) and content.strip().startswith("Error:"):
-                            tool_errors.append(content.strip())
-                tool_errors = tool_errors[-5:]
-
-                result_metadata.update(
-                    {
-                        "failure_mode": "invalid_or_missing_final_json",
-                        "parse_error": error_message,
-                        "final_response_preview": (str(result_json_str)[:800] if result_json_str else ""),
-                        "tool_call_counts": tool_call_counts,
-                        "last_tool_calls": last_tool_calls,
-                        "tool_errors": tool_errors,
-                    }
-                )
             return ExecutionResult(
                 success=execution_success,
                 summary=summary, # Pass the summary from LLM
