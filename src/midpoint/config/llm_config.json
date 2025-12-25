@@ -1,0 +1,39 @@
+{
+  "models": {
+    "default": "gpt-4o",
+    "versions": [
+      "gpt-4o",
+      "gpt-4o-2024-05-13",
+      "gpt-4o-mini"
+    ]
+  },
+  "agents": {
+    "task_executor": {
+      "model": "gpt-4o-mini",
+      "max_tokens": 3000,
+      "temperature": 0.1
+    },
+    "goal_decomposer": {
+      "model": "gpt-4o-mini",
+      "max_tokens": 3000,
+      "temperature": 0.1
+    },
+    "goal_analyzer": {
+      "model": "gpt-4o-mini",
+      "max_tokens": 1000,
+      "temperature": 0.1
+    },
+    "goal_validator": {
+      "model": "gpt-4o-mini",
+      "max_tokens": 2000,
+      "temperature": 0.1
+    }
+  },
+  "points_budget": {
+    "planning": 1000,
+    "execution": 2000,
+    "validation": 500,
+    "analysis": 500
+  }
+}
+
