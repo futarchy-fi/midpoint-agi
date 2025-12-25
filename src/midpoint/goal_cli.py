@@ -91,49 +91,10 @@ from .goal_file_operations import list_goals, list_subgoals, delete_goal
 
 def analyze_goal(goal_id, human_mode=False):
     """Analyze a goal to determine next actions using the goal analyzer agent."""
-    # Ensure goal directory exists
-    goal_path = ensure_goal_dir()
-    goal_file = goal_path / f"{goal_id}.json"
-    
-    if not goal_file.exists():
-        logging.error(f"Goal {goal_id} not found")
-        return False
-    
-    # Load goal details from the goal file so we can call the agent analyzer correctly.
-    try:
-        with open(goal_file, "r") as f:
-            goal_data = json.load(f)
-    except Exception as e:
-        logging.error(f"Failed to read goal file for {goal_id}: {e}")
-        return False
+    # Delegate to the dedicated command module (parallel to decompose/execute/validate).
+    from .goal_analysis import analyze_goal as analyze_goal_cmd
 
-    goal_description = goal_data.get("description") or goal_data.get("goal") or ""
-    validation_criteria = goal_data.get("validation_criteria") or []
-
-    # Best-effort memory context (optional; analyzer will also apply defaults).
-    current_state = goal_data.get("current_state") or {}
-    memory_hash = current_state.get("memory_hash") or goal_data.get("memory_hash")
-    memory_repo_path = (
-        current_state.get("memory_repository_path")
-        or goal_data.get("memory_repository_path")
-        or os.getenv("MEMORY_REPO_PATH")
-    )
-
-    # Import here to avoid circular imports
-    from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
-
-    # NOTE: The agent analyzer expects repo_path and goal text; goal_id is required.
-    # Human mode is approximated by enabling debug logging.
-    return agent_analyze_goal(
-        repo_path=os.getcwd(),
-        goal=goal_description,
-        validation_criteria=validation_criteria,
-        goal_id=goal_id,
-        memory_hash=memory_hash,
-        memory_repo_path=memory_repo_path,
-        debug=bool(human_mode),
-        quiet=False,
-    )
+    return analyze_goal_cmd(goal_id, human_mode=human_mode)
 
 def show_validation_history(goal_id, debug=False, quiet=False):
     """Show validation history for a specific goal."""
