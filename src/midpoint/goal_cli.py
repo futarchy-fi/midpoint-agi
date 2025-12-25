@@ -99,9 +99,9 @@ def analyze_goal(goal_id, human_mode=False):
         logging.error(f"Goal {goal_id} not found")
         return False
     
-    # Import here to avoid circular imports
-    from .agents.goal_analyzer import analyze_goal as agent_analyze_goal
-    return agent_analyze_goal(goal_id, human_mode)
+    # Delegate to a command module (parallel to decompose/execute/validate).
+    from .goal_analyze_command import analyze_existing_goal
+    return analyze_existing_goal(goal_id, debug=bool(human_mode))
 
 def show_validation_history(goal_id, debug=False, quiet=False):
     """Show validation history for a specific goal."""
