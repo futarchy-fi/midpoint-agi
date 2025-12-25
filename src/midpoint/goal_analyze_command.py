@@ -102,9 +102,12 @@ def analyze_existing_goal(goal_id, debug=False, quiet=False, bypass_validation=F
         memory_repo_path = current_state.get("memory_repository_path") or os.getenv("MEMORY_REPO_PATH")
         memory_hash = current_state.get("memory_hash")
 
+        # Prefer the repo path stored in the goal file (repo root), fall back to cwd.
+        repo_path = current_state.get("repository_path") or os.getcwd()
+
         # Call analyzer with keyword args so `goal_id` can't be mistaken for `repo_path`
         analysis = agent_analyze_goal(
-            repo_path=os.getcwd(),
+            repo_path=repo_path,
             goal=description,
             validation_criteria=validation_criteria,
             parent_goal_id=goal_data.get("parent_goal") or None,

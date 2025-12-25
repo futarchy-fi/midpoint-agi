@@ -966,7 +966,8 @@ Do not wrap it in markdown.
 
         # Last Execution Status from goal data
         prompt_lines.append("\n## Last Execution Status")
-        last_execution = goal_data.get('last_execution')
+        # Support both legacy (`last_execution`) and newer (`last_execution_result`) keys.
+        last_execution = goal_data.get("last_execution") or goal_data.get("last_execution_result")
         if last_execution and isinstance(last_execution, dict):
             timestamp = last_execution.get("timestamp", "N/A")
             success = last_execution.get("success", "Unknown")
