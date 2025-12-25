@@ -116,10 +116,29 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
                     capture_output=True
                 )
             
-            # Create a new empty commit for this goal to start with clean memory
-            # This ensures each goal has its own memory state without old documents
+            # Create a new orphan branch for this goal to start with truly empty memory
+            # This ensures each goal has its own isolated memory state without old documents
             try:
-                # Create an empty commit (using --allow-empty)
+                # Create an orphan branch (no parent, clean history)
+                branch_name = f"goal-{goal_id}"
+                subprocess.run(
+                    ["git", "checkout", "--orphan", branch_name],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                # Remove all files from staging (orphan branch starts with all files staged)
+                subprocess.run(
+                    ["git", "rm", "-rf", "--cached", "."],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                # Create basic structure for this goal's memory
+                for directory in ["documents", "metadata", "general_memory"]:
+                    dir_path = Path(memory_repo_path) / directory
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                # Create initial empty commit on the orphan branch
                 subprocess.run(
                     ["git", "commit", "--allow-empty", "-m", f"Initialize memory for goal {goal_id}"],
                     cwd=memory_repo_path,
@@ -128,14 +147,25 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
                 )
                 # Get the new commit hash
                 memory_hash = get_current_hash(memory_repo_path)
-                logging.info(f"Initialized empty memory state for goal {goal_id}: {memory_hash[:8]}")
+                logging.info(f"Initialized empty memory state for goal {goal_id} on orphan branch: {memory_hash[:8]}")
             except subprocess.CalledProcessError as e:
-                # If commit fails (e.g., no changes), try to get current hash
-                logging.warning(f"Could not create empty memory commit: {e}")
+                # If orphan branch creation fails, fall back to empty commit on current branch
+                logging.warning(f"Could not create orphan branch for goal {goal_id}: {e}")
                 try:
+                    subprocess.run(
+                        ["git", "commit", "--allow-empty", "-m", f"Initialize memory for goal {goal_id}"],
+                        cwd=memory_repo_path,
+                        check=True,
+                        capture_output=True
+                    )
                     memory_hash = get_current_hash(memory_repo_path)
+                    logging.info(f"Initialized empty memory state for goal {goal_id}: {memory_hash[:8]}")
                 except Exception as e2:
-                    logging.warning(f"Could not get initial memory hash: {e2}")
+                    logging.warning(f"Could not create empty memory commit: {e2}")
+                    try:
+                        memory_hash = get_current_hash(memory_repo_path)
+                    except Exception as e3:
+                        logging.warning(f"Could not get initial memory hash: {e3}")
         except Exception as e:
             logging.warning(f"Could not initialize memory state: {e}")
             # Still use the path even if we can't get the hash
