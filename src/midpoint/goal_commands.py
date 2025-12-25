@@ -9,19 +9,16 @@ from pathlib import Path
 
 # Import command implementations from their new modules
 from .goal_file_management import (
-    list_goals, list_subgoals, delete_goal
-)
-from .goal_git import (
-    go_back_commits, reset_to_commit
+    delete_goal
 )
 from .goal_visualization import (
-    show_goal_status, show_goal_tree, show_goal_history, generate_graph, show_goal_diffs
+    show_goal_status, show_goal_tree, show_goal_diffs
 )
 from .goal_analysis import (
     analyze_goal, show_validation_history
 )
 from .goal_state import (
-    create_new_goal, create_new_subgoal, create_new_task, mark_goal_complete, 
+    create_new_goal, mark_goal_complete, 
     merge_subgoal, update_parent_goal_state, update_git_state
 )
 # Import from goal_cli.py only if not yet refactored
@@ -42,20 +39,8 @@ def main_command(args):
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
         return create_new_goal(args.description)
-    elif args.command == "sub":
-        return create_new_subgoal(args.parent_id, args.description)
-    elif args.command == "task":
-        return create_new_task(args.parent_id, args.description)
-    elif args.command == "list":
-        return list_goals()
     elif args.command == "delete":
         return delete_goal(args.goal_id)
-    elif args.command == "back":
-        return go_back_commits(args.steps)
-    elif args.command == "reset":
-        return reset_to_commit(args.commit_id)
-    elif args.command == "subs":
-        return list_subgoals()
     elif args.command == "complete":
         return mark_goal_complete()
     elif args.command == "merge":
@@ -64,10 +49,6 @@ def main_command(args):
         return show_goal_status()
     elif args.command == "tree":
         return show_goal_tree()
-    elif args.command == "history":
-        return show_goal_history()
-    elif args.command == "graph":
-        return generate_graph()
     elif args.command == "update-parent":
         return handle_update_parent_command(args)
     elif args.command == "validate-history":
@@ -106,13 +87,6 @@ def main():
     new_parser.add_argument("description", help="Description of the goal")
     delete_parser = subparsers.add_parser("delete", help="Delete a goal, subgoal, or task")
     delete_parser.add_argument("goal_id", help="ID of the goal to delete")
-    sub_parser = subparsers.add_parser("sub", help="Create a subgoal under the specified parent")
-    sub_parser.add_argument("parent_id", help="Parent goal ID")
-    sub_parser.add_argument("description", help="Description of the subgoal")
-    task_parser = subparsers.add_parser("task", help="Create a new directly executable task under the specified parent")
-    task_parser.add_argument("parent_id", help="Parent goal ID")
-    task_parser.add_argument("description", help="Description of the task")
-    subparsers.add_parser("list", help="List all goals and subgoals in tree format")
     decompose_parser = subparsers.add_parser("decompose", help="Decompose a goal into subgoals")
     decompose_parser.add_argument("goal_id", help="Goal ID to decompose")
     decompose_parser.add_argument("--debug", action="store_true", help="Show debug output")
@@ -125,18 +99,11 @@ def main():
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
-    back_parser = subparsers.add_parser("back", help="Go back N commits on current goal branch")
-    back_parser.add_argument("steps", nargs="?", type=int, default=1, help="Number of commits to go back")
-    reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")
-    reset_parser.add_argument("commit_id", help="Commit ID to reset to")
-    subparsers.add_parser("subs", help="List available subgoals for current goal")
     subparsers.add_parser("complete", help="Mark current goal as complete")
     merge_parser = subparsers.add_parser("merge", help="Merge specific subgoal into current goal")
     merge_parser.add_argument("subgoal_id", help="Subgoal ID to merge")
     subparsers.add_parser("status", help="Show completion status of all goals")
     subparsers.add_parser("tree", help="Show visual representation of goal hierarchy")
-    subparsers.add_parser("history", help="Show timeline of goal exploration")
-    subparsers.add_parser("graph", help="Generate graphical visualization")
     diff_parser = subparsers.add_parser("diff", help="Show code and memory diffs for a specific goal")
     diff_parser.add_argument("goal_id", help="ID of the goal to show diffs for")
     mode_group = diff_parser.add_mutually_exclusive_group()

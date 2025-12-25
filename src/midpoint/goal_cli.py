@@ -245,8 +245,6 @@ from .goal_state import (
     ensure_goal_dir,
     create_goal_file,
     create_new_goal,
-    create_new_subgoal,
-    create_new_task,
     mark_goal_complete,
     merge_subgoal,
     get_child_tasks,
@@ -267,7 +265,7 @@ from .goal_visualization import (
 from .goal_decompose_command import decompose_existing_goal
 from .goal_execute_command import execute_task
 from .goal_revert import revert_goal
-from .goal_file_operations import list_goals, list_subgoals, delete_goal
+from .goal_file_operations import delete_goal
 
 def analyze_goal(goal_id, human_mode=False):
     """Analyze a goal to determine next actions using the goal analyzer agent."""
@@ -369,30 +367,14 @@ def main_command(args):
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
         return create_new_goal(args.description)
-    elif args.command == "sub":
-        return create_new_subgoal(args.parent_id, args.description)
-    elif args.command == "task":
-        return create_new_task(args.parent_id, args.description)
-    elif args.command == "list":
-        return list_goals()
     elif args.command == "delete":
         return delete_goal(args.goal_id)
-    elif args.command == "back":
-        return go_back_commits(args.steps)
-    elif args.command == "reset":
-        return reset_to_commit(args.commit_id)
-    elif args.command == "subs":
-        return list_subgoals()
     elif args.command == "complete":
         return mark_goal_complete()
     elif args.command == "status":
         return show_goal_status()
     elif args.command == "tree":
         return show_goal_tree()
-    elif args.command == "history":
-        return show_goal_history()
-    elif args.command == "graph":
-        return generate_graph()
     elif args.command == "update-parent":
         return handle_update_parent_command(args)
     elif args.command == "validate-history":
@@ -425,19 +407,6 @@ def main():
     delete_parser = subparsers.add_parser("delete", help="Delete a goal, subgoal, or task")
     delete_parser.add_argument("goal_id", help="ID of the goal to delete")
     
-    # goal sub <parent-id> <description>
-    sub_parser = subparsers.add_parser("sub", help="Create a subgoal under the specified parent")
-    sub_parser.add_argument("parent_id", help="Parent goal ID")
-    sub_parser.add_argument("description", help="Description of the subgoal")
-    
-    # goal task <parent-id> <description>
-    task_parser = subparsers.add_parser("task", help="Create a new directly executable task under the specified parent")
-    task_parser.add_argument("parent_id", help="Parent goal ID")
-    task_parser.add_argument("description", help="Description of the task")
-    
-    # goal list
-    subparsers.add_parser("list", help="List all goals and subgoals in tree format")
-    
     # goal decompose <goal-id>
     decompose_parser = subparsers.add_parser("decompose", help="Decompose a goal into subgoals")
     decompose_parser.add_argument("goal_id", help="Goal ID to decompose")
@@ -454,28 +423,6 @@ def main():
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
     
-    # goal solve <goal-id>
-    solve_parser = subparsers.add_parser("solve", help="Automatically analyze, decompose, and execute tasks for a goal")
-    solve_parser.add_argument("goal_id", help="Goal ID to solve")
-    solve_parser.add_argument("--debug", action="store_true", help="Show debug output")
-    solve_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
-    solve_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
-    
-    # State Navigation Commands
-    # ------------------------
-    # goal back [steps]
-    back_parser = subparsers.add_parser("back", help="Go back N commits on current goal branch")
-    back_parser.add_argument("steps", nargs="?", type=int, default=1, help="Number of commits to go back")
-    
-    # goal reset <commit-id>
-    reset_parser = subparsers.add_parser("reset", help="Reset to specific commit on current branch")
-    reset_parser.add_argument("commit_id", help="Commit ID to reset to")
-    
-    # Removed Hierarchy Navigation Commands
-    
-    # goal subs
-    subparsers.add_parser("subs", help="List available subgoals for current goal")
-    
     # Result Incorporation Commands
     # ----------------------------
     # goal complete
@@ -488,12 +435,6 @@ def main():
     # ------------------
     # goal tree
     subparsers.add_parser("tree", help="Show visual representation of goal hierarchy")
-    
-    # goal history
-    subparsers.add_parser("history", help="Show timeline of goal exploration")
-    
-    # goal graph
-    subparsers.add_parser("graph", help="Generate graphical visualization")
     
     # goal diff <goal-id>
     diff_parser = subparsers.add_parser("diff", help="Show code and memory diffs for a specific goal")
