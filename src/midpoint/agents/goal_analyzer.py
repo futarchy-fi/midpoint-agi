@@ -279,6 +279,44 @@ Do not wrap it in markdown.
     def _get_tool_descriptions(self):
         return ""
 
+    def _load_attempt_journal(self, goal_id: str, max_attempts: int = 5) -> List[Dict[str, Any]]:
+        """
+        Load the most recent attempt journal entries from `.goal/<goal_id>/attempts/*.json`.
+        These are append-only execution traces written by `goal execute`.
+        """
+        attempt_dir = Path(".goal") / goal_id / "attempts"
+        if not attempt_dir.exists():
+            return []
+        files = sorted(attempt_dir.glob("*.json"))
+        if not files:
+            return []
+        files = files[-max_attempts:]
+
+        attempts: List[Dict[str, Any]] = []
+        for p in files:
+            try:
+                with open(p, "r") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    data.setdefault("attempt_id", p.stem)
+                    attempts.append(data)
+            except Exception:
+                continue
+        return attempts
+
+    def _extract_error_lines(self, text: str, limit: int = 3) -> List[str]:
+        """Extract a few `Error:` lines from an embedded transcript string."""
+        if not text or not isinstance(text, str):
+            return []
+        out: List[str] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("Error:"):
+                out.append(line)
+                if len(out) >= limit:
+                    break
+        return out
+
     def analyze_goal_state(self, context: TaskContext, setup_logging: bool = False, debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
         """Analyze the current state of the goal and suggest the next action."""
         # Global variables to ensure we're using the same log files throughout
@@ -926,6 +964,45 @@ Do not wrap it in markdown.
                 prompt_lines.append("  ... (more past failures exist)")
         else:
             prompt_lines.append("No failed attempts recorded for this goal.")
+
+        # Attempt journal written under `.goal/<id>/attempts/`
+        attempts = self._load_attempt_journal(goal_id=goal_id, max_attempts=5)
+        prompt_lines.append("\n## Attempt Journal (from .goal/<id>/attempts/)")
+        if attempts:
+            prompt_lines.append(f"Recent attempts ({len(attempts)} shown, newest last):")
+            for a in attempts:
+                attempt_id = a.get("attempt_id", "unknown")
+                outcome = a.get("outcome", {}) if isinstance(a.get("outcome"), dict) else {}
+                diagnostics = a.get("diagnostics", {}) if isinstance(a.get("diagnostics"), dict) else {}
+                artifacts = a.get("artifacts", {}) if isinstance(a.get("artifacts"), dict) else {}
+
+                success = outcome.get("success", "Unknown")
+                summary = outcome.get("summary") or outcome.get("error_message") or ""
+                duration = a.get("duration_seconds")
+                tool_counts = diagnostics.get("tool_call_counts")
+
+                header = f"- Attempt {attempt_id}: success={success}"
+                if isinstance(duration, (int, float)):
+                    header += f", duration={duration:.1f}s"
+                prompt_lines.append(header)
+                if summary:
+                    prompt_lines.append(f"    Summary: {str(summary)[:500]}")
+                if isinstance(tool_counts, dict) and tool_counts:
+                    prompt_lines.append(f"    Tool call counts: {tool_counts}")
+
+                # If the attempt embedded a transcript, extract the most salient tool errors (if any).
+                mem_tx = artifacts.get("memory_transcript")
+                if isinstance(mem_tx, dict):
+                    tx = mem_tx.get("content") or ""
+                    errs = self._extract_error_lines(tx, limit=3)
+                    if errs:
+                        prompt_lines.append("    Tool errors (from transcript):")
+                        for e in errs:
+                            prompt_lines.append(f"      - {e}")
+                    if mem_tx.get("truncated"):
+                        prompt_lines.append("    Note: embedded transcript was truncated in the attempt journal.")
+        else:
+            prompt_lines.append("No attempt journal entries found.")
 
         # Last Execution Status from goal data
         prompt_lines.append("\n## Last Execution Status")
