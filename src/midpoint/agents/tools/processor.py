@@ -330,7 +330,6 @@ class ToolProcessor:
     def run_llm_with_tools(self, 
                                messages: List[Dict[str, Any]], 
                                model: str = "gpt-4",
-                               temperature: float = 0.1,
                                max_tokens: int = 4000,
                                validate_json_format: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -339,7 +338,6 @@ class ToolProcessor:
         Args:
             messages: Initial messages (system prompt, user prompt, etc.)
             model: The LLM model to use
-            temperature: Temperature for LLM generation
             max_tokens: Maximum tokens for LLM generation
             validate_json_format: Whether to validate JSON in responses
             
@@ -379,7 +377,6 @@ class ToolProcessor:
                         messages=current_messages,
                         tools=ToolRegistry.get_tool_schemas(),
                         tool_choice="auto",
-                        temperature=temperature,
                         # Newer model families (e.g. gpt-5-*) require `max_completion_tokens`.
                         # We standardize on that parameter across all agent paths.
                         max_completion_tokens=max_tokens
