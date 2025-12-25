@@ -181,7 +181,15 @@ def main_command(args):
     if args.command == "decompose":
         return decompose_existing_goal(args.goal_id, args.debug, args.quiet, args.bypass_validation)
     elif args.command == "execute":
-        return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo)
+        return execute_task(
+            args.node_id,
+            args.debug,
+            args.quiet,
+            args.bypass_validation,
+            args.no_commit,
+            args.memory_repo,
+            reanalyze_on_failure=getattr(args, "reanalyze_on_failure", False),
+        )
     elif args.command == "solve":
         from .goal_solver import handle_solve_command
         return handle_solve_command(args)
@@ -276,6 +284,11 @@ def main():
     execute_parser.add_argument("--bypass-validation", action="store_true", help="Skip repository validation (for testing)")
     execute_parser.add_argument("--no-commit", action="store_true", help="Prevent automatic commits")
     execute_parser.add_argument("--memory-repo", help="Path to memory repository")
+    execute_parser.add_argument(
+        "--reanalyze-on-failure",
+        action="store_true",
+        help="After a failed execution, run `goal analyze <node_id>` using the recorded failure context",
+    )
     
     # goal solve <goal-id>
     solve_parser = subparsers.add_parser("solve", help="Automatically analyze, decompose, and execute tasks for a goal")

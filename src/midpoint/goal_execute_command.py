@@ -21,7 +21,15 @@ def ensure_goal_dir():
     return goal_path
 
 
-def execute_task(node_id, debug=False, quiet=False, bypass_validation=False, no_commit=False, memory_repo=None):
+def execute_task(
+    node_id,
+    debug=False,
+    quiet=False,
+    bypass_validation=False,
+    no_commit=False,
+    memory_repo=None,
+    reanalyze_on_failure: bool = False,
+):
     """Execute a goal/task node using the TaskExecutor.
 
     This intentionally allows executing `G*`/`S*`/`T*` nodes directly, without
@@ -147,9 +155,12 @@ def execute_task(node_id, debug=False, quiet=False, bypass_validation=False, no_
         # Remove null fields for cleaner output
         last_execution_data = {k: v for k, v in last_execution_data.items() if v is not None}
 
-        # --- Update task_data regardless of success/failure --- 
-        # Overwrite or add the last_execution_result field
+        # --- Update task_data regardless of success/failure ---
+        # Persist both the newer `last_execution_result` and the legacy `last_execution`
+        # field so other parts of the system (analyzer, status UI, update-parent) can
+        # incorporate failures into subsequent decisions.
         task_data["last_execution_result"] = last_execution_data
+        task_data["last_execution"] = last_execution_data
 
         if execution_result.success:
             logging.info(f"Node {node_id} execution reported success.")
@@ -184,11 +195,6 @@ def execute_task(node_id, debug=False, quiet=False, bypass_validation=False, no_
             if "completion_time" in task_data:
                 del task_data["completion_time"] # Remove previous completion time if it exists
             
-            # The last_execution_result field is already updated above
-            # Remove the old 'last_execution' field if it exists
-            if "last_execution" in task_data:
-                del task_data["last_execution"]
-
             # Save updated task data with failure status and last_execution_result
             try:
                 with open(task_file, 'w') as f:
@@ -196,6 +202,14 @@ def execute_task(node_id, debug=False, quiet=False, bypass_validation=False, no_
                 logging.info(f"Saved updated node data for {node_id} (Failure)")
             except Exception as e:
                 logging.error(f"Failed to save failed node data for {node_id}: {e}")
+            # Optionally re-run analysis now that failure context is persisted.
+            if reanalyze_on_failure:
+                try:
+                    from .goal_analyze_command import analyze_existing_goal
+                    print(f"\nRe-analyzing {node_id} after failed execution...")
+                    analyze_existing_goal(node_id, debug=debug, quiet=quiet, bypass_validation=bypass_validation)
+                except Exception as e:
+                    logging.error(f"Failed to re-analyze {node_id} after execution failure: {e}")
             return False
             
     finally:
