@@ -467,8 +467,24 @@ def retrieve_recent_memory(memory_hash, char_limit=5000, repo_path=None):
                 logging.debug(f"Path does not exist: {search_path}")
             return 0, []
         
-        # Find all .md files
-        files = list(search_path.glob("**/*.md"))
+        # Find all .md files that are tracked in this commit (not untracked)
+        # Use git ls-files to only get files tracked in the current commit
+        try:
+            ls_files_result = subprocess.run(
+                ["git", "ls-files", str(search_path.relative_to(repo_path))],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            tracked_files = set(ls_files_result.stdout.strip().splitlines())
+            # Filter to only .md files that are tracked
+            all_files = list(search_path.glob("**/*.md"))
+            files = [f for f in all_files if str(f.relative_to(repo_path)) in tracked_files]
+        except Exception as e:
+            # Fallback to glob if git ls-files fails
+            logging.warning(f"Failed to get tracked files, using glob fallback: {e}")
+            files = list(search_path.glob("**/*.md"))
         
         # Sort by modification time (newest first)
         files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
