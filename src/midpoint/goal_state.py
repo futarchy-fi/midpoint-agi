@@ -244,6 +244,186 @@ def create_new_child_goal(parent_id, description):
     logging.info(f"Created new child goal {child_id} under {parent_id}")
     return child_id
 
+def _ensure_memory_repo_initialized(memory_repo_path: str, goal_id: str) -> Optional[str]:
+    """
+    Ensure memory repository has an initial baseline commit and create a new branch for the goal.
+    
+    Returns:
+        The memory hash for the new goal's initial commit, or None if initialization failed.
+    """
+    memory_repo_path = Path(memory_repo_path)
+    initial_tag = "memory-initial"
+    
+    # Check if it's a git repository
+    git_dir = memory_repo_path / ".git"
+    if not git_dir.exists():
+        # Initialize git repository
+        subprocess.run(
+            ["git", "init"],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        # Create basic structure
+        for directory in ["documents", "metadata", "general_memory"]:
+            dir_path = memory_repo_path / directory
+            dir_path.mkdir(parents=True, exist_ok=True)
+        # Create README in general_memory
+        readme_path = memory_repo_path / "general_memory" / "README.md"
+        if not readme_path.exists():
+            readme_path.write_text("# General Memory\n\nThis directory contains general memory documents that are not specific to any particular category.\n")
+        # Create .gitignore
+        gitignore_path = memory_repo_path / ".gitignore"
+        if not gitignore_path.exists():
+            gitignore_path.write_text("# Ignore cross-reference file which changes frequently\nmetadata/cross-reference.json\n")
+        # Create initial commit
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Initialize memory repository baseline"],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        # Tag it as the initial baseline
+        subprocess.run(
+            ["git", "tag", initial_tag],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        logging.info(f"Created initial memory repository baseline with tag: {initial_tag}")
+    
+    # Ensure no untracked changes before proceeding
+    _ensure_clean_memory_repo(memory_repo_path)
+    
+    # Check if initial tag exists, if not create it from current state
+    tag_check = subprocess.run(
+        ["git", "rev-parse", "--verify", initial_tag],
+        cwd=memory_repo_path,
+        capture_output=True,
+        text=True
+    )
+    
+    if tag_check.returncode != 0:
+        # Initial tag doesn't exist, create it from current HEAD
+        # First ensure we have a clean baseline
+        _ensure_clean_memory_repo(memory_repo_path)
+        # Tag current HEAD as initial
+        subprocess.run(
+            ["git", "tag", initial_tag],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        logging.info(f"Tagged current state as initial baseline: {initial_tag}")
+    
+    # Get the initial commit hash
+    initial_hash_result = subprocess.run(
+        ["git", "rev-parse", initial_tag],
+        cwd=memory_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    initial_hash = initial_hash_result.stdout.strip()
+    
+    # Save current branch to restore later
+    current_branch_result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=memory_repo_path,
+        capture_output=True,
+        text=True
+    )
+    original_branch = current_branch_result.stdout.strip() if current_branch_result.returncode == 0 else None
+    
+    try:
+        # Create a new branch from the initial baseline for this goal
+        branch_name = f"goal-{goal_id}"
+        # Check if branch already exists, delete it first
+        branch_check = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=memory_repo_path,
+            capture_output=True
+        )
+        if branch_check.returncode == 0:
+            # Branch exists, delete it
+            subprocess.run(
+                ["git", "branch", "-D", branch_name],
+                cwd=memory_repo_path,
+                check=True,
+                capture_output=True
+            )
+        
+        # Create new branch from initial baseline
+        subprocess.run(
+            ["git", "checkout", "-b", branch_name, initial_hash],
+            cwd=memory_repo_path,
+            check=True,
+            capture_output=True
+        )
+        
+        # Ensure clean state (no untracked files)
+        _ensure_clean_memory_repo(memory_repo_path)
+        
+        # Get the commit hash (should be the initial hash)
+        memory_hash = get_current_hash(memory_repo_path)
+        logging.info(f"Initialized memory state for goal {goal_id} from baseline: {memory_hash[:8]}")
+        
+        return memory_hash
+    finally:
+        # Restore original branch if we were on one
+        if original_branch and original_branch != "HEAD":
+            try:
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=memory_repo_path,
+                    check=True,
+                    capture_output=True
+                )
+            except Exception:
+                pass  # Don't fail if we can't restore
+
+def _ensure_clean_memory_repo(memory_repo_path: Path):
+    """Ensure memory repository has no untracked changes."""
+    # Check for untracked files
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=memory_repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    
+    if status_result.stdout.strip():
+        # There are untracked or modified files
+        untracked = [line[3:] for line in status_result.stdout.splitlines() if line.startswith("??")]
+        if untracked:
+            # Remove untracked files
+            logging.warning(f"Removing untracked files from memory repository: {untracked}")
+            subprocess.run(
+                ["git", "clean", "-fd"],
+                cwd=memory_repo_path,
+                check=True,
+                capture_output=True
+            )
+        
+        # Check for modified tracked files
+        modified = [line for line in status_result.stdout.splitlines() if not line.startswith("??")]
+        if modified:
+            # Reset any modifications
+            logging.warning(f"Resetting modified files in memory repository")
+            subprocess.run(
+                ["git", "reset", "--hard", "HEAD"],
+                cwd=memory_repo_path,
+                check=True,
+                capture_output=True
+            )
+
 def mark_goal_complete(goal_id=None):
     """Mark a goal as complete."""
     # If no goal ID provided, use the current branch
