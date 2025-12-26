@@ -141,18 +141,25 @@ class GetCurrentBranchTool(Tool):
             "properties": {
                 "repo_path": {
                     "type": "string",
-                    "description": "Path to the Git repository"
+                    "description": "Path to the Git repository (optional, defaults to current directory)"
                 }
-            },
-            "required": ["repo_path"]
+            }
         }
     
     @property
     def required_parameters(self) -> List[str]:
-        return ["repo_path"]
+        return []
     
-    def execute(self, repo_path: str) -> str:
+    def execute(self, repo_path: Optional[str] = None) -> str:
         """Get the current branch name."""
+        # If no repo_path provided or empty string, use current directory
+        if not repo_path:
+            repo_path = os.getcwd()
+        
+        # Validate that the path exists
+        if not os.path.exists(repo_path):
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+        
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],

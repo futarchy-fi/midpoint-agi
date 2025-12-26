@@ -191,3 +191,30 @@ class TaskExecutionPromptBuilder(PromptBuilder):
         ]
         super().__init__(task_id, logger, header=header, final_instructions="\n".join(final_instructions))
 
+
+class ValidationPromptBuilder(PromptBuilder):
+    """
+    Builds prompts for goal validation with section tracking and debugging support.
+    
+    Inherits from PromptBuilder and customizes header and final instructions for validation.
+    """
+    
+    def __init__(self, goal_id: str, logger: logging.Logger):
+        """
+        Initialize the validation prompt builder.
+        
+        Args:
+            goal_id: The goal ID being validated
+            logger: Logger instance for debugging
+        """
+        header = f"Goal Validation Request [{goal_id}]"
+        final_instructions = [
+            "Based on ALL the context above, validate the goal's completion criteria.",
+            "1. Verify you are on the target git branch using tools.",
+            "2. Use tools to get the repository diff between the initial and final git hashes.",
+            "3. Use tools to investigate memory changes between the initial and final memory hashes (if applicable).",
+            "4. Analyze the gathered evidence against the validation criteria.",
+            "5. Provide your assessment in the required JSON format with criteria_results, score, and reasoning."
+        ]
+        super().__init__(goal_id, logger, header=header, final_instructions="\n".join(final_instructions))
+

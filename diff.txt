@@ -1,0 +1,440 @@
+diff --git a/src/midpoint/agents/goal_validator.py b/src/midpoint/agents/goal_validator.py
+index b70b15d..9f2f2d1 100644
+--- a/src/midpoint/agents/goal_validator.py
++++ b/src/midpoint/agents/goal_validator.py
+@@ -19,6 +19,8 @@ from openai import OpenAI
+ 
+ from midpoint.agents.models import Goal, ExecutionResult, CriterionResult, ValidationResult, State
+ from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
++from midpoint.utils.llm_logging import LLM_LOGGER_NAME
++from .prompt_builder import ValidationPromptBuilder
+ from .tools import (
+     list_directory,
+     read_file,
+@@ -124,7 +126,7 @@ class GoalValidator:
+         # Get tools from registry
+         self.tools = ToolRegistry.get_tool_schemas()
+ 
+-    def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
++    def validate_execution(self, goal: Goal, execution_result: ExecutionResult, preview_only: bool = False) -> ValidationResult:
+         """
+         Validate execution results against a goal using LLM.
+         
+@@ -180,34 +182,88 @@ class GoalValidator:
+         if not current_memory_hash and execution_result.final_state:
+              current_memory_hash = getattr(execution_result.final_state, 'memory_hash', None)
+ 
+-        # Prepare the user prompt for the LLM
+-        prompt_lines = [
+-            f"Please validate the goal: '{goal.description}'",
+-            "Based on the changes between the initial and current states.",
+-            "\n**Goal Details:**",
+-            f"- Description: {goal.description}",
+-            f"- Validation Criteria:",
++        # Create the user prompt using ValidationPromptBuilder
++        goal_id = goal.id if hasattr(goal, 'id') and goal.id else "unknown"
++        llm_logger = logging.getLogger(LLM_LOGGER_NAME)
++        builder = ValidationPromptBuilder(goal_id, llm_logger)
++        
++        # Build Goal Details section (critical - this is what we're validating)
++        goal_details_lines = [
++            f"Goal Description: {goal.description}",
++            "",
++            "Validation Criteria:"
+         ]
+-        prompt_lines.extend([f"  - {c}" for c in goal.validation_criteria])
+-
+-        prompt_lines.append("\n**State Information:**")
+-        prompt_lines.append(f"- Target Branch: {execution_result.branch_name}") # Branch LLM should be on
+-        prompt_lines.append(f"- Initial Git Hash: {initial_git_hash or 'Not specified'}")
+-        prompt_lines.append(f"- Final Git Hash: {current_hash}") # The hash LLM should currently see
+-        prompt_lines.append(f"- Initial Memory Hash: {initial_memory_hash or 'Not specified'}")
+-        prompt_lines.append(f"- Final Memory Hash: {current_memory_hash or 'Not specified'}")
+-        prompt_lines.append(f"- Repository Path: {current_repo_path}")
+-        # We might need to provide memory repo path if it's separate and needed for tools
+-        # memory_repo_path = ... # How to get this reliably? Assume tools can infer for now or add if needed.
+-
+-        prompt_lines.append("\n**Instructions:**")
+-        prompt_lines.append("1. Verify you are on the target git branch using tools.")
+-        prompt_lines.append("2. Use tools to get the repository diff between the initial and final git hashes.")
+-        prompt_lines.append("3. Use tools to investigate memory changes between the initial and final memory hashes (e.g., diff or reading files)." if initial_memory_hash and current_memory_hash else "3. No memory comparison needed or possible.")
+-        prompt_lines.append("4. Analyze the gathered evidence against the validation criteria.")
+-        prompt_lines.append("5. Provide your assessment in the required JSON format.")
+-
+-        user_prompt = "\n".join(prompt_lines)
++        if goal.validation_criteria:
++            goal_details_lines.extend([f"  - {c}" for c in goal.validation_criteria])
++        else:
++            goal_details_lines.append("  (No explicit validation criteria provided)")
++        builder.add_section(
++            "Goal Details",
++            "\n".join(goal_details_lines),
++            importance="critical",
++            source="goal"
++        )
++        
++        # Build State Information section (important - needed for validation)
++        state_info_lines = [
++            f"Target Branch: {execution_result.branch_name}",
++            f"Initial Git Hash: {initial_git_hash or 'Not specified'}",
++            f"Final Git Hash: {current_hash}",
++            f"Repository Path: {current_repo_path}"
++        ]
++        if initial_memory_hash or current_memory_hash:
++            state_info_lines.append(f"Initial Memory Hash: {initial_memory_hash or 'Not specified'}")
++            state_info_lines.append(f"Final Memory Hash: {current_memory_hash or 'Not specified'}")
++        builder.add_section(
++            "State Information",
++            "\n".join(state_info_lines),
++            importance="important",
++            source="execution_result"
++        )
++        
++        # Build the prompt
++        user_prompt, prompt_metadata = builder.build()
++        llm_logger.debug(f"Built validation prompt: {prompt_metadata['total_size']} chars, {prompt_metadata['section_count']} sections")
++
++        # Preview mode: return early without calling LLM
++        if preview_only:
++            logging.info("Preview mode: Prompt built successfully. Not calling LLM.")
++            print("\n" + "=" * 80)
++            print("PREVIEW MODE - Prompt Preview")
++            print("=" * 80)
++            print(f"\nSystem Prompt ({len(self.system_prompt)} chars):")
++            print("-" * 80)
++            print(self.system_prompt)
++            print("-" * 80)
++            print(f"\nUser Prompt ({len(user_prompt)} chars):")
++            print("-" * 80)
++            print(user_prompt)
++            print("-" * 80)
++            print(f"\nContext Summary:")
++            print("-" * 80)
++            print(f"Total prompt size: {len(self.system_prompt) + len(user_prompt):,} characters")
++            print(f"Section breakdown: {prompt_metadata.get('section_count', 0)} sections")
++            print(f"Importance: {prompt_metadata.get('importance_breakdown', {})}")
++            print("=" * 80)
++            print("\nTo actually run the validation, remove --preview flag")
++            print("=" * 80 + "\n")
++            
++            # Return a preview validation result
++            return ValidationResult(
++                goal_id=goal.id if hasattr(goal, 'id') else "unknown",
++                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
++                criteria_results=[],
++                score=0.0,
++                validated_by="Preview",
++                automated=True,
++                repository_state=State(
++                    git_hash=current_hash,
++                    branch_name=execution_result.branch_name,
++                    repository_path=current_repo_path,
++                    description="Repository state at preview time"
++                ) if current_hash != "unknown" else None,
++                reasoning="Preview mode: Prompt built but LLM not called"
++            )
+ 
+         messages = [
+             {"role": "system", "content": self.system_prompt},
+diff --git a/src/midpoint/agents/prompt_builder.py b/src/midpoint/agents/prompt_builder.py
+index aa210cf..8664ce3 100644
+--- a/src/midpoint/agents/prompt_builder.py
++++ b/src/midpoint/agents/prompt_builder.py
+@@ -191,3 +191,30 @@ class TaskExecutionPromptBuilder(PromptBuilder):
+         ]
+         super().__init__(task_id, logger, header=header, final_instructions="\n".join(final_instructions))
+ 
++
++class ValidationPromptBuilder(PromptBuilder):
++    """
++    Builds prompts for goal validation with section tracking and debugging support.
++    
++    Inherits from PromptBuilder and customizes header and final instructions for validation.
++    """
++    
++    def __init__(self, goal_id: str, logger: logging.Logger):
++        """
++        Initialize the validation prompt builder.
++        
++        Args:
++            goal_id: The goal ID being validated
++            logger: Logger instance for debugging
++        """
++        header = f"Goal Validation Request [{goal_id}]"
++        final_instructions = [
++            "Based on ALL the context above, validate the goal's completion criteria.",
++            "1. Verify you are on the target git branch using tools.",
++            "2. Use tools to get the repository diff between the initial and final git hashes.",
++            "3. Use tools to investigate memory changes between the initial and final memory hashes (if applicable).",
++            "4. Analyze the gathered evidence against the validation criteria.",
++            "5. Provide your assessment in the required JSON format with criteria_results, score, and reasoning."
++        ]
++        super().__init__(goal_id, logger, header=header, final_instructions="\n".join(final_instructions))
++
+diff --git a/src/midpoint/agents/tools/git_tools.py b/src/midpoint/agents/tools/git_tools.py
+index c639f6a..c7d33a6 100644
+--- a/src/midpoint/agents/tools/git_tools.py
++++ b/src/midpoint/agents/tools/git_tools.py
+@@ -141,18 +141,25 @@ class GetCurrentBranchTool(Tool):
+             "properties": {
+                 "repo_path": {
+                     "type": "string",
+-                    "description": "Path to the Git repository"
++                    "description": "Path to the Git repository (optional, defaults to current directory)"
+                 }
+-            },
+-            "required": ["repo_path"]
++            }
+         }
+     
+     @property
+     def required_parameters(self) -> List[str]:
+-        return ["repo_path"]
++        return []
+     
+-    def execute(self, repo_path: str) -> str:
++    def execute(self, repo_path: Optional[str] = None) -> str:
+         """Get the current branch name."""
++        # If no repo_path provided or empty string, use current directory
++        if not repo_path:
++            repo_path = os.getcwd()
++        
++        # Validate that the path exists
++        if not os.path.exists(repo_path):
++            raise ValueError(f"Repository path does not exist: {repo_path}")
++        
+         try:
+             result = subprocess.run(
+                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+diff --git a/src/midpoint/goal_cli.py b/src/midpoint/goal_cli.py
+index c7c3b23..7327f30 100644
+--- a/src/midpoint/goal_cli.py
++++ b/src/midpoint/goal_cli.py
+@@ -316,7 +316,7 @@ def main_command(args):
+         return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo, getattr(args, 'preview', False))
+     elif args.command == "validate":
+         from .validation import handle_validate_goal
+-        return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
++        return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto, getattr(args, 'preview', False))
+     
+     # All other commands are synchronous, so just call them directly
+     if args.command == "new":
+@@ -342,6 +342,11 @@ def main_command(args):
+         return show_goal_diffs(args.goal_id, show_code=show_code, show_memory=show_memory)
+     elif args.command == "revert":
+         return revert_goal(args.goal_id)
++    elif args.command == "set-criteria":
++        from .goal_criteria_update import update_goal_validation_criteria
++        criteria = getattr(args, 'criteria', None)
++        auto = getattr(args, 'auto', False)
++        return update_goal_validation_criteria(args.goal_id, criteria=criteria, auto=auto)
+     else:
+         return None
+ 
+@@ -411,6 +416,7 @@ def main():
+     validate_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
+     validate_parser.add_argument("--auto", action="store_true", help="Perform automated validation using LLM")
+     validate_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use for validation (with --auto)")
++    validate_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
+     
+     # goal validate-history <goal-id>
+     validate_history_parser = subparsers.add_parser("validate-history", help="Show validation history for a goal")
+@@ -433,6 +439,12 @@ simple remaining work, "mark_complete", "update_parent", or "give_up" in special
+     analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
+     analyze_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
+     
++    # Add new subparser for setting/updating validation criteria
++    set_criteria_parser = subparsers.add_parser("set-criteria", help="Set or update validation criteria for a goal")
++    set_criteria_parser.add_argument("goal_id", help="ID of the goal to update")
++    set_criteria_parser.add_argument("--auto", action="store_true", help="Auto-generate criteria using AI")
++    set_criteria_parser.add_argument("--criteria", nargs="+", help="Validation criteria (space-separated)")
++    
+     # Add new subparser for updating parent from child
+     update_parent_parser = subparsers.add_parser(
+         'update-parent',
+diff --git a/src/midpoint/goal_state.py b/src/midpoint/goal_state.py
+index defa8d4..c6ff725 100644
+--- a/src/midpoint/goal_state.py
++++ b/src/midpoint/goal_state.py
+@@ -48,7 +48,7 @@ def ensure_goal_dir():
+         logging.info(f"Created goal directory: {GOAL_DIR}")
+     return goal_path
+ 
+-def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
++def create_goal_file(goal_id, description, parent_id=None, branch_name=None, validation_criteria=None):
+     """Create a goal file with initial details.
+     
+     Args:
+@@ -56,6 +56,7 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
+         description: The goal description
+         parent_id: The ID of the parent goal (if any)
+         branch_name: The name of the branch associated with this goal (optional)
++        validation_criteria: Optional list of validation criteria strings
+     
+     Returns:
+         Path to the created goal file, or None if failed.
+@@ -118,7 +119,7 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
+         "status": "pending",  # Initial status
+         "is_task": False,  # All nodes start as potential goals
+         "complete": False,
+-        "validation_criteria": [], # Add validation criteria field
++        "validation_criteria": validation_criteria if validation_criteria is not None else [], # Add validation criteria field
+         "initial_state": initial_state_data,
+         "current_state": initial_state_data.copy(), # Start current state same as initial
+         "created_at": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+@@ -208,10 +209,18 @@ def create_new_goal(description):
+                 logging.error(f"Failed to create branch: {e}")
+                 return None
+         
+-        # Create goal file with branch information
+-        create_goal_file(goal_id, description, branch_name=branch_name)
++        # Prompt for validation criteria
++        from .goal_criteria import prompt_for_validation_criteria
++        validation_criteria = prompt_for_validation_criteria(description)
++        
++        # Create goal file with branch information and validation criteria
++        goal_file = create_goal_file(goal_id, description, branch_name=branch_name, validation_criteria=validation_criteria)
+         print(f"Created new goal {goal_id}: {description}")
+         print(f"Created branch: {branch_name}")
++        if validation_criteria:
++            print(f"Validation criteria ({len(validation_criteria)}):")
++        for i, criterion in enumerate(validation_criteria, 1):
++            print(f"  {i}. {criterion}")
+ 
+         # Switch back to original branch
+         try:
+diff --git a/src/midpoint/validation.py b/src/midpoint/validation.py
+index 5509d8f..eb6e0f0 100644
+--- a/src/midpoint/validation.py
++++ b/src/midpoint/validation.py
+@@ -12,11 +12,8 @@ from pathlib import Path
+ from typing import Dict, List, Any, Optional, Tuple
+ 
+ # Import from midpoint modules
+-from midpoint.goal_cli import (
+-    ensure_goal_dir,
+-    get_current_hash,
+-    get_current_branch
+-)
++from midpoint.goal_git import get_current_hash, get_current_branch
++from midpoint.goal_file_management import ensure_goal_dir
+ 
+ # Import agents for automated validation
+ from midpoint.agents.goal_validator import GoalValidator
+@@ -255,7 +252,7 @@ async def save_validation_context(goal_id: str, timestamp: str, messages: List[D
+ 
+ 
+ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any], 
+-                                     debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
++                                     debug: bool = False, quiet: bool = False, preview_only: bool = False) -> Dict[str, Any]:
+     """
+     Perform automated validation of a goal using LLM.
+     
+@@ -351,7 +348,7 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
+             print(f"Validating goal: {goal_data.get('description', '')}")
+             print(f"Validation criteria: {len(criteria)}")
+         
+-        validation_result = validator.validate_execution(goal, execution_result)
++        validation_result = validator.validate_execution(goal, execution_result, preview_only=preview_only)
+         
+         # Generate timestamp for file naming
+         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+@@ -406,7 +403,7 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
+         }
+ 
+ 
+-async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> Tuple[bool, Dict[str, Any]]:
++async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False, preview_only: bool = False) -> Tuple[bool, Dict[str, Any]]:
+     """
+     Validate a goal's completion criteria.
+     
+@@ -421,6 +418,33 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False,
+             - bool: True if validation was successful, False otherwise
+             - dict: Validation record (or empty dict if validation failed)
+     """
++    # Save current branch to restore later
++    original_branch = None
++    try:
++        original_branch = get_current_branch()
++    except Exception as e:
++        logging.warning(f"Could not get current branch: {e}")
++    
++    # Check for uncommitted changes and stash them if needed
++    has_changes = False
++    try:
++        result = subprocess.run(
++            ["git", "status", "--porcelain"],
++            check=True,
++            capture_output=True,
++            text=True
++        )
++        has_changes = bool(result.stdout.strip())
++        if has_changes:
++            subprocess.run(
++                ["git", "stash", "push", "-m", f"Stashing changes before validating goal {goal_id}"],
++                check=True,
++                capture_output=True,
++                text=True
++            )
++    except subprocess.CalledProcessError as e:
++        logging.warning(f"Failed to check git status or stash changes: {e}")
++    
+     # Ensure goal directory exists
+     goal_path = ensure_goal_dir()
+     goal_file = goal_path / f"{goal_id}.json"
+@@ -446,7 +470,10 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False,
+         # Determine validation method based on auto flag
+         if auto:
+             # Use automated validation
+-            validation_results = await perform_automated_validation(goal_id, goal_data, debug, quiet)
++            validation_results = await perform_automated_validation(goal_id, goal_data, debug, quiet, preview_only)
++            # In preview mode, return early
++            if preview_only:
++                return True, {"preview_mode": True, "validation_results": validation_results}
+             criteria_results = validation_results["criteria_results"]
+         else:
+             # For manual validation, we'll defer to CLI to handle user interaction
+@@ -466,9 +493,29 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False,
+     except Exception as e:
+         logging.error(f"Failed to validate goal {goal_id}: {e}")
+         return False, {}
++    finally:
++        # Always restore the original branch and unstash changes
++        if original_branch:
++            try:
++                subprocess.run(
++                    ["git", "checkout", original_branch],
++                    check=True,
++                    capture_output=True,
++                    text=True
++                )
++                
++                if has_changes:
++                    subprocess.run(
++                        ["git", "stash", "pop"],
++                        check=True,
++                        capture_output=True,
++                        text=True
++                    )
++            except subprocess.CalledProcessError as e:
++                logging.error(f"Failed to restore original branch: {e}")
+ 
+ 
+-def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> bool:
++def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False, preview: bool = False) -> bool:
+     """
+     Synchronous wrapper for the validate_goal function.
+     
+@@ -492,7 +539,11 @@ def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False,
+         else:
+             logging.basicConfig(level=logging.INFO)
+             
+-        success, result = asyncio.run(validate_goal(goal_id, debug, quiet, auto))
++        success, result = asyncio.run(validate_goal(goal_id, debug, quiet, auto, preview))
++        
++        # Handle preview mode
++        if preview and result.get("preview_mode"):
++            return True
+         
+         # Handle the validation result
+         if success:

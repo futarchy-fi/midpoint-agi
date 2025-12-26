@@ -316,7 +316,7 @@ def main_command(args):
         return execute_task(args.node_id, args.debug, args.quiet, args.bypass_validation, args.no_commit, args.memory_repo, getattr(args, 'preview', False))
     elif args.command == "validate":
         from .validation import handle_validate_goal
-        return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto)
+        return handle_validate_goal(args.goal_id, args.debug, args.quiet, args.auto, getattr(args, 'preview', False))
     
     # All other commands are synchronous, so just call them directly
     if args.command == "new":
@@ -342,6 +342,11 @@ def main_command(args):
         return show_goal_diffs(args.goal_id, show_code=show_code, show_memory=show_memory)
     elif args.command == "revert":
         return revert_goal(args.goal_id)
+    elif args.command == "set-criteria":
+        from .goal_criteria_update import update_goal_validation_criteria
+        criteria = getattr(args, 'criteria', None)
+        auto = getattr(args, 'auto', False)
+        return update_goal_validation_criteria(args.goal_id, criteria=criteria, auto=auto)
     else:
         return None
 
@@ -411,6 +416,7 @@ def main():
     validate_parser.add_argument("--quiet", action="store_true", help="Only show warnings and result")
     validate_parser.add_argument("--auto", action="store_true", help="Perform automated validation using LLM")
     validate_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use for validation (with --auto)")
+    validate_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
     
     # goal validate-history <goal-id>
     validate_history_parser = subparsers.add_parser("validate-history", help="Show validation history for a goal")
@@ -432,6 +438,12 @@ simple remaining work, "mark_complete", "update_parent", or "give_up" in special
     analyze_parser.add_argument("goal_id", help="ID of the goal to analyze")
     analyze_parser.add_argument("--human", action="store_true", help="Perform interactive analysis with detailed context")
     analyze_parser.add_argument("--preview", action="store_true", help="Preview mode: Build and display the prompt without calling the LLM")
+    
+    # Add new subparser for setting/updating validation criteria
+    set_criteria_parser = subparsers.add_parser("set-criteria", help="Set or update validation criteria for a goal")
+    set_criteria_parser.add_argument("goal_id", help="ID of the goal to update")
+    set_criteria_parser.add_argument("--auto", action="store_true", help="Auto-generate criteria using AI")
+    set_criteria_parser.add_argument("--criteria", nargs="+", help="Validation criteria (space-separated)")
     
     # Add new subparser for updating parent from child
     update_parent_parser = subparsers.add_parser(

@@ -48,7 +48,7 @@ def ensure_goal_dir():
         logging.info(f"Created goal directory: {GOAL_DIR}")
     return goal_path
 
-def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
+def create_goal_file(goal_id, description, parent_id=None, branch_name=None, validation_criteria=None):
     """Create a goal file with initial details.
     
     Args:
@@ -56,6 +56,7 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         description: The goal description
         parent_id: The ID of the parent goal (if any)
         branch_name: The name of the branch associated with this goal (optional)
+        validation_criteria: Optional list of validation criteria strings
     
     Returns:
         Path to the created goal file, or None if failed.
@@ -118,7 +119,7 @@ def create_goal_file(goal_id, description, parent_id=None, branch_name=None):
         "status": "pending",  # Initial status
         "is_task": False,  # All nodes start as potential goals
         "complete": False,
-        "validation_criteria": [], # Add validation criteria field
+        "validation_criteria": validation_criteria if validation_criteria is not None else [], # Add validation criteria field
         "initial_state": initial_state_data,
         "current_state": initial_state_data.copy(), # Start current state same as initial
         "created_at": datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -187,10 +188,18 @@ def create_new_goal(description):
             logging.error(f"Failed to create branch: {e}")
             return None
         
-        # Create goal file with branch information
-        create_goal_file(goal_id, description, branch_name=branch_name)
+        # Prompt for validation criteria
+        from .goal_criteria import prompt_for_validation_criteria
+        validation_criteria = prompt_for_validation_criteria(description)
+        
+        # Create goal file with branch information and validation criteria
+        goal_file = create_goal_file(goal_id, description, branch_name=branch_name, validation_criteria=validation_criteria)
         print(f"Created new goal {goal_id}: {description}")
         print(f"Created branch: {branch_name}")
+        if validation_criteria:
+            print(f"Validation criteria ({len(validation_criteria)}):")
+        for i, criterion in enumerate(validation_criteria, 1):
+            print(f"  {i}. {criterion}")
 
         # Switch back to original branch
         try:

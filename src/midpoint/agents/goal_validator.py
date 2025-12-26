@@ -19,6 +19,8 @@ from openai import OpenAI
 
 from midpoint.agents.models import Goal, ExecutionResult, CriterionResult, ValidationResult, State
 from midpoint.agents.tools.git_tools import get_current_hash, get_current_branch
+from midpoint.utils.llm_logging import LLM_LOGGER_NAME
+from .prompt_builder import ValidationPromptBuilder
 from .tools import (
     list_directory,
     read_file,
@@ -124,7 +126,7 @@ class GoalValidator:
         # Get tools from registry
         self.tools = ToolRegistry.get_tool_schemas()
 
-    def validate_execution(self, goal: Goal, execution_result: ExecutionResult) -> ValidationResult:
+    def validate_execution(self, goal: Goal, execution_result: ExecutionResult, preview_only: bool = False) -> ValidationResult:
         """
         Validate execution results against a goal using LLM.
         
@@ -180,34 +182,88 @@ class GoalValidator:
         if not current_memory_hash and execution_result.final_state:
              current_memory_hash = getattr(execution_result.final_state, 'memory_hash', None)
 
-        # Prepare the user prompt for the LLM
-        prompt_lines = [
-            f"Please validate the goal: '{goal.description}'",
-            "Based on the changes between the initial and current states.",
-            "\n**Goal Details:**",
-            f"- Description: {goal.description}",
-            f"- Validation Criteria:",
+        # Create the user prompt using ValidationPromptBuilder
+        goal_id = goal.id if hasattr(goal, 'id') and goal.id else "unknown"
+        llm_logger = logging.getLogger(LLM_LOGGER_NAME)
+        builder = ValidationPromptBuilder(goal_id, llm_logger)
+        
+        # Build Goal Details section (critical - this is what we're validating)
+        goal_details_lines = [
+            f"Goal Description: {goal.description}",
+            "",
+            "Validation Criteria:"
         ]
-        prompt_lines.extend([f"  - {c}" for c in goal.validation_criteria])
+        if goal.validation_criteria:
+            goal_details_lines.extend([f"  - {c}" for c in goal.validation_criteria])
+        else:
+            goal_details_lines.append("  (No explicit validation criteria provided)")
+        builder.add_section(
+            "Goal Details",
+            "\n".join(goal_details_lines),
+            importance="critical",
+            source="goal"
+        )
+        
+        # Build State Information section (important - needed for validation)
+        state_info_lines = [
+            f"Target Branch: {execution_result.branch_name}",
+            f"Initial Git Hash: {initial_git_hash or 'Not specified'}",
+            f"Final Git Hash: {current_hash}",
+            f"Repository Path: {current_repo_path}"
+        ]
+        if initial_memory_hash or current_memory_hash:
+            state_info_lines.append(f"Initial Memory Hash: {initial_memory_hash or 'Not specified'}")
+            state_info_lines.append(f"Final Memory Hash: {current_memory_hash or 'Not specified'}")
+        builder.add_section(
+            "State Information",
+            "\n".join(state_info_lines),
+            importance="important",
+            source="execution_result"
+        )
+        
+        # Build the prompt
+        user_prompt, prompt_metadata = builder.build()
+        llm_logger.debug(f"Built validation prompt: {prompt_metadata['total_size']} chars, {prompt_metadata['section_count']} sections")
 
-        prompt_lines.append("\n**State Information:**")
-        prompt_lines.append(f"- Target Branch: {execution_result.branch_name}") # Branch LLM should be on
-        prompt_lines.append(f"- Initial Git Hash: {initial_git_hash or 'Not specified'}")
-        prompt_lines.append(f"- Final Git Hash: {current_hash}") # The hash LLM should currently see
-        prompt_lines.append(f"- Initial Memory Hash: {initial_memory_hash or 'Not specified'}")
-        prompt_lines.append(f"- Final Memory Hash: {current_memory_hash or 'Not specified'}")
-        prompt_lines.append(f"- Repository Path: {current_repo_path}")
-        # We might need to provide memory repo path if it's separate and needed for tools
-        # memory_repo_path = ... # How to get this reliably? Assume tools can infer for now or add if needed.
-
-        prompt_lines.append("\n**Instructions:**")
-        prompt_lines.append("1. Verify you are on the target git branch using tools.")
-        prompt_lines.append("2. Use tools to get the repository diff between the initial and final git hashes.")
-        prompt_lines.append("3. Use tools to investigate memory changes between the initial and final memory hashes (e.g., diff or reading files)." if initial_memory_hash and current_memory_hash else "3. No memory comparison needed or possible.")
-        prompt_lines.append("4. Analyze the gathered evidence against the validation criteria.")
-        prompt_lines.append("5. Provide your assessment in the required JSON format.")
-
-        user_prompt = "\n".join(prompt_lines)
+        # Preview mode: return early without calling LLM
+        if preview_only:
+            logging.info("Preview mode: Prompt built successfully. Not calling LLM.")
+            print("\n" + "=" * 80)
+            print("PREVIEW MODE - Prompt Preview")
+            print("=" * 80)
+            print(f"\nSystem Prompt ({len(self.system_prompt)} chars):")
+            print("-" * 80)
+            print(self.system_prompt)
+            print("-" * 80)
+            print(f"\nUser Prompt ({len(user_prompt)} chars):")
+            print("-" * 80)
+            print(user_prompt)
+            print("-" * 80)
+            print(f"\nContext Summary:")
+            print("-" * 80)
+            print(f"Total prompt size: {len(self.system_prompt) + len(user_prompt):,} characters")
+            print(f"Section breakdown: {prompt_metadata.get('section_count', 0)} sections")
+            print(f"Importance: {prompt_metadata.get('importance_breakdown', {})}")
+            print("=" * 80)
+            print("\nTo actually run the validation, remove --preview flag")
+            print("=" * 80 + "\n")
+            
+            # Return a preview validation result
+            return ValidationResult(
+                goal_id=goal.id if hasattr(goal, 'id') else "unknown",
+                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                criteria_results=[],
+                score=0.0,
+                validated_by="Preview",
+                automated=True,
+                repository_state=State(
+                    git_hash=current_hash,
+                    branch_name=execution_result.branch_name,
+                    repository_path=current_repo_path,
+                    description="Repository state at preview time"
+                ) if current_hash != "unknown" else None,
+                reasoning="Preview mode: Prompt built but LLM not called"
+            )
 
         messages = [
             {"role": "system", "content": self.system_prompt},

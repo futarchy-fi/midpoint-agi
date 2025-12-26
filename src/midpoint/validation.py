@@ -12,11 +12,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
 # Import from midpoint modules
-from midpoint.goal_cli import (
-    ensure_goal_dir,
-    get_current_hash,
-    get_current_branch
-)
+from midpoint.goal_git import get_current_hash, get_current_branch
+from midpoint.goal_file_management import ensure_goal_dir
 
 # Import agents for automated validation
 from midpoint.agents.goal_validator import GoalValidator
@@ -255,7 +252,7 @@ async def save_validation_context(goal_id: str, timestamp: str, messages: List[D
 
 
 async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any], 
-                                     debug: bool = False, quiet: bool = False) -> Dict[str, Any]:
+                                     debug: bool = False, quiet: bool = False, preview_only: bool = False) -> Dict[str, Any]:
     """
     Perform automated validation of a goal using LLM.
     
@@ -351,7 +348,7 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
             print(f"Validating goal: {goal_data.get('description', '')}")
             print(f"Validation criteria: {len(criteria)}")
         
-        validation_result = validator.validate_execution(goal, execution_result)
+        validation_result = validator.validate_execution(goal, execution_result, preview_only=preview_only)
         
         # Generate timestamp for file naming
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -406,7 +403,7 @@ async def perform_automated_validation(goal_id: str, goal_data: Dict[str, Any],
         }
 
 
-async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> Tuple[bool, Dict[str, Any]]:
+async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False, preview_only: bool = False) -> Tuple[bool, Dict[str, Any]]:
     """
     Validate a goal's completion criteria.
     
@@ -421,6 +418,33 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
             - bool: True if validation was successful, False otherwise
             - dict: Validation record (or empty dict if validation failed)
     """
+    # Save current branch to restore later
+    original_branch = None
+    try:
+        original_branch = get_current_branch()
+    except Exception as e:
+        logging.warning(f"Could not get current branch: {e}")
+    
+    # Check for uncommitted changes and stash them if needed
+    has_changes = False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        has_changes = bool(result.stdout.strip())
+        if has_changes:
+            subprocess.run(
+                ["git", "stash", "push", "-m", f"Stashing changes before validating goal {goal_id}"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+    except subprocess.CalledProcessError as e:
+        logging.warning(f"Failed to check git status or stash changes: {e}")
+    
     # Ensure goal directory exists
     goal_path = ensure_goal_dir()
     goal_file = goal_path / f"{goal_id}.json"
@@ -446,7 +470,10 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
         # Determine validation method based on auto flag
         if auto:
             # Use automated validation
-            validation_results = await perform_automated_validation(goal_id, goal_data, debug, quiet)
+            validation_results = await perform_automated_validation(goal_id, goal_data, debug, quiet, preview_only)
+            # In preview mode, return early
+            if preview_only:
+                return True, {"preview_mode": True, "validation_results": validation_results}
             criteria_results = validation_results["criteria_results"]
         else:
             # For manual validation, we'll defer to CLI to handle user interaction
@@ -466,9 +493,29 @@ async def validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, 
     except Exception as e:
         logging.error(f"Failed to validate goal {goal_id}: {e}")
         return False, {}
+    finally:
+        # Always restore the original branch and unstash changes
+        if original_branch:
+            try:
+                subprocess.run(
+                    ["git", "checkout", original_branch],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if has_changes:
+                    subprocess.run(
+                        ["git", "stash", "pop"],
+                        check=True,
+                        capture_output=True,
+                        text=True
+                    )
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to restore original branch: {e}")
 
 
-def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False) -> bool:
+def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False, auto: bool = False, preview: bool = False) -> bool:
     """
     Synchronous wrapper for the validate_goal function.
     
@@ -492,7 +539,11 @@ def handle_validate_goal(goal_id: str, debug: bool = False, quiet: bool = False,
         else:
             logging.basicConfig(level=logging.INFO)
             
-        success, result = asyncio.run(validate_goal(goal_id, debug, quiet, auto))
+        success, result = asyncio.run(validate_goal(goal_id, debug, quiet, auto, preview))
+        
+        # Handle preview mode
+        if preview and result.get("preview_mode"):
+            return True
         
         # Handle the validation result
         if success:
